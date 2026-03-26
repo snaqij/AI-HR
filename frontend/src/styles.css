@@ -1,0 +1,377 @@
+:root {
+  --bg: #f2f4f8;
+  --panel: #ffffff;
+  --line: #e4e8f0;
+  --text: #1f2a3d;
+  --muted: #71809b;
+  --brand: #3c6df0;
+  --ok: #1ba672;
+  --danger: #ff5b57;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.meeting-shell {
+  display: grid;
+  grid-template-rows: 68px 1fr 92px;
+  width: 100%;
+  height: 100%;
+}
+
+.meeting-topbar {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr 1fr;
+  align-items: center;
+  padding: 0 18px;
+  background: linear-gradient(180deg, #fdfdff 0%, #f6f8fc 100%);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-left,
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.brand-mark {
+  width: 18px;
+  height: 12px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #0d203f, #355ea8);
+}
+
+.meeting-time {
+  font-size: 28px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #21365c;
+}
+
+.signal-bars {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+}
+
+.signal-bars .bar {
+  width: 4px;
+  background: #1aa67a;
+  border-radius: 2px;
+}
+
+.signal-bars .h1 {
+  height: 8px;
+}
+
+.signal-bars .h2 {
+  height: 12px;
+}
+
+.signal-bars .h3 {
+  height: 16px;
+}
+
+.signal-bars .h4 {
+  height: 20px;
+}
+
+.topbar-center {
+  display: flex;
+  justify-content: center;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, 100%);
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(35, 60, 118, 0.08);
+  color: #2a3f68;
+  font-size: 18px;
+}
+
+.ghost-btn,
+.exit-btn,
+.footer-action {
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 15px;
+}
+
+.ghost-btn {
+  padding: 10px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  color: #34496e;
+}
+
+.ghost-btn:hover {
+  border-color: #c8d3e7;
+  background: #f9fbff;
+}
+
+.exit-btn {
+  padding: 10px 16px;
+  background: var(--danger);
+  color: #fff;
+}
+
+.exit-btn:disabled {
+  opacity: 0.75;
+  cursor: default;
+}
+
+.exit-btn:hover {
+  background: #f04340;
+}
+
+.meeting-main {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: 16px;
+  padding: 14px 16px;
+  min-height: 0;
+}
+
+.loading-view {
+  grid-column: 1 / -1;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  color: #425473;
+}
+
+.loading-view.error {
+  color: #b6322f;
+}
+
+.stage-area {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #eceff5;
+  overflow: hidden;
+}
+
+.stage-overlay-card {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -46%);
+  text-align: center;
+}
+
+.avatar-ring {
+  width: 118px;
+  height: 118px;
+  margin: 0 auto;
+  border-radius: 999px;
+  border: 2px solid #d8deeb;
+  display: grid;
+  place-items: center;
+  background: #fff;
+}
+
+.avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 30% 30%, #e6ebf7, #a6b4d2);
+}
+
+.candidate-name {
+  margin: 14px 0 6px;
+  font-size: 34px;
+  font-weight: 600;
+  color: #1f2f4a;
+}
+
+.candidate-state {
+  margin: 0;
+  font-size: 17px;
+  color: var(--muted);
+}
+
+.candidate-status-line {
+  margin: 10px 0 0;
+  font-size: 14px;
+  color: #4b638d;
+}
+
+.interviewer-mini-card {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #dde4f0;
+}
+
+.interviewer-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #5b83ff, #2d56d8);
+}
+
+.interviewer-title {
+  margin: 0;
+  font-size: 14px;
+  color: #334d78;
+}
+
+.interviewer-status {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #6c7f9d;
+}
+
+.session-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.sidebar-block {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 14px;
+}
+
+.block-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #526481;
+}
+
+.block-content {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.transcript {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.block-header-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.live-dot {
+  font-size: 12px;
+  color: #fff;
+  background: var(--ok);
+  border-radius: 999px;
+  padding: 3px 8px;
+}
+
+.transcript-list {
+  margin: 8px 0 0;
+  padding-left: 0;
+  list-style: none;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.transcript-list li {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f7f9fc;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.transcript-list .who {
+  color: #425a84;
+  font-weight: 600;
+  flex: none;
+}
+
+.meeting-footer {
+  border-top: 1px solid var(--line);
+  background: #f7f9fd;
+  display: grid;
+  grid-template-rows: 1fr 52px;
+  align-items: center;
+  padding: 0 16px;
+}
+
+.footer-tip {
+  font-size: 14px;
+  color: #51607c;
+}
+
+.footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.footer-action {
+  padding: 9px 16px;
+  background: #fff;
+  border: 1px solid #dbe3f2;
+  color: #2f446a;
+}
+
+.footer-action:hover {
+  border-color: #c7d4ea;
+  background: #fafdff;
+}
+
+@media (max-width: 1200px) {
+  .meeting-main {
+    grid-template-columns: 1fr;
+  }
+
+  .session-sidebar {
+    max-height: 42vh;
+  }
+}

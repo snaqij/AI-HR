@@ -1,0 +1,185 @@
+"""应用配置定义。"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_FILE_MAP = {
+    "dev": ".env.dev",
+    "development": ".env.dev",
+    "prod": ".env.prod",
+    "production": ".env.prod",
+}
+
+
+class Settings(BaseSettings):
+    """从环境变量与 env 文件加载的应用配置。"""
+
+    app_name: str = "AI-HR API"
+    app_version: str = "0.1.0"
+    api_prefix: str = "/api/v1"
+    environment: str = "dev"
+    debug: bool = False
+    auto_create_tables: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8000
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_allow_credentials: bool = False
+    database_url: str = Field(default="mysql+pymysql://root:password@127.0.0.1:3306/ai_hr")
+    ai_interview_auth_required: bool = False
+    ai_interview_api_keys: str | None = None
+    boss_mode: str = "mock"
+    boss_account: str = "demo-account"
+    boss_secret: str = "demo-secret"
+    boss_base_url: str = "https://www.zhipin.com"
+    boss_publish_path: str = "/wapi/zpjob/job/publish.json"
+    boss_status_path: str = "/wapi/zpjob/job/status.json"
+    boss_applicants_path: str = "/wapi/zpjob/job/applicants.json"
+    boss_greet_path: str = "/wapi/zpchat/greet/send.json"
+    boss_fetch_messages_path: str = "/wapi/zpchat/conversation/messages.json"
+    boss_send_message_path: str = "/wapi/zpchat/conversation/send.json"
+    boss_interview_schedule_path: str = "/wapi/zpinterview/interview/schedule.json"
+    boss_interview_status_path: str = "/wapi/zpinterview/interview/status.json"
+    boss_cookie_header: str | None = None
+    boss_credential_file: str | None = None
+    boss_timeout_seconds: float = 20.0
+    llm_provider: str = "mock"
+    llm_model: str = "gpt-4.1-mini"
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_streaming_enabled: bool = True
+    llm_timeout_seconds: int = 30
+    llm_max_retries: int = 2
+    ai_resume_llm_enabled: bool = False
+    ai_scoring_llm_enabled: bool = False
+    ai_reply_llm_enabled: bool = False
+    ai_interview_llm_enabled: bool = False
+    ai_reply_auto_min_confidence: float = 0.65
+    ai_reply_sensitive_block_enabled: bool = True
+    ai_reply_alert_window_minutes: int = 60
+    ai_reply_handoff_alert_threshold: float = 0.30
+    ai_reply_blocked_alert_threshold: float = 0.10
+    ai_reply_alert_min_samples: int = 10
+    provider_health_probe_enabled: bool = False
+    provider_health_probe_timeout_ms: int = 1200
+    provider_circuit_breaker_fail_threshold: int = 3
+    provider_circuit_breaker_cooldown_seconds: int = 30
+    rtc_provider: str = "mock"
+    rtc_default_transport: str = "webrtc"
+    rtc_token_ttl_seconds: int = 3600
+    livekit_base_url: str | None = None
+    livekit_api_key: str | None = None
+    livekit_api_secret: str | None = None
+    livekit_create_room_path: str = "/twirp/livekit.RoomService/CreateRoom"
+    livekit_update_subscriptions_path: str = "/twirp/livekit.RoomService/UpdateSubscriptions"
+    livekit_send_data_path: str = "/twirp/livekit.RoomService/SendData"
+    livekit_room_prefix: str = "ai-intv-"
+    ai_interview_rtc_webhook_enabled: bool = False
+    livekit_webhook_signature_required: bool = True
+    livekit_webhook_api_key: str | None = None
+    livekit_webhook_accept_skew_seconds: int = 120
+    ai_interview_rtc_audio_subscribe_enabled: bool = False
+    ai_interview_rtc_audio_subscribe_auto: bool = True
+    ai_interview_rtc_audio_track_ids: str | None = None
+    ai_interview_rtc_audio_subscriber_identity: str = "ai-bot"
+    ai_interview_rtc_tts_publish_enabled: bool = False
+    ai_interview_rtc_tts_bot_identity: str = "ai-bot"
+    ai_interview_rtc_video_policy_enabled: bool = False
+    ai_interview_rtc_video_subscribe_auto: bool = True
+    ai_interview_rtc_video_record_enabled: bool = False
+    ai_interview_rtc_video_track_ids: str | None = None
+    ai_interview_rtc_video_subscriber_identity: str = "ai-bot"
+    ai_interview_rtc_duplex_ws_enabled: bool = True
+    ai_interview_rtc_asr_ingest_ws_enabled: bool = True
+    ai_interview_duplex_seen_frame_window: int = 2048
+    ai_interview_duplex_max_inflight_chunks: int = 6
+    ai_interview_duplex_stats_emit_every: int = 20
+    ai_interview_duplex_partial_trigger_enabled: bool = True
+    ai_interview_duplex_partial_min_chars: int = 8
+    ai_interview_duplex_partial_dedup_ttl_ms: int = 1500
+    asr_provider: str = "mock"
+    asr_force_streaming: bool = False
+    asr_api_key: str | None = None
+    asr_base_url: str | None = None
+    asr_stream_timeout_ms: int = 5000
+    asr_hotword_file: str | None = "technical_hot_words.txt"
+    asr_aliyun_api_key: str | None = None
+    asr_aliyun_model: str = "paraformer-realtime-v1"
+    asr_aliyun_streaming_enabled: bool = True
+    asr_aliyun_appkey: str | None = None
+    aliyun_access_key_id: str | None = None
+    aliyun_access_key_secret: str | None = None
+    asr_tencent_engine_type: str = "16k_zh"
+    asr_tencent_voice_format: int = 4
+    asr_tencent_app_id: str | None = None
+    asr_tencent_ws_base_url: str = "wss://asr.cloud.tencent.com/asr/v2"
+    asr_tencent_streaming_enabled: bool = True
+    asr_tencent_ws_allow_http_fallback: bool = True
+    asr_tencent_ws_expire_seconds: int = 90
+    asr_tencent_ws_session_ttl_seconds: int = 45
+    asr_tencent_ws_partial_wait_ms: int = 35
+    asr_tencent_ws_final_wait_ms: int = 800
+    asr_tencent_ws_open_timeout_ms: int = 800
+    asr_tencent_ws_single_connection_enabled: bool = True
+    asr_tencent_prewarm_enabled: bool = True
+    asr_tencent_keepalive_interval_seconds: int = 8
+    asr_tencent_keepalive_pcm_ms: int = 40
+    tts_provider: str = "mock"
+    tts_force_streaming: bool = True
+    tts_api_key: str | None = None
+    tts_base_url: str | None = None
+    tts_stream_timeout_ms: int = 5000
+    tts_tencent_voice_type: int = 101001
+    tts_tencent_sample_rate: int = 16000
+    tts_tencent_codec: str = "mp3"
+    tts_first_chunk_size: int = 12
+    tts_warmup_enabled: bool = True
+    llm_followup_cache_ttl_seconds: int = 180
+    redis_url: str | None = None
+    ai_interview_redis_enabled: bool = False
+    ai_interview_redis_prefix: str = "aihr"
+    ai_interview_question_pack_ttl_seconds: int = 172800
+    ai_interview_state_ttl_seconds: int = 172800
+    ai_interview_dedup_ttl_seconds: int = 86400
+    ai_interview_followup_cache_ttl_seconds: int = 180
+    ai_interview_prebuild_pack_ttl_seconds: int = 604800
+    ai_interview_redis_event_bus_enabled: bool = False
+    tencent_secret_id: str | None = None
+    tencent_secret_key: str | None = None
+    tencent_region: str = "ap-guangzhou"
+    ai_interview_transcript_retention_days: int = 180
+    ai_interview_audio_retention_days: int = 30
+    ai_interview_event_retention_days: int = 365
+    ai_interview_cleanup_batch_size: int = 500
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+        env_prefix="AI_HR_",
+    )
+
+
+def _resolve_env_file() -> Path:
+    """根据显式路径或环境别名解析当前 env 文件路径。"""
+    explicit_env_file = os.getenv("AI_HR_ENV_FILE")
+    if explicit_env_file:
+        return Path(explicit_env_file).expanduser().resolve()
+
+    environment = os.getenv("AI_HR_ENV", "dev").lower()
+    filename = ENV_FILE_MAP.get(environment, ".env.dev")
+    return PROJECT_ROOT / filename
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """返回进程级缓存的 Settings 实例。"""
+    env_file = _resolve_env_file()
+    if env_file.exists():
+        return Settings(_env_file=env_file)
+    return Settings()
