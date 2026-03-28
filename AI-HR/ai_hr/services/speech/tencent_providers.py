@@ -7,7 +7,6 @@ import base64
 
 logger = logging.getLogger(__name__)
 
-import base64
 import hashlib
 import hmac
 import json
@@ -679,10 +678,17 @@ class TencentTTSProvider(TTSProvider):
         secret_key: str,
         region: str,
         timeout_ms: int,
+        app_id: str | None = None,
         voice_type: int = 101001,
         sample_rate: int = 16000,
-        codec: str = "mp3",
+        codec: str = "pcm",
         endpoint: str = "https://tts.tencentcloudapi.com",
+        ws_base_url: str = "wss://tts.cloud.tencent.com/stream_wsv2",
+        ws_streaming_enabled: bool = True,
+        ws_allow_http_fallback: bool = False,
+        ws_expire_seconds: int = 90,
+        ws_open_timeout_ms: int = 1200,
+        ws_recv_timeout_ms: int = 1200,
         first_chunk_size: int = 12,
         warmup_enabled: bool = True,
     ):
@@ -692,10 +698,20 @@ class TencentTTSProvider(TTSProvider):
         self._secret_key = secret_key
         self._region = region
         self._timeout = max(1.0, timeout_ms / 1000.0)
+        self._app_id = str(app_id or "").strip()
         self._voice_type = voice_type
         self._sample_rate = sample_rate
-        self._codec = codec
+        requested_codec = str(codec or "").strip().lower()
+        if requested_codec and requested_codec != "pcm":
+            logger.warning("Tencent TTS codec '%s' is not low-latency safe here; forcing codec=pcm", requested_codec)
+        self._codec = "pcm"
         self._endpoint = endpoint.rstrip("/")
+        self._ws_base_url = ws_base_url.rstrip("/")
+        self._ws_streaming_enabled = bool(ws_streaming_enabled)
+        self._ws_allow_http_fallback = bool(ws_allow_http_fallback)
+        self._ws_expire_seconds = max(30, int(ws_expire_seconds))
+        self._ws_open_timeout_seconds = max(0.2, int(ws_open_timeout_ms) / 1000.0)
+        self._ws_recv_timeout_seconds = max(0.2, int(ws_recv_timeout_ms) / 1000.0)
         self._first_chunk_size = max(8, int(first_chunk_size))
         self._warmup_enabled = bool(warmup_enabled)
         self._warm_cache: dict[str, float] = {}
@@ -719,6 +735,35 @@ class TencentTTSProvider(TTSProvider):
         return TTSStreamResult(chunks=chunks, audio_uris=audio_uris, provider=self.provider_name)
 
     def synthesize_stream_iter(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        voice: str,
+        chunk_size: int,
+    ):
+        if self._ws_streaming_enabled:
+            try:
+                yield from self._synthesize_stream_iter_ws(
+                    session_id=session_id,
+                    text=text,
+                    voice=voice,
+                    chunk_size=chunk_size,
+                )
+                return
+            except Exception as exc:
+                if not self._ws_allow_http_fallback:
+                    raise
+                logger.warning("Tencent TTS websocket stream failed; fallback to HTTP TextToVoice: %s", exc)
+
+        yield from self._synthesize_stream_iter_http(
+            session_id=session_id,
+            text=text,
+            voice=voice,
+            chunk_size=chunk_size,
+        )
+
+    def _synthesize_stream_iter_http(
         self,
         *,
         session_id: str,
@@ -776,13 +821,279 @@ class TencentTTSProvider(TTSProvider):
                 raise ConnectorOperationError(
                     f"Tencent TTS response missing audio payload (request_id={request_id}, payload_keys={list(response_payload.keys())})"
                 )
+            audio_bytes = base64.b64decode(audio_base64)
+            if self._codec == "pcm" and self._looks_like_mp3(audio_bytes):
+                request_id = str(response_payload.get("RequestId") or "")
+                raise ConnectorOperationError(
+                    f"Tencent TTS codec mismatch: expected pcm but got mp3-like payload (request_id={request_id})"
+                )
             yield {
                 "index": idx,
-                "audio_uri": f"data:audio/mpeg;base64,{audio_base64}",
-                "audio_bytes": base64.b64decode(audio_base64),
+                "audio_uri": "",  # BE-013: Skip heavy Base64/DataURI encoding in the hot loop
+                "audio_bytes": audio_bytes,
+                "audio_codec": str(self._codec or "").lower(),
+                "sample_rate": int(self._sample_rate),
                 "text": chunk,
                 "is_final_packet": idx == total,
             }
+
+    def _synthesize_stream_iter_ws(
+        self,
+        *,
+        session_id: str,
+        text: str,
+        voice: str,
+        chunk_size: int,
+    ):
+        _ = voice
+        if not self._app_id:
+            raise ConnectorOperationError("Tencent TTS websocket mode requires app_id")
+        try:
+            from websockets.sync.client import connect as ws_connect
+        except Exception as exc:
+            raise ConnectorOperationError("Tencent TTS websocket mode requires dependency 'websockets'") from exc
+
+        chunks = self._split_text_chunks(text=text, chunk_size=chunk_size)
+        ws_url = self._build_tts_ws_url()
+        start_time = time.perf_counter()
+        stream_session_id = f"{session_id}-{uuid.uuid4().hex[:8]}"
+        packet_idx = 0
+        pending_audio: bytes | None = None
+        pending_text = chunks[0] if chunks else text
+        last_yield_text = pending_text
+
+        try:
+            with ws_connect(
+                ws_url,
+                open_timeout=self._ws_open_timeout_seconds,
+                close_timeout=1,
+                max_size=8 * 1024 * 1024,
+            ) as ws:
+                # Optional readiness probe; do not block too long.
+                ready_deadline = time.perf_counter() + 0.35
+                while time.perf_counter() < ready_deadline:
+                    try:
+                        msg = ws.recv(timeout=0.05)
+                    except TimeoutError:
+                        break
+                    except Exception:
+                        break
+                    if isinstance(msg, (bytes, bytearray)):
+                        if msg:
+                            pending_audio = bytes(msg)
+                        break
+                    payload = self._parse_ws_json(msg)
+                    if payload.get("code") not in (None, 0, "0"):
+                        raise ConnectorOperationError(
+                            f"Tencent TTS websocket ready error: code={payload.get('code')} message={payload.get('message')}"
+                        )
+                    if payload.get("ready") in {1, True, "1", "true"}:
+                        break
+
+                for idx, chunk in enumerate(chunks, start=1):
+                    cmd = {
+                        "session_id": stream_session_id,
+                        "message_id": f"{stream_session_id}-{idx}",
+                        "action": "ACTION_SYNTHESIS",
+                        "data": chunk,
+                    }
+                    ws.send(json.dumps(cmd, ensure_ascii=False))
+                ws.send(
+                    json.dumps(
+                        {
+                            "session_id": stream_session_id,
+                            "message_id": f"{stream_session_id}-complete",
+                            "action": "ACTION_COMPLETE",
+                            "data": "",
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+
+                finished = False
+                while not finished:
+                    try:
+                        message = ws.recv(timeout=self._ws_recv_timeout_seconds)
+                    except TimeoutError as exc:
+                        raise ConnectorOperationError("Tencent TTS websocket recv timeout") from exc
+
+                    if isinstance(message, (bytes, bytearray)):
+                        audio_bytes = bytes(message)
+                        if not audio_bytes:
+                            continue
+                        if self._codec == "pcm" and self._looks_like_mp3(audio_bytes):
+                            raise ConnectorOperationError("Tencent TTS codec mismatch: expected pcm but got mp3-like payload")
+
+                        if pending_audio is None:
+                            pending_audio = audio_bytes
+                            continue
+
+                        packet_idx += 1
+                        yield {
+                            "index": packet_idx,
+                            "audio_uri": "",  # BE-013: Skip heavy Base64/DataURI encoding in the hot loop
+                            "audio_bytes": pending_audio,
+                            "audio_codec": str(self._codec or "").lower(),
+                            "sample_rate": int(self._sample_rate),
+                            "text": last_yield_text,
+                            "is_final_packet": False,
+                        }
+                        pending_audio = audio_bytes
+                        continue
+
+                    payload = self._parse_ws_json(message)
+                    code = payload.get("code")
+                    if code not in (None, 0, "0"):
+                        raise ConnectorOperationError(
+                            f"Tencent TTS websocket error: code={code} message={payload.get('message')}"
+                        )
+                    if payload.get("final") in {1, True, "1", "true"}:
+                        finished = True
+
+                if pending_audio:
+                    packet_idx += 1
+                    yield {
+                        "index": packet_idx,
+                        "audio_uri": self._pcm_bytes_to_wav_data_uri(pending_audio),
+                        "audio_bytes": pending_audio,
+                        "audio_codec": str(self._codec or "").lower(),
+                        "sample_rate": int(self._sample_rate),
+                        "text": last_yield_text,
+                        "is_final_packet": True,
+                    }
+        except ConnectorOperationError:
+            raise
+        except Exception as exc:
+            raise ConnectorOperationError(f"Tencent TTS websocket error: {exc}") from exc
+
+        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+        logger.debug("Tencent TTS websocket stream finished session=%s packets=%s elapsed_ms=%s", session_id, packet_idx, elapsed_ms)
+
+    def _build_tts_ws_url(self) -> str:
+        parsed = urllib.parse.urlparse(self._ws_base_url if "://" in self._ws_base_url else f"wss://{self._ws_base_url}")
+        scheme = parsed.scheme or "wss"
+        host = parsed.netloc or "tts.cloud.tencent.com"
+        path = parsed.path or "/stream_wsv2"
+        now = int(time.time())
+        expired = now + self._ws_expire_seconds
+
+        params: dict[str, str | int] = {
+            "Action": "TextToStreamAudioWSv2",
+            "AppId": self._app_id,
+            "Codec": self._codec,
+            "EnableSubtitle": 1,
+            "Expired": expired,
+            "ModelType": 1,
+            "SampleRate": int(self._sample_rate),
+            "SecretId": self._secret_id,
+            "SessionId": f"tts-{uuid.uuid4().hex[:16]}",
+            "Speed": 0,
+            "Timestamp": now,
+            "VoiceType": int(self._voice_type),
+            "Volume": 0,
+        }
+        ordered = sorted((k, str(v)) for k, v in params.items())
+        query = "&".join(f"{k}={urllib.parse.quote(v, safe='')}" for k, v in ordered)
+        sign_source = f"GET{host}{path}?{query}"
+        signature = base64.b64encode(
+            hmac.new(self._secret_key.encode("utf-8"), sign_source.encode("utf-8"), hashlib.sha1).digest()
+        ).decode("utf-8")
+        return f"{scheme}://{host}{path}?{query}&Signature={urllib.parse.quote(signature, safe='')}"
+
+    @staticmethod
+    def _parse_ws_json(message: str | bytes) -> dict:
+        if isinstance(message, bytes):
+            text = message.decode("utf-8", errors="ignore")
+        else:
+            text = str(message or "")
+        try:
+            payload = json.loads(text)
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _looks_like_mp3(audio_bytes: bytes) -> bool:
+        if not audio_bytes:
+            return False
+        # Strict mode:
+        # 1) ID3 tag is a definitive MP3 signature.
+        # 2) Otherwise require two consecutive valid MPEG frame headers with
+        #    parseable frame lengths to avoid false-positive on random PCM bytes.
+        if audio_bytes.startswith(b"ID3"):
+            return True
+        if len(audio_bytes) < 8:
+            return False
+
+        first_len = TencentTTSProvider._mp3_frame_length(audio_bytes, 0)
+        if first_len <= 0:
+            return False
+        second_off = first_len
+        if second_off + 4 > len(audio_bytes):
+            return False
+        second_len = TencentTTSProvider._mp3_frame_length(audio_bytes, second_off)
+        return second_len > 0
+
+    @staticmethod
+    def _mp3_frame_length(data: bytes, offset: int) -> int:
+        if offset + 4 > len(data):
+            return -1
+        b0, b1, b2, b3 = data[offset], data[offset + 1], data[offset + 2], data[offset + 3]
+        # Sync bits: 11 ones
+        if b0 != 0xFF or (b1 & 0xE0) != 0xE0:
+            return -1
+        # MPEG Version / Layer / Bitrate / SampleRate must be valid.
+        version_id = (b1 >> 3) & 0x03
+        layer = (b1 >> 1) & 0x03
+        bitrate_idx = (b2 >> 4) & 0x0F
+        sample_rate_idx = (b2 >> 2) & 0x03
+        padding = (b2 >> 1) & 0x01
+        if version_id == 0x01 or layer == 0x00:
+            return -1
+        if bitrate_idx in (0x00, 0x0F) or sample_rate_idx == 0x03:
+            return -1
+
+        # Table: MPEG1 Layer III and MPEG2/2.5 Layer III bitrates (kbps).
+        bitrate_table_v1_l3 = [
+            0, 32, 40, 48, 56, 64, 80, 96,
+            112, 128, 160, 192, 224, 256, 320, 0,
+        ]
+        bitrate_table_v2_l3 = [
+            0, 8, 16, 24, 32, 40, 48, 56,
+            64, 80, 96, 112, 128, 144, 160, 0,
+        ]
+        sample_rates = {
+            0x00: [11025, 22050, 44100],  # MPEG2.5, MPEG2, MPEG1
+            0x01: [12000, 24000, 48000],
+            0x02: [8000, 16000, 32000],
+        }
+        # version_id: 00->2.5, 10->2, 11->1
+        if version_id == 0x03:
+            version_col = 2
+            bitrate_kbps = bitrate_table_v1_l3[bitrate_idx]
+        else:
+            version_col = 0 if version_id == 0x00 else 1
+            bitrate_kbps = bitrate_table_v2_l3[bitrate_idx]
+        sample_rate = sample_rates[sample_rate_idx][version_col]
+        if bitrate_kbps <= 0 or sample_rate <= 0:
+            return -1
+
+        # Layer III frame length formula.
+        if version_id == 0x03:  # MPEG1
+            frame_len = int((144000 * bitrate_kbps) / sample_rate) + padding
+        else:  # MPEG2/2.5
+            frame_len = int((72000 * bitrate_kbps) / sample_rate) + padding
+        return frame_len if frame_len > 0 else -1
+
+    def _pcm_bytes_to_wav_data_uri(self, pcm_bytes: bytes) -> str:
+        buf = BytesIO()
+        with wave.open(buf, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)  # 16-bit PCM
+            wav.setframerate(int(self._sample_rate))
+            wav.writeframes(pcm_bytes)
+        wav_bytes = buf.getvalue()
+        return f"data:audio/wav;base64,{base64.b64encode(wav_bytes).decode('ascii')}"
 
     def _split_text_chunks(self, *, text: str, chunk_size: int) -> list[str]:
         normalized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text).strip()

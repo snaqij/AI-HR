@@ -137,7 +137,14 @@ class Settings(BaseSettings):
     tts_stream_timeout_ms: int = 5000
     tts_tencent_voice_type: int = 101001
     tts_tencent_sample_rate: int = 16000
-    tts_tencent_codec: str = "mp3"
+    tts_tencent_codec: str = "pcm"
+    tts_tencent_app_id: str | None = None
+    tts_tencent_ws_base_url: str = "wss://tts.cloud.tencent.com/stream_wsv2"
+    tts_tencent_ws_streaming_enabled: bool = True
+    tts_tencent_ws_allow_http_fallback: bool = False
+    tts_tencent_ws_expire_seconds: int = 90
+    tts_tencent_ws_open_timeout_ms: int = 1200
+    tts_tencent_ws_recv_timeout_ms: int = 1200
     tts_first_chunk_size: int = 12
     tts_warmup_enabled: bool = True
     llm_followup_cache_ttl_seconds: int = 180

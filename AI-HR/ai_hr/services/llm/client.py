@@ -8,10 +8,10 @@ import logging
 import random
 import re
 import time
-import codecs
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Callable
 

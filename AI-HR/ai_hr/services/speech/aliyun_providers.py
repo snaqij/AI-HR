@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import json
 from typing import Any
 import dashscope
 from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
@@ -166,24 +167,53 @@ class AliyunNlsASRProvider(ASRProvider):
                 latency_ms=latency_ms,
                 provider=f"{self.provider_name}_backoff"
             )
+        if not ctx.is_active:
+            # Fast self-heal after TaskFailed timeout: rebuild context on current call.
+            self._close_context(stream_key)
+            ctx = self._ensure_context(stream_key)
+            if not ctx:
+                return ASRStreamResult(
+                    transcript="",
+                    confidence=confidence,
+                    latency_ms=latency_ms,
+                    provider=f"{self.provider_name}_reconnect_backoff"
+                )
         
         try:
+            # Always update current_seq regardless of audio_bytes presence, 
+            # as long as we have a context, to ensure events have correct turn ID.
+            ctx.callback.current_seq = seq
+
             if audio_bytes:
+                # Mark current epoch before sending to SDK
+                ctx.callback.last_audio_sent_epoch = ctx.callback.epoch
                 ctx.recognizer.send_audio(audio_bytes)
                 with self._lock:
                     self._stat_audio_frames += 1
                     self._stat_audio_bytes += len(audio_bytes)
             
+            if is_final:
+                # 强制停止以触发布服端 Finalize 逻辑，解决末尾吞字/延迟问题
+                try:
+                    ctx.recognizer.stop()
+                except Exception as stop_err:
+                    logger.warning(f"NLS stop error: {stop_err}")
+                
+                # 给服务端一点时间完成最后一句话的转写（Drain）
+                ctx.callback.completed_event.wait(timeout=1.2)
+            
             # 移除同步阻塞等待逻辑。顺序执行由上层 Queue 保证。
             # 这里直接返回当前已收到的最全转写。
-            transcript = ctx.last_transcript or ""
+            transcript = ctx.callback.full_transcript
             
             return ASRStreamResult(
                 transcript=transcript,
                 confidence=0.98,
                 latency_ms=max(1, int((time.perf_counter() - call_start) * 1000)),
                 provider=self.provider_name,
-                metadata={"is_final": ctx.received_completed},
+                # metadata={"is_final": ctx.received_completed}, 
+                # 不要把“句子结束”透传为“回合结束”，这会误导编排器进行 flush
+                metadata={"is_final": is_final, "sentence_completed": ctx.received_completed},
                 is_active_pushed=True,
             )
         except Exception as e:
@@ -227,8 +257,8 @@ class AliyunNlsASRProvider(ASRProvider):
                     "[NLS] session=%s context invalid (is_active=%s idle=%.1fs), closing",
                     stream_key, ctx.is_active, idle_sec
                 )
-                # Context is inactive or idle, close it before creating a new one
-                self._close_context_internal(stream_key) # Internal close, pops from dict
+                # Pop under lock, but don't call stop() here
+                ctx_to_close = self._contexts.pop(stream_key, None)
                 ctx = None
             
             if ctx: # Found an active, non-idle context
@@ -258,11 +288,13 @@ class AliyunNlsASRProvider(ASRProvider):
                 on_error_trigger=lambda is_rate_limit: backoff_event.set()
             )
             
-            recognizer = nls.NlsSpeechRecognizer(
+            recognizer = nls.NlsSpeechTranscriber(
                 url="wss://nls-gateway.cn-shanghai.aliyuncs.com/ws/v1",
                 token=token,
                 appkey=self._appkey,
                 on_start=callback.on_start,
+                on_sentence_begin=callback.on_sentence_begin,
+                on_sentence_end=callback.on_sentence_end,
                 on_result_changed=callback.on_result_changed,
                 on_completed=callback.on_completed,
                 on_error=callback.on_error,
@@ -275,14 +307,14 @@ class AliyunNlsASRProvider(ASRProvider):
                 ch=1,
                 enable_intermediate_result=True,
                 enable_punctuation_prediction=True,
-                enable_inverse_text_normalization=True
+                enable_inverse_text_normalization=True,
             )
             
             # SDK BUG: start() returns as soon as __start_cond is notified.
             # On TaskFailed, the SDK notifies the cond FIRST, then calls on_error.
             # So start() can return "successfully" before on_error fires.
             # Fix: wait for definitive success (started_ok) or failure (error_event) signals.
-            handshake_ok = callback.started_ok.wait(timeout=2.0)
+            handshake_ok = callback.started_ok.wait(timeout=5.0) # 增加到 5s
             if not handshake_ok or callback.error_event.is_set():
                 logger.error(f"Aliyun NLS handshake failed for {stream_key} (rate limited or timed out)")
                 raise RuntimeError("NLS handshake failed.")
@@ -361,49 +393,104 @@ class _AliyunNlsCallback:
         self.current_sentence: str = ""
         self.received_completed = False
         self.is_active = False  # Only True after RecognitionStarted confirmed
+        self.current_seq = 0    # Current turn sequence from service layer
         self.started_ok = threading.Event()   # Set when RecognitionStarted received
         self.error_event = threading.Event()  # Set on any on_error callback
         self.is_rate_limited = False          # Set when Gateway returns TOO_MANY_REQUESTS
         self._on_error_trigger = on_error_trigger
+        
+        # Epoch tracking to prevent cross-turn transcript pollution
+        self.epoch = 0
+        self.last_audio_sent_epoch = -1
+        self.current_sentence_epoch = -1
+        self.completed_event = threading.Event()
+        self.last_flush_at = 0.0
 
     def on_start(self, message, *args):
-        """Called when RecognitionStarted is received from server."""
-        logger.debug("NLS RecognitionStarted confirmed")
+        """Called when TranscriptionStarted is received (for Transcriber)."""
+        print(f"DEBUG [NLS Start] RAW: {message}")
+        logger.debug("Aliyun NLS Transcriber started")
+        # 初始同步 Epoch，确保第一个句子不会因为初始化顺序而跳过
+        self.current_sentence_epoch = self.epoch
         self.is_active = True
         self.started_ok.set()
-    def on_result_changed(self, message, *args):
+
+    def on_sentence_begin(self, message, *args):
+        print(f"DEBUG [NLS SentenceBegin] RAW: {message}")
         try:
-            import json
+            # 记录当前句子的 Epoch。只有在该 Epoch 内产生的中间/最终结果才被视为有效。
+            self.current_sentence_epoch = self.epoch
+            logger.debug(f"NLS Sentence Begin | Epoch: {self.current_sentence_epoch}")
+        except Exception:
+            pass
+    def on_result_changed(self, message, *args):
+        print(f"DEBUG [NLS ResultChanged] RAW: {message}")
+        try:
             data = json.loads(message)
             payload = data.get("payload", {})
+            
+            # 校验 Epoch：忽略来自旧回合的结果
+            # 注意：如果是第一句话且 epoch 刚从 0 变到 1，我们可能需要更宽松的逻辑。
+            # 但最直接的是确保 flush() 不要在这个时刻被误触发。
+            if self.current_sentence_epoch != self.epoch:
+                # 软 Epoch 校验：允许在此前一个回合刚刚结束后的 150ms 内接收迟到的最终转写片段
+                # 这解决了由于服务端处理延迟导致的“末尾吞字”问题
+                if time.time() - self.last_flush_at < 0.150:
+                    pass # 允许通过
+                elif not self.sentences and self.epoch == self.current_sentence_epoch + 1:
+                    self.current_sentence_epoch = self.epoch # 自动修正
+                else:
+                    print(f"DEBUG [NLS Epoch Skip] current_sentence_epoch={self.current_sentence_epoch}, self.epoch={self.epoch}")
+                    return
+
             self.current_sentence = payload.get("result", "")
+            print(f"DEBUG [ASR Progress] {self.current_sentence}")
             logger.debug(f"NLS Intermediate: {self.current_sentence}")
-            print(f"ASR Intermediate: {self.current_sentence}", flush=True)
-            self._publish_asr_turn()
+            # 增量发布：仅发布当前正在识别的句子片段
+            self._publish_asr_turn(is_final=False, fragment=self.current_sentence)
         except Exception:
             pass
 
-    def on_completed(self, message, *args):
+    def on_sentence_end(self, message, *args):
+        print(f"DEBUG [NLS SentenceEnd] RAW: {message}")
         try:
-            import json
             data = json.loads(message)
             payload = data.get("payload", {})
+            
+            # 校验 Epoch：忽略来自旧回合的句子结束回调（同样应用 150ms 软容错）
+            if self.current_sentence_epoch != self.epoch and (time.time() - self.last_flush_at > 0.150):
+                print(f"DEBUG [NLS SentenceEnd Epoch Skip] current_sentence_epoch={self.current_sentence_epoch}, self.epoch={self.epoch}")
+                return
+
             final_text = payload.get("result", "")
             if final_text:
                 self.sentences.append(final_text)
             self.current_sentence = ""
+            
+            # 标记已收到过本回合的句子完成，用于 orchestrator 触发
             self.received_completed = True
-            logger.debug(f"NLS Completed: {final_text}")
-            print(f"ASR Completed: {final_text}", flush=True)
-            self._publish_asr_turn(is_final=True)
+            self.completed_event.set()
+            
+            print(f"DEBUG [ASR Final] {final_text}")
+            logger.debug(f"NLS Sentence End: {final_text}")
+            # 增量发布：仅发布刚刚完成的这一句全文
+            self._publish_asr_turn(is_final=True, fragment=final_text)
         except Exception:
             pass
+
+    def on_completed(self, message, *args):
+        # Transcriber 的 on_completed 代表整个任务结束（如 stop() 后），通常在此不做业务逻辑。
+        logger.debug(f"Aliyun NLS Transcriber Task Completed: {message}")
 
     def on_error(self, message, *args):
         logger.error(f"Aliyun NLS error callback: {message}")
         self.is_active = False
         msg_str = str(message).lower()
         self.is_rate_limited = "too_many_requests" in msg_str or "rate" in msg_str
+        if "request timeout" in msg_str:
+            # Unblock final wait and avoid hanging on dead task.
+            self.received_completed = True
+            self.completed_event.set()
         self.error_event.set()  # Signal failure (lock-free)
         self.started_ok.set()   # Unblock any waiting handshake check
         if self._on_error_trigger:
@@ -415,39 +502,43 @@ class _AliyunNlsCallback:
 
     def flush(self):
         """清理已完成的句子积累，防止跨回合串音。"""
+        self.epoch += 1
+        self.last_flush_at = time.time()
         self.sentences = []
         self.current_sentence = ""
         self.received_completed = False
+        self.completed_event.clear()
 
     @property
     def full_transcript(self) -> str:
         return "".join(self.sentences) + self.current_sentence
 
-    def _publish_asr_turn(self, is_final: bool = False):
-        """Active push of ASR result to event bus for low-latency delivery."""
+    def _publish_asr_turn(self, is_final: bool = False, fragment: str = ""):
+        """增量推送 ASR 片段到事件总线，避免历史累积造成的 UI 重复。"""
+        if not fragment.strip():
+            return
+
         try:
             from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
-            transcript = self.full_transcript
-            if not transcript.strip():
-                return
-            
+            print(f"DEBUG [EventBus] Publishing asr.turn: session={self.session_id} is_final={is_final} text='{fragment[:50]}'")
             DEFAULT_INTERVIEW_EVENT_BUS.publish(
                 session_id=self.session_id,
                 event_type="asr.turn",
                 payload={
-                    "event_id": f"asr-nls-{self.session_id}-{int(time.time()*1000)}",
+                    "event_id": f"nls-{self.session_id}-{int(time.time()*1000)}",
                     "turn_id": None,
+                    "seq": self.current_seq,
                     "speaker": "candidate" if is_final else "candidate_partial",
-                    "transcript": transcript,
+                    "transcript": fragment,
+                    "latency_ms": 0,
                     "is_final": is_final,
-                    "provider": "aliyun_nls",
                 },
             )
         except Exception as e:
-            logger.error(f"Failed to publish active ASR turn: {e}")
+            logger.warning(f"Failed to publish active ASR turn: {e}")
 
 class _AliyunNlsContext:
-    def __init__(self, recognizer: nls.NlsSpeechRecognizer, callback: _AliyunNlsCallback):
+    def __init__(self, recognizer: nls.NlsSpeechTranscriber, callback: _AliyunNlsCallback):
         self.recognizer = recognizer
         self.callback = callback
         self.last_active_at = time.time()

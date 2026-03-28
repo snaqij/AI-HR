@@ -1,4 +1,4 @@
-﻿"""LLM model/prompt routing."""
+"""LLM model/prompt routing."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ class ModelRouter:
                     model_name=model_name,
                     timeout_seconds=max(1, int(self._settings.llm_timeout_seconds)),
                     max_retries=max(0, int(self._settings.llm_max_retries)),
-                    temperature_milli=200,
+                    temperature_milli=700 if task_key == "interview_followup" else 200,
                     prompt_version=prompt_version,
                 ),
             )
@@ -90,7 +90,7 @@ class ModelRouter:
                 model_name=f"{task_key}-mock",
                 timeout_seconds=8,
                 max_retries=1,
-                temperature_milli=200,
+                temperature_milli=700 if task_key == "interview_followup" else 200,
                 prompt_version=prompt_version,
             ),
         )

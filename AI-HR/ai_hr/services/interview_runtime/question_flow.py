@@ -41,6 +41,11 @@ class InterviewQuestionFlowEngine:
         elif len(normalized) < max(4, int(min_len)):
             need_followup = True
             reason = "insufficient_detail"
+        # Check for repetitive meaningless repetition (e.g. "hello hello hello")
+        # If the number of unique words is very low relative to the length
+        elif len(set(normalized.split())) <= 2 and len(normalized) > 10:
+             need_followup = True
+             reason = "repetitive_content"
         return {
             "need_followup": need_followup,
             "reason": reason,

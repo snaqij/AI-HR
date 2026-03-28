@@ -6,7 +6,7 @@ import json
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Iterable
 
 from .event_bus import InterviewEventBus
 
@@ -27,6 +27,14 @@ class RedisInterviewEventBus(InterviewEventBus):
         self._listener_thread = threading.Thread(target=self._reader_loop, daemon=True, name="aihr-redis-eventbus")
         self._listener_thread.start()
 
+    def _make_json_safe(self, obj: Any) -> Any:
+        """递归剔除非 JSON 序列化的对象（如 bytes），保证 Redis 发布不崩溃。"""
+        if isinstance(obj, dict):
+            return {k: self._make_json_safe(v) for k, v in obj.items() if not isinstance(v, bytes)}
+        if isinstance(obj, (list, tuple)):
+            return [self._make_json_safe(i) for i in obj if not isinstance(i, bytes)]
+        return obj
+
     def publish(self, *, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
         event = {
             "event_type": event_type,
@@ -37,9 +45,13 @@ class RedisInterviewEventBus(InterviewEventBus):
         }
         self._publish_local(event)
         try:
-            self._client.publish(self._channel_for_session(session_id), json.dumps(event, ensure_ascii=False))
-        except Exception:
+            # 仅在发布到 Redis 时进行序列化安全处理，本地订阅仍可保留原始字节用于高效分发
+            safe_event = self._make_json_safe(event)
+            self._client.publish(self._channel_for_session(session_id), json.dumps(safe_event, ensure_ascii=False))
+        except Exception as e:
             # Keep local bus alive even if redis publish fails.
+            import logging
+            logging.getLogger(__name__).warning(f"Redis event bus publish failed: {e}")
             return
 
     def _reader_loop(self) -> None:

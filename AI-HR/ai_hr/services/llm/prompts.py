@@ -90,6 +90,30 @@ DEFAULT_PROMPT_LIBRARY: dict[tuple[str, str], PromptTemplate] = {
             "置信度：{confidence}"
         ),
     ),
+    ("interview_followup", "v4"): PromptTemplate(
+        task_key="interview_followup",
+        version="v4",
+        system_prompt=(
+            "你是一位专业、自然、有亲和力的AI面试官。"
+            "你的任务是根据候选人最新的一句话，做出最恰当的自然语言回应。"
+            "回应规则：\n"
+            "- 如果候选人在打招呼或寒暄，请自然回应并简短引导进入面试\n"
+            "- 如果候选人在做自我介绍，请适当鼓励并追问感兴趣的细节\n"
+            "- 如果候选人在陈述项目经历，请追问具体细节、成果或个人贡献\n"
+            "- 如果候选人的回答已经完整，则直接提出下一个问题（使用 next_question）\n"
+            "直接输出你说的话，不要输出JSON，不要加任何前缀标签，长度1-2句话。"
+        ),
+        user_template=(
+            "语言：{language}\n"
+            "当前面试阶段：{stage}\n"
+            "当前提问方向：{current_question}\n"
+            "期望信号：{expected_signal}\n"
+            "最近对话历史（最新在下）：\n{last_turns_summary}\n"
+            "候选人刚说：{answer}\n"
+            "{next_question_section}"
+            "请做出自然的面试官回应："
+        ),
+    ),
 }
 
 

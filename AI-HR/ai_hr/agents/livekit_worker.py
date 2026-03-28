@@ -2,9 +2,9 @@ import asyncio
 import logging
 import base64
 import uuid
+import threading
 from livekit import agents, rtc
 from livekit.agents import stt, tts, pipeline
-from livekit.plugins import openai
 
 # Internal imports
 from ai_hr.core.config import get_settings
@@ -48,14 +48,6 @@ class TencentSTTStream(stt.STTStream):
 
          try:
              # Bridge to our existing provider
-             # Note: transcribe_stream is sync/blocking in its current form, so we use to_thread
-             def _sync_transcribe():
-                 # This would need a minor change to propagate results via callback
-                 # For now, we simulate the results
-                 pass
-             
-             # Actually, for the best performance, we'd use the WS provider directly here
-             # But for this V1, let's keep the high-level logic and assume direct WS integration.
              pass
          finally:
              self._closed = True
@@ -80,35 +72,32 @@ class TencentTTSStream(tts.SynthesizeStream):
 
     async def _run(self):
         # Tencent TTS synthesis
-        # We wrap the sync iterator in a thread to keep the event loop free
+        # BE-013: Use generator directly in executor to enable true streaming
         loop = asyncio.get_running_loop()
-
-        def _get_packets():
-            return list(self._provider.synthesize_stream_iter(
-                session_id=str(uuid.uuid4()),
-                text=self._text,
-                voice="default",
-                chunk_size=40,
-            ))
+        
+        def _stream_to_chan():
+            try:
+                for p in self._provider.synthesize_stream_iter(
+                    session_id=str(uuid.uuid4()),
+                    text=self._text,
+                    voice="default",
+                    chunk_size=50,
+                ):
+                    audio_bytes = p.get("audio_bytes")
+                    if audio_bytes:
+                        self._event_chan.send_nowait(tts.SynthesizePacket(
+                            audio=rtc.AudioFrame(
+                                data=audio_bytes,
+                                sample_rate=16000,
+                                num_channels=1,
+                                samples_per_channel=len(audio_bytes) // 2
+                            )
+                        ))
+            except Exception as e:
+                logger.error(f"TTS synthesis failed: {e}")
 
         try:
-            packets = await loop.run_in_executor(None, _get_packets)
-            for p in packets:
-                 # In a real impl, we'd stream this instead of list()
-                 audio_bytes = p.get("audio_bytes")
-                 if audio_bytes:
-                     # LiveKit expects AudioFrame packets
-                     # For simplicity in this Demo, we send the raw data if it matches format
-                     self._event_chan.send_nowait(tts.SynthesizePacket(
-                         audio=rtc.AudioFrame(
-                             data=audio_bytes,
-                             sample_rate=16000,
-                             num_channels=1,
-                             samples_per_channel=len(audio_bytes) // 2
-                         )
-                     ))
-        except Exception as e:
-            logger.error(f"TTS synthesis failed: {e}")
+            await loop.run_in_executor(None, _stream_to_chan)
         finally:
             self.closed = True
 
@@ -132,24 +121,11 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     await ctx.connect()
-    logger.info(f"Connected to room {ctx.room.name}")
+    logger.info(f"Connected to room {ctx.room.name}. Waiting for backend commands.")
 
-    # VoicePipelineAgent is the high-level API to orchestrate VAD + STT + LLM + TTS
-    agent = pipeline.VoicePipelineAgent(
-        vad=agents.vad.SileroVAD(), # Standard VAD
-        stt=TencentSTT(asr_provider),
-        llm=openai.LLM(model="gpt-4o"), # Or use internal LLM wrapper
-        tts=TencentTTS(tts_provider),
-        chat_ctx=openai.ChatContext().append(
-            role="system",
-            text="You are a professional HR interviewer. Conduct a technical interview in a natural way."
-        ),
-    )
-
-    agent.start(ctx.room)
-    
-    # Initial greeting
-    await agent.say("Hi there! I am your AI interviewer today. Let's start the interview.", allow_interruptions=True)
+    # BE-013: Redundant VoicePipelineAgent removed.
+    # The backend (AIInterviewService) now handles the interview logic, VAD, and playback triggers.
+    # This worker can be used for session maintenance or specific RTC tasks.
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

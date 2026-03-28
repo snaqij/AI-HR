@@ -5,6 +5,8 @@ from __future__ import annotations
 import concurrent.futures
 import time
 import logging
+import threading
+import queue
 from dataclasses import dataclass
 from typing import Callable
 
@@ -56,6 +58,7 @@ class RealtimeOrchestrator:
         tts_voice: str = "default",
         tts_enabled: bool = True,
         on_audio_packet: Callable[[dict], None] | None = None,
+        abort_event: threading.Event | None = None,
     ) -> OrchestratorResult:
         """串行处理候选人回合。如果提供了 on_audio_packet，则会尝试流式合成响应。"""
         # Note: To avoid duplicating the entire logic, we can keep the serial version
@@ -65,6 +68,7 @@ class RealtimeOrchestrator:
         streamed_in_llm_block = False
         policy_flags: list[str] = []
 
+        logger.info(f"[Orchestrator] Processing turn session={session_id} seq={seq} transcript='{transcript_hint}' tts={tts_enabled} llm={llm_enabled}")
         asr_start = time.perf_counter()
         if not audio_base64:
             transcript = transcript_hint
@@ -111,35 +115,88 @@ class RealtimeOrchestrator:
             llm_start = time.perf_counter()
             if not followup_question and llm_enabled:
                 try:
-                    if on_audio_packet and hasattr(build_llm_followup, "is_streaming") and build_llm_followup.is_streaming:
-                        # 流式路径：出一句合一句
+                    # BE-013: Relaxed streaming check. If on_audio_packet is present, we assume the caller wants streaming if the provider/task allows it.
+                    if tts_enabled and on_audio_packet:
+                        # 流式路径：出一句合一句。使用生产者-消费者模式并发拉取 LLM 句子，减少句间延迟。
                         text_stream = build_llm_followup(transcript, confidence, interview_stage, language)
                         if text_stream:
+                            sentence_queue = queue.Queue(maxsize=16)
+                            job_queue = queue.Queue(maxsize=16)
                             full_text_list = []
-                            def _delta_logger(stream):
-                                for chunk in stream:
-                                    if chunk:
-                                        print(f"DEBUG [LLM Delta] Session: {session_id}, Chunk: '{chunk}'")
-                                    yield chunk
-                            
-                            for sentence in split_sentences(_delta_logger(text_stream)):
-                                full_text_list.append(sentence)
-                                print(f"DEBUG [LLM Stream] Session: {session_id}, Sentence: {sentence}")
-                                # 立即触发该句的 TTS 合成
+                            finished_fetching = threading.Event()
+                            executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+                            def _fetch_sentences():
+                                try:
+                                    for sentence in split_sentences(text_stream):
+                                        if abort_event and abort_event.is_set():
+                                            break
+                                        sentence_queue.put(sentence)
+                                except Exception as e:
+                                    logger.error(f"Error fetching sentences from LLM: {e}")
+                                finally:
+                                    finished_fetching.set()
+
+                            def _synthesize_job(sentence, res_q):
                                 try:
                                     for packet in self._tts_provider.synthesize_stream_iter(
                                         session_id=session_id,
                                         text=sentence,
                                         voice=tts_voice,
-                                        chunk_size=24
+                                        chunk_size=24,
                                     ):
-                                        if packet.get("audio_uri"):
-                                            print(f"DEBUG [TTS Stream] Session: {session_id}, Packet: {packet.get('index')}, URL: {packet.get('audio_uri')[:60]}...")
-                                        on_audio_packet(packet)
-                                except Exception as tts_err:
-                                    logger.warning(f"Streaming TTS error for sentence '{sentence}': {tts_err}")
-                            followup_question = "".join(full_text_list)
+                                        if abort_event and abort_event.is_set():
+                                            break
+                                        res_q.put(packet)
+                                except Exception as e:
+                                    logger.error(f"TTS Synthesis error for sentence '{sentence[:20]}': {e}")
+                                finally:
+                                    res_q.put(None) # Signal end of sentence
+
+                            def _coordinating_synthesis():
+                                try:
+                                    while not (finished_fetching.is_set() and sentence_queue.empty()):
+                                        try:
+                                            sentence = sentence_queue.get(timeout=0.05)
+                                            full_text_list.append(sentence)
+                                            res_q = queue.Queue()
+                                            job_queue.put(res_q)
+                                            executor.submit(_synthesize_job, sentence, res_q)
+                                        except queue.Empty:
+                                            continue
+                                except Exception as e:
+                                    logger.error(f"Synthesis coordinator error: {e}")
+
+                            fetch_thread = threading.Thread(target=_fetch_sentences, daemon=True)
+                            coord_thread = threading.Thread(target=_coordinating_synthesis, daemon=True)
+                            fetch_thread.start()
+                            coord_thread.start()
+
                             streamed_in_llm_block = True
+                            while not (finished_fetching.is_set() and (not coord_thread.is_alive()) and job_queue.empty()) or not job_queue.empty() or coord_thread.is_alive():
+                                # Robust termination check: wait for coordination to finish AND jobs to be drained
+                                try:
+                                    res_q = job_queue.get(timeout=0.05)
+                                    while True:
+                                        packet = res_q.get()
+                                        if packet is None:
+                                            break
+                                        if abort_event and abort_event.is_set():
+                                            break
+                                        if packet.get("audio_uri") or (isinstance(packet.get("audio_bytes"), bytes) and len(packet.get("audio_bytes")) > 0):
+                                            on_audio_packet(packet)
+                                            if packet.get("audio_uri"):
+                                                followup_audio_uris.append(str(packet["audio_uri"]))
+                                except queue.Empty:
+                                    if finished_fetching.is_set() and not coord_thread.is_alive() and job_queue.empty():
+                                        break
+                                    continue
+                            
+                            executor.shutdown(wait=False)
+                            
+                            followup_question = "".join(full_text_list)
+                        else:
+                            followup_question = ""
                     else:
                         res = build_llm_followup(transcript, confidence, interview_stage, language)
                         # Robust check for generators/iterators to avoid JSON serialization errors
@@ -147,6 +204,9 @@ class RealtimeOrchestrator:
                             followup_question = "".join(list(res))
                         else:
                             followup_question = res
+                    
+                    # if followup_question:
+                    #     print(f"DEBUG [LLM Output] Session: {session_id}, Followup: {followup_question}")
                     
                     if followup_question:
                         DEFAULT_FOLLOWUP_CACHE.set(cache_key, question=followup_question, reason="llm")
@@ -171,19 +231,19 @@ class RealtimeOrchestrator:
             try:
                 if not streamed_in_llm_block:
                     if on_audio_packet:
-                        # 对于由于缓存命中或预取跳过 LLM 流的场景，此处进行补播
-                        print(f"DEBUG [TTS Replay] Session: {session_id}, Playing existing followup: {followup_question[:100]}...")
-                        from .streaming_utils import split_sentences
-                        for sentence in split_sentences([followup_question]):
-                            for packet in self._tts_provider.synthesize_stream_iter(
-                                session_id=session_id,
-                                text=sentence,
-                                voice=tts_voice,
-                                chunk_size=24,
-                            ):
-                                on_audio_packet(packet)
-                                if packet.get("audio_uri"):
-                                    followup_audio_uris.append(packet["audio_uri"])
+                        # 对于由于缓存命中或预取跳过 LLM 流的场景，不分句，直接全文合成以保证连贯性
+                        # print(f"DEBUG [TTS Replay] Session: {session_id}, Playing existing followup: {followup_question[:100]}...")
+                        for packet in self._tts_provider.synthesize_stream_iter(
+                            session_id=session_id,
+                            text=followup_question,
+                            voice=tts_voice,
+                            chunk_size=24,
+                        ):
+                            if abort_event and abort_event.is_set():
+                                break
+                            on_audio_packet(packet)
+                            if packet.get("audio_uri"):
+                                followup_audio_uris.append(packet["audio_uri"])
                     else:
                         # 兼容非流式路径
                         tts_result = self._tts_provider.synthesize_stream(

@@ -30,8 +30,8 @@ def split_sentences(text_stream: Iterable[str]) -> Iterable[str]:
                 if sentence:
                     yield sentence
             else:
-                # 如果缓冲区太长（比如 LLM 一直不给标点），也强制切分一次
-                if len(buffer) > 100:
+                # 如果缓冲区达到一定长度（比如 40 个字符），即使没有标点也强制切分一次，以加快首字节音频产生速度
+                if len(buffer) > 40:
                     yield buffer.strip()
                     buffer = ""
                 break

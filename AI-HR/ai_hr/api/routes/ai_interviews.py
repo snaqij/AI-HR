@@ -1,4 +1,4 @@
-"""AI 面试会话路由。"""
+"""AI interview routes."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def prebuild_ai_interview_question_pack(
     payload: AIInterviewQuestionPackPrebuildRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewQuestionPackPrebuildResult]:
-    """预生成题包并写入运行时缓存。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.prebuild_question_pack(payload)
     return Envelope.success(AIInterviewQuestionPackPrebuildResult.model_validate(result))
@@ -80,7 +81,7 @@ def create_ai_interview_session(
     payload: AIInterviewSessionCreateRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewSessionCreateResult]:
-    """创建 AI 面试会话。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.create_session(payload)
     return Envelope.success(AIInterviewSessionCreateResult(session=AIInterviewSessionResponse.model_validate(result)))
@@ -92,7 +93,7 @@ def start_ai_interview_session(
     payload: AIInterviewSessionStartRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewSessionResponse]:
-    """启动 AI 面试会话。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.start_session(session_id, payload)
     return Envelope.success(AIInterviewSessionResponse.model_validate(result))
@@ -104,7 +105,7 @@ def finish_ai_interview_session(
     payload: AIInterviewSessionFinishRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewSessionResponse]:
-    """结束 AI 面试会话。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.finish_session(session_id, payload)
     return Envelope.success(AIInterviewSessionResponse.model_validate(result))
@@ -116,7 +117,7 @@ def handoff_ai_interview_session(
     payload: AIInterviewSessionHandoffRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewSessionHandoffResult]:
-    """执行会话转人工。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.handoff_session(session_id, payload)
     return Envelope.success(
@@ -133,7 +134,7 @@ def append_ai_interview_event(
     payload: AIInterviewSessionEventRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewSessionEventResult]:
-    """上报会话实时事件。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.append_event(session_id, payload)
     return Envelope.success(AIInterviewSessionEventResult.model_validate(result))
@@ -145,7 +146,7 @@ def generate_ai_interview_question_set(
     payload: AIInterviewQuestionGenerateRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewQuestionGenerateResult]:
-    """生成并保存会话问题集。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.generate_question_set(session_id, payload)
     return Envelope.success(AIInterviewQuestionGenerateResult.model_validate(result))
@@ -158,7 +159,7 @@ def get_ai_interview_report(
     force_recompute: bool = Query(default=False),
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewReportResponse]:
-    """查询 AI 面试报告。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.get_report(session_id, run_id=run_id, force_recompute=force_recompute)
     return Envelope.success(result)
@@ -171,7 +172,7 @@ def get_ai_interview_replay(
     offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewReplayResponse]:
-    """查询会话回放数据（音频+转写）。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.get_replay(session_id, limit=limit, offset=offset)
     return Envelope.success(result)
@@ -183,7 +184,7 @@ def get_ai_interview_metrics(
     min_samples: int = Query(default=5, ge=1, le=1000),
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewMetricsResponse]:
-    """查询 AI 面试 handoff/blocked/latency 治理指标。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.get_metrics(window_minutes=window_minutes, min_samples=min_samples)
     return Envelope.success(result)
@@ -195,7 +196,7 @@ def rtc_join_ai_interview_session(
     payload: AIInterviewRTCJoinRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewRTCJoinResponse]:
-    """RTC 入会。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.rtc_join(session_id, payload)
     return Envelope.success(result)
@@ -207,7 +208,7 @@ def rtc_reconnect_ai_interview_session(
     payload: AIInterviewRTCReconnectRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewRTCReconnectResponse]:
-    """RTC 重连。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.rtc_reconnect(session_id, payload)
     return Envelope.success(result)
@@ -219,7 +220,7 @@ def rtc_subscribe_audio_ai_interview_session(
     payload: AIInterviewRTCAudioSubscribeRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewRTCAudioSubscribeResponse]:
-    """RTC 候选人音轨订阅。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.rtc_subscribe_audio(session_id, payload)
     return Envelope.success(result)
@@ -231,7 +232,7 @@ def rtc_apply_video_policy_ai_interview_session(
     payload: AIInterviewRTCVideoPolicyRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewRTCVideoPolicyResponse]:
-    """RTC 视频轨策略应用。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.rtc_apply_video_policy(session_id, payload)
     return Envelope.success(result)
@@ -243,7 +244,7 @@ def rtc_asr_stream_ai_interview_session(
     payload: AIInterviewASRStreamRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewASRStreamResponse]:
-    """ASR 流式转写适配。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.asr_stream(session_id, payload)
     return Envelope.success(result)
@@ -255,7 +256,7 @@ def rtc_tts_stream_ai_interview_session(
     payload: AIInterviewTTSStreamRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewTTSStreamResponse]:
-    """TTS 流式播报适配。"""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.tts_stream(session_id, payload)
     return Envelope.success(result)
@@ -266,7 +267,7 @@ def rtc_ingest_audio_frame(
     payload: AIInterviewRTCASRIngestRequest,
     session: Session = Depends(get_db_session),
 ) -> Envelope[AIInterviewRTCASRIngestResponse]:
-    """Ingest realtime RTC audio frame by room_id and optionally trigger followup/TTS."""
+    """Route handler."""
     service = get_ai_interview_service(session)
     result = service.rtc_ingest_audio(payload)
     return Envelope.success(AIInterviewRTCASRIngestResponse.model_validate(result))
@@ -277,7 +278,7 @@ async def ws_rtc_ingest_audio(
     websocket: WebSocket,
     session: Session = Depends(get_db_session),
 ) -> None:
-    """Low-latency room-level ASR ingest websocket for RTC worker sidecars."""
+    """Route handler."""
     if not await require_ai_interview_ws_auth(websocket):
         return
     settings = get_settings()
@@ -381,18 +382,27 @@ async def ws_rtc_ingest_audio(
 
 @router.websocket("/sessions/{session_id}/events/ws")
 async def ws_ai_interview_events(session_id: str, websocket: WebSocket) -> None:
-    """Session-scoped realtime event stream for subtitles/status."""
+    """Route handler."""
     if not await require_ai_interview_ws_auth(websocket):
         return
     await websocket.accept()
     DEFAULT_INTERVIEW_EVENT_BUS.bind_loop(asyncio.get_running_loop())
     subscription = DEFAULT_INTERVIEW_EVENT_BUS.subscribe(session_id=session_id)
+    def _make_json_safe(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {k: _make_json_safe(v) for k, v in obj.items() if not isinstance(v, bytes)}
+        if isinstance(obj, (list, tuple)):
+            return [_make_json_safe(i) for i in obj if not isinstance(i, bytes)]
+        return obj
+
     try:
         await websocket.send_json({"event_type": "connected", "session_id": session_id})
         while True:
             try:
                 event = await asyncio.wait_for(subscription.queue.get(), timeout=25)
-                await websocket.send_json(event)
+                # Ensure the payload is JSON serializable by stripping bytes
+                safe_event = _make_json_safe(event)
+                await websocket.send_json(safe_event)
             except asyncio.TimeoutError:
                 await websocket.send_json({"event_type": "ping", "session_id": session_id})
     except WebSocketDisconnect:
@@ -407,7 +417,7 @@ async def ws_ai_interview_duplex(
     websocket: WebSocket,
     session: Session = Depends(get_db_session),
 ) -> None:
-    """Full duplex realtime channel: audio chunk in, asr/event/tts-out metadata."""
+    """Route handler."""
     if not await require_ai_interview_ws_auth(websocket):
         return
     settings = get_settings()
@@ -423,7 +433,7 @@ async def ws_ai_interview_duplex(
     audio_consumer_task = None
     listener_task = None
     dispatcher_task = None
-    producer_thread = None
+
     
     seen_frame_ids: set[str] = set()
     seen_frame_queue: deque[str] = deque()
@@ -452,9 +462,10 @@ async def ws_ai_interview_duplex(
     from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
     DEFAULT_INTERVIEW_EVENT_BUS.bind_loop(asyncio.get_running_loop())
     
-    # Pre-warm ASR/TTS connection for the duplex session
+    # Pre-warm ASR/TTS connection for the duplex session asynchronously to avoid blocking initialization
     try:
-        service.asr_warmup(session_id=session_id)
+        await asyncio.to_thread(service.asr_warmup, session_id=session_id)
+        await asyncio.to_thread(service.tts_warmup, session_id=session_id, voice="default")
     except Exception as e:
         logger.warning(f"Initial warmup failed for {session_id}: {e}")
 
@@ -553,30 +564,74 @@ async def ws_ai_interview_duplex(
             pass
 
     # --- Session-wide TTS Streaming Infrastructure (Phase 1) ---
-    loop = asyncio.get_running_loop()
-    sentence_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=128)
-    packet_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=256)
+    packet_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=512)
     event_sub = DEFAULT_INTERVIEW_EVENT_BUS.subscribe(session_id=session_id)
+    interrupt_generation = 0
+
+    def _clear_packet_queue() -> None:
+        while True:
+            try:
+                packet_queue.get_nowait()
+                packet_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
 
     async def _listen_event_bus():
+        nonlocal interrupt_generation
         try:
             while not websocket_closed:
                 try:
                     event = await asyncio.wait_for(event_sub.queue.get(), timeout=1.0)
+                    # if event.get("event_type") != "tts.packet":
+                    #     print(f"DEBUG [EventBus] Received event type={event.get('event_type')} for session={session_id}")
                     if event.get("event_type") == "asr.turn":
                         payload = event.get("payload", {})
                         if payload:
                             await _safe_send({"type": "duplex.asr.turn", "data": payload})
-                    elif event.get("event_type") == "llm.sentence":
-                        payload = event.get("payload", {})
-                        if not sentence_queue.full():
-                            await sentence_queue.put(payload)
+                            # Bridge to service layer if this is a final turn to trigger LLM
+                            seq = payload.get("seq")
+                            # print(f"DEBUG [EventBus Bridge] Checking is_final: {payload.get('is_final')} for seq={seq}")
+                            if bool(payload.get("is_final")):
+                                def _trigger_append():
+                                    try:
+                                        # print(f"DEBUG [Bridge Thread] Starting append_event for session={session_id}")
+                                        from ...db.session import SessionLocal
+                                        from ...schemas.ai_interviews import AIInterviewSessionEventRequest
+                                        with SessionLocal() as local_session:
+                                            local_service = get_ai_interview_service(local_session)
+                                            event_req = AIInterviewSessionEventRequest(
+                                                event_id=str(payload.get("event_id") or uuid.uuid4().hex),
+                                                seq=max(1, int(seq or 1)),
+                                                speaker="candidate",
+                                                transcript=str(payload.get("transcript") or ""),
+                                                confidence=float(payload.get("confidence") or 0.9),
+                                                payload=payload,
+                                            )
+                                            # print(f"DEBUG [Bridge Thread] Calling append_event session={session_id} seq={event_req.seq}")
+                                            res = local_service.append_event(session_id, event_req)
+                                            # print(f"DEBUG [Bridge Thread] append_event result: {res.get('accepted')}")
+                                            return res
+                                    except Exception as bridge_exc:
+                                        print(f"DEBUG [Bridge Thread ERROR] session={session_id}: {bridge_exc}")
+                                        import traceback
+                                        traceback.print_exc()
+                                
+                                # Run in thread to avoid blocking the event loop
+                                asyncio.create_task(asyncio.to_thread(_trigger_append))
                     elif event.get("event_type") == "tts.packet":
                         payload = event.get("payload", {})
                         if not packet_queue.full():
                             packet_to_dispatch = dict(payload)
                             packet_to_dispatch["produced_at"] = time.perf_counter()
                             await packet_queue.put(packet_to_dispatch)
+                    elif event.get("event_type") == "llm.sentence":
+                        payload = event.get("payload", {})
+                        if payload:
+                            await _safe_send({"type": "duplex.llm.sentence", "data": payload})
+                    elif event.get("event_type") == "tts.interrupt":
+                        interrupt_generation += 1
+                        _clear_packet_queue()
+                        await _safe_send({"type": "duplex.tts.interrupt", "session_id": session_id})
                 except asyncio.TimeoutError:
                     continue
         except asyncio.CancelledError:
@@ -585,78 +640,125 @@ async def ws_ai_interview_duplex(
             if not websocket_closed:
                 logger.error(f"Event bus listener error: {exc}")
 
-    def _produce_tts_packets_session():
-        """Background thread to process sentences from the queue and send them to TTS."""
-        try:
-            while not websocket_closed:
-                try:
-                    # Use a short timeout to check websocket_closed periodically
-                    future = asyncio.run_coroutine_threadsafe(sentence_queue.get(), loop)
-                    payload = future.result(timeout=1.0) 
-                    text = payload.get("text")
-                    is_final = payload.get("is_final")
-                    
-                    if text:
-                        from ...db.session import SessionLocal
-                        with SessionLocal() as local_session:
-                            local_service = get_ai_interview_service(local_session)
-                            for packet in local_service.tts_stream_iter(
-                                session_id=session_id,
-                                text=text,
-                                voice="default",
-                                chunk_size=24,
-                            ):
-                                if websocket_closed:
-                                    break
-                                packet_copy = dict(packet)
-                                packet_copy["produced_at"] = time.perf_counter()
-                                try:
-                                    f = asyncio.run_coroutine_threadsafe(packet_queue.put(packet_copy), loop)
-                                    f.result(timeout=2)
-                                except Exception:
-                                    break
-                except (asyncio.TimeoutError, concurrent.futures.TimeoutError):
-                    continue
-        except Exception as exc:
-            if not websocket_closed:
-                logger.error(f"TTS Producer thread error: {exc}")
-                asyncio.run_coroutine_threadsafe(packet_queue.put({"_error": str(exc)}), loop)
+    last_interaction_time = time.perf_counter()
+    latest_received_seq = 0
+    last_flushed_seq = 0
+    
+    def _safe_flush_asr(seq: int):
+        nonlocal last_flushed_seq
+        if seq <= last_flushed_seq:
+            return
+        last_flushed_seq = seq
+        # logger.debug(f"DEBUG [Backend VAD] Triggering flush for session={session_id} seq={seq}")
+        from ...db.session import SessionLocal
+        with SessionLocal() as local_session:
+            local_service = get_ai_interview_service(local_session)
+            local_service.process_duplex_end_of_turn(session_id=session_id, seq=seq, payload={"source": "backend_vad"})
 
     async def _dispatch_packets_session():
-        """Async task to pick up TTS packets and send them over the WebSocket."""
+        """Route handler."""
         packet_index = 0
         prev_sent_at: float | None = None
+        coalesce_bytes = bytearray()
+        coalesce_sample_rate = 16000
+        coalesce_text = ""
+        coalesce_final = False
+        coalesce_deadline = 0.0
+        coalesce_first_produced_at: float | None = None
+        coalesce_target_bytes = int(16000 * 2 * 0.02)
+        local_interrupt_generation = interrupt_generation
+
+        async def _flush_coalesced(now: float) -> None:
+            nonlocal packet_index, prev_sent_at, coalesce_bytes, coalesce_sample_rate, coalesce_text, coalesce_final, coalesce_deadline, coalesce_first_produced_at
+            if not coalesce_bytes:
+                return
+            packet_index += 1
+            produced_at = coalesce_first_produced_at if coalesce_first_produced_at is not None else now
+            packet_latency_ms = max(0, int((now - produced_at) * 1000))
+            inter_packet_gap_ms = 0
+            if prev_sent_at is not None:
+                inter_packet_gap_ms = max(0, int((now - prev_sent_at) * 1000))
+            prev_sent_at = now
+            tts_latencies_ms.append(packet_latency_ms)
+            await _safe_send({
+                "type": "duplex.tts.packet",
+                "session_id": session_id,
+                "packet_index": packet_index,
+                "is_final_packet": bool(coalesce_final),
+                "text": coalesce_text,
+                "transport": "binary",
+                "audio_uri": "",
+                "audio_codec": "pcm",
+                "sample_rate": int(coalesce_sample_rate or 16000),
+                "packet_latency_ms": packet_latency_ms,
+                "inter_packet_gap_ms": inter_packet_gap_ms,
+            })
+            await _safe_send_bytes(bytes(coalesce_bytes))
+            coalesce_bytes = bytearray()
+            coalesce_text = ""
+            coalesce_final = False
+            coalesce_deadline = 0.0
+            coalesce_first_produced_at = None
+
         try:
             while not websocket_closed:
                 try:
-                    packet = await asyncio.wait_for(packet_queue.get(), timeout=1.0)
+                    if local_interrupt_generation != interrupt_generation:
+                        coalesce_bytes = bytearray()
+                        coalesce_text = ""
+                        coalesce_final = False
+                        coalesce_deadline = 0.0
+                        coalesce_first_produced_at = None
+                        local_interrupt_generation = interrupt_generation
+
+                    wait_timeout = 0.02
+                    if coalesce_bytes and coalesce_deadline > 0:
+                        wait_timeout = max(0.005, min(wait_timeout, coalesce_deadline - time.perf_counter()))
+                    packet = await asyncio.wait_for(packet_queue.get(), timeout=wait_timeout)
                     if packet.get("_error"):
                         await _safe_send({"type": "duplex.error", "error": "tts_stream_failed", "detail": packet.get("_error")})
                         continue
-                    
-                    packet_index += 1
+
                     now = time.perf_counter()
                     produced_at = float(packet.get("produced_at") or now)
                     packet_latency_ms = max(0, int((now - produced_at) * 1000))
-                    inter_packet_gap_ms = 0
-                    if prev_sent_at is not None:
-                        inter_packet_gap_ms = max(0, int((now - prev_sent_at) * 1000))
-                    prev_sent_at = now
-                    
-                    await _safe_send({
-                        "type": "duplex.tts.packet",
-                        "session_id": session_id,
-                        "packet_index": packet_index,
-                        "is_final_packet": bool(packet.get("is_final_packet", False)),
-                        "text": packet.get("text"),
-                        "transport": "binary",  # 显式指示后续跟随二进制帧
-                        "packet_latency_ms": packet_latency_ms,
-                        "inter_packet_gap_ms": inter_packet_gap_ms,
-                    })
+
                     audio_bytes = packet.get("audio_bytes")
-                    if isinstance(audio_bytes, bytes):
-                        await _safe_send_bytes(audio_bytes)
+                    use_binary = bool(isinstance(audio_bytes, (bytes, bytearray)) and len(audio_bytes) > 0)
+                    if not use_binary:
+                        await _safe_send({"type": "duplex.error", "error": "tts_packet_invalid_audio_bytes"})
+                        continue
+                    audio_codec = str(packet.get("audio_codec") or "").strip().lower()
+                    if audio_codec and audio_codec != "pcm":
+                        await _safe_send(
+                            {
+                                "type": "duplex.error",
+                                "error": "tts_packet_invalid_audio_codec",
+                                "detail": f"expected pcm, got {audio_codec}",
+                            }
+                        )
+                        continue
+
+                    coalesce_bytes.extend(bytes(audio_bytes))
+                    coalesce_sample_rate = int(packet.get("sample_rate") or 16000)
+                    if packet.get("text"):
+                        coalesce_text = str(packet.get("text") or "")
+                    coalesce_final = coalesce_final or bool(packet.get("is_final_packet", False))
+                    if coalesce_first_produced_at is None:
+                        coalesce_first_produced_at = produced_at
+                    if coalesce_deadline <= 0:
+                        coalesce_deadline = now + 0.02
+
+                    should_flush = (
+                        len(coalesce_bytes) >= coalesce_target_bytes
+                        or coalesce_final
+                        or packet_latency_ms > 120
+                    )
+                    if should_flush:
+                        await _flush_coalesced(now)
                 except asyncio.TimeoutError:
+                    if coalesce_bytes and coalesce_deadline > 0 and time.perf_counter() >= coalesce_deadline:
+                        await _flush_coalesced(time.perf_counter())
                     continue
         except Exception as exc:
             if not websocket_closed:
@@ -665,8 +767,7 @@ async def ws_ai_interview_duplex(
     # Start session-wide background workers
     listener_task = asyncio.create_task(_listen_event_bus(), name=f"duplex-listener-{session_id}")
     dispatcher_task = asyncio.create_task(_dispatch_packets_session(), name=f"duplex-dispatcher-{session_id}")
-    producer_thread = threading.Thread(target=_produce_tts_packets_session, daemon=True, name=f"duplex-producer-{session_id}")
-    producer_thread.start()
+
 
     async def _handle_chunk_with_guard(payload: dict, frame_id: str, recv_start: float, audio_bytes: bytes | None = None) -> None:
         try:
@@ -689,7 +790,24 @@ async def ws_ai_interview_duplex(
                         audio_bytes=audio_bytes,
                     )
             
-            await asyncio.to_thread(_run_sync_process)
+            result = await asyncio.to_thread(_run_sync_process)
+            if is_final:
+                asr_part = (result or {}).get("asr") if isinstance(result, dict) else {}
+                event_part = (result or {}).get("event") if isinstance(result, dict) else None
+                transcript = str((asr_part or {}).get("transcript") or "").strip()
+                provider = str((asr_part or {}).get("provider") or "")
+                logger.info(
+                    "[FinalDiag][WS Processed] session=%s frame_id=%s seq=%s chunk=%s/%s is_final=%s provider=%s transcript_len=%s has_event=%s",
+                    session_id,
+                    frame_id,
+                    payload.get("seq"),
+                    chunk_index,
+                    chunk_total,
+                    is_final,
+                    provider,
+                    len(transcript),
+                    bool(event_part),
+                )
             e2e_latencies_ms.append(max(1, int((time.perf_counter() - recv_start) * 1000)))
         except asyncio.CancelledError:
             raise
@@ -704,16 +822,25 @@ async def ws_ai_interview_duplex(
             })
 
     async def _audio_queue_consumer():
-        """Consumes audio chunks sequentially to ensure ordered ASR execution."""
+        """Route handler."""
+        nonlocal latest_received_seq, last_flushed_seq
         try:
             while not websocket_closed:
                 try:
-                    item, chunk_start = await asyncio.wait_for(audio_chunk_queue.get(), timeout=1.0)
+                    item, chunk_start = await asyncio.wait_for(audio_chunk_queue.get(), timeout=0.6)
                     message, audio_bytes = item
                     frame_id = str(message.get("frame_id") or "")
+                    
+                    seq = int(message.get("seq") or 0)
+                    if seq > 0:
+                        latest_received_seq = seq
+                    
                     await _handle_chunk_with_guard(message, frame_id, chunk_start, audio_bytes=audio_bytes)
                     audio_chunk_queue.task_done()
                 except asyncio.TimeoutError:
+                    if latest_received_seq > last_flushed_seq:
+                        # logger.debug(f"DEBUG [Backend VAD] Silence detected (>600ms), flushing seq={latest_received_seq}")
+                        await asyncio.to_thread(_safe_flush_asr, latest_received_seq)
                     continue
         except asyncio.CancelledError:
             pass
@@ -757,6 +884,55 @@ async def ws_ai_interview_duplex(
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong", "session_id": session_id})
                 continue
+            if msg_type == "end_of_turn":
+                eot_seq = int(message.get("seq") or 0)
+                eot_frame_id = str(message.get("frame_id") or "").strip()
+                if eot_seq <= 0:
+                    await _safe_send({"type": "duplex.error", "error": "invalid_eot_seq"})
+                    continue
+                ack_latency_ms = max(1, int((time.perf_counter() - recv_start) * 1000))
+                await _safe_send(
+                    {
+                        "type": "duplex.eot_ack",
+                        "session_id": session_id,
+                        "frame_id": eot_frame_id,
+                        "seq": eot_seq,
+                        "status": "accepted",
+                        "ack_latency_ms": ack_latency_ms,
+                    }
+                )
+                logger.info(
+                    "[FinalDiag][WS EOT] accepted session=%s frame_id=%s seq=%s",
+                    session_id,
+                    eot_frame_id,
+                    eot_seq,
+                )
+                # print(f"DEBUG [WS EndOfTurn] session={session_id} seq={eot_seq}")
+                try:
+                    def _run_eot():
+                        from ...db.session import SessionLocal
+                        with SessionLocal() as local_session:
+                            local_service = get_ai_interview_service(local_session)
+                            return local_service.process_duplex_end_of_turn(
+                                session_id=session_id,
+                                seq=eot_seq,
+                                payload=message,
+                            )
+
+                    eot_result = await asyncio.to_thread(_run_eot)
+                    await _safe_send({"type": "duplex.turn", "data": eot_result})
+                except Exception as exc:
+                    logger.error("Error processing end_of_turn: session=%s seq=%s err=%s", session_id, eot_seq, exc)
+                    await _safe_send(
+                        {
+                            "type": "duplex.error",
+                            "session_id": session_id,
+                            "error": "eot_processing_failed",
+                            "frame_id": eot_frame_id,
+                            "detail": str(exc),
+                        }
+                    )
+                continue
             if msg_type != "audio_chunk":
                 await websocket.send_json({"type": "duplex.error", "error": "unsupported_message_type"})
                 continue
@@ -779,6 +955,14 @@ async def ws_ai_interview_duplex(
                         "ack_latency_ms": ack_latency_ms,
                     }
                 )
+                if bool(message.get("is_final", False)):
+                    logger.warning(
+                        "[FinalDiag][WS Duplicate] final frame duplicate session=%s frame_id=%s seq=%s chunk_index=%s",
+                        session_id,
+                        frame_id,
+                        message.get("seq"),
+                        message.get("chunk_index"),
+                    )
                 if (accepted_count + duplicate_count + server_drop_count) % stats_emit_every == 0:
                     await _emit_stats()
                 continue
@@ -794,6 +978,14 @@ async def ws_ai_interview_duplex(
                         "retryable": True,
                     }
                 )
+                if bool(message.get("is_final", False)):
+                    logger.error(
+                        "[FinalDiag][WS Drop] final frame dropped by server_busy session=%s frame_id=%s seq=%s chunk_index=%s",
+                        session_id,
+                        frame_id,
+                        message.get("seq"),
+                        message.get("chunk_index"),
+                    )
                 if (accepted_count + duplicate_count + server_drop_count) % stats_emit_every == 0:
                     await _emit_stats()
                 continue
@@ -811,6 +1003,15 @@ async def ws_ai_interview_duplex(
                     "ack_latency_ms": ack_latency_ms,
                 }
             )
+            if bool(message.get("is_final", False)):
+                logger.info(
+                    "[FinalDiag][WS Ack] accepted final frame session=%s frame_id=%s seq=%s chunk_index=%s audio_len=%s",
+                    session_id,
+                    frame_id,
+                    message.get("seq"),
+                    message.get("chunk_index"),
+                    len(audio_bytes or b""),
+                )
             if (accepted_count + duplicate_count + server_drop_count) % stats_emit_every == 0:
                 await _emit_stats()
             
@@ -844,3 +1045,4 @@ async def ws_ai_interview_duplex(
                 await _emit_stats()
             except Exception:
                 pass
+

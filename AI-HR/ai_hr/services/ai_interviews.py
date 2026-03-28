@@ -17,6 +17,10 @@ import uuid
 _PROVIDER_SINGLETON_LOCK = threading.Lock()
 _ASR_PROVIDER_SINGLETON: "ASRProvider | None" = None
 _TTS_PROVIDER_SINGLETON: "TTSProvider | None" = None
+
+# Turn-level deduplication markers for duplex flow
+_DUPLEX_FINALIZE_LOCK = threading.Lock()
+_DUPLEX_FINALIZED_SEQ: dict[str, set[int]] = {}
 from sqlalchemy.orm import Session
 from ..core.config import get_settings
 from ..core.exceptions import InvalidStateError
@@ -230,6 +234,31 @@ class AIInterviewService:
         latency_breakdown: dict[str, int] = {}
         effective_transcript = payload.transcript
         effective_confidence = payload.confidence
+        
+        # 1. Robust Deduplication (Seq-level)
+        # Prevents redundant LLM triggers from both ASR Final and EOT Flush for the same turn.
+        with _DUPLEX_FINALIZE_LOCK:
+            if session_id not in _DUPLEX_FINALIZED_SEQ:
+                _DUPLEX_FINALIZED_SEQ[session_id] = set()
+            seq_set = _DUPLEX_FINALIZED_SEQ[session_id]
+            
+            if payload.seq in seq_set:
+                logger.info(f"[Deduplication] Session {session_id} Seq {payload.seq} already finalized/processed. Skipping.")
+                return {
+                    "session_id": session_id,
+                    "event_id": payload.event_id,
+                    "accepted": False,
+                    "deduplicated": True,
+                    "turn_id": None,
+                    "action": None,
+                    "decision_reason": "already_finalized",
+                }
+
+            # Only mark as finalized if we are processing a candidate's authoritative turn
+            if payload.speaker == "candidate" and (payload.transcript or "").strip():
+                # We only mark it as fully 'done' if we are about to trigger the orchestrator
+                # Note: seq is added to the set after we are SURE this is a meaningful final turn.
+                seq_set.add(payload.seq)
 
         if self._session_repository.is_event_seen(session_id=session_id, event_id=payload.event_id):
             return {
@@ -251,6 +280,7 @@ class AIInterviewService:
             }
 
         if payload.speaker == "candidate":
+            # logger.debug(f"DEBUG [append_event] Processing candidate turn: session={session_id} seq={payload.seq}")
             duplex_mode = bool((payload.payload or {}).get("duplex_mode"))
             prefetched_followup = str((payload.payload or {}).get("prefetched_followup_question") or "").strip()
             prefetched_llm_ms = int((payload.payload or {}).get("prefetched_llm_ms") or 0)
@@ -272,7 +302,6 @@ class AIInterviewService:
 
             def _on_audio_packet(packet: dict) -> None:
                 """将 TTS 分片推送至事件总线并打印调试。"""
-                print(f"DEBUG [TTS Push Event] Session: {session_id}, Packet: {packet.get('index')}")
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,
                     event_type="tts.packet",
@@ -404,14 +433,14 @@ class AIInterviewService:
                     deduplicated,
                     transcript_preview[:180],
                 )
-                print(f"DEBUG [ASR] Session: {session_id}, Transcript: {transcript_preview}")
-                if followup_question:
-                    print(f"DEBUG [LLM] Session: {session_id}, Action: {action}, Followup: {followup_question}")
-                else:
-                    print(f"DEBUG [LLM] Session: {session_id}, No followup generated. Action: {action}, Reason: {decision_reason}")
+                # print(f"DEBUG [ASR] Session: {session_id}, Transcript: {transcript_preview}")
+                # if followup_question:
+                #     print(f"DEBUG [LLM] Session: {session_id}, Action: {action}, Followup: {followup_question}")
+                # else:
+                #     print(f"DEBUG [LLM] Session: {session_id}, No followup generated. Action: {action}, Reason: {decision_reason}")
                 
-                if followup_audio_uris:
-                    print(f"DEBUG [TTS] Session: {session_id}, Audio URIs: {len(followup_audio_uris)} packets")
+                # if followup_audio_uris:
+                #     print(f"DEBUG [TTS] Session: {session_id}, Audio URIs: {len(followup_audio_uris)} packets")
         return {
             "session_id": session_id,
             "event_id": payload.event_id,
@@ -1309,7 +1338,7 @@ class AIInterviewService:
         """RTC-002：ASR 流式适配，返回转写结果并落库。"""
         entity = self._session_repository.get(session_id)
         audio_bytes = getattr(payload, "audio_bytes", None)
-        if self._settings.asr_force_streaming and not (payload.audio_base64 or audio_bytes):
+        if self._settings.asr_force_streaming and not (payload.audio_base64 or audio_bytes) and not payload.is_final:
             raise InvalidStateError("ASR force_streaming 已开启，音频数据不可为空")
         if payload.chunk_index > payload.chunk_total:
             raise InvalidStateError("chunk_index 不能大于 chunk_total")
@@ -1598,6 +1627,53 @@ class AIInterviewService:
             chunk_size=chunk_size,
         ):
             yield packet
+
+    def process_duplex_end_of_turn(
+        self,
+        *,
+        session_id: str,
+        seq: int,
+        frame_id: str | None = None,
+        payload: dict | None = None,
+    ) -> dict:
+        """Process explicit end_of_turn message to force ASR finalization."""
+        session_entity = self._session_repository.get(session_id)
+        if not session_entity:
+            return {"status": "ignored", "reason": "session_not_found"}
+        logger.info(f"[Duplex] Explicit end_of_turn received: session={session_id} seq={seq} frame_id={frame_id}")
+        self._safe_flush_asr(session_id, seq=seq)
+        return {"status": "accepted", "session_id": session_id, "seq": seq}
+
+    def _safe_flush_asr(self, session_id: str, seq: int = 1) -> None:
+        """Helper to ensure ASR buffer is flushed and final response triggered."""
+        try:
+            # We don't have a direct 'flush' in all providers, 
+            # but usually submitting an empty final chunk or closing the stream works.
+            # In our current Aliyun provider, it responds to 'is_final=True'.
+            asr_req = AIInterviewASRStreamRequest(
+                seq=max(1, seq), 
+                text_hint="",
+                audio_base64=None,
+                is_final=True,
+                source="eot_flush"
+            )
+            asr_resp = self.asr_stream(session_id, asr_req)
+            
+            # CRITICAL: Trigger the interview logic if we got a final transcript
+            is_final_resp = (asr_resp.asr_meta or {}).get("is_final") or False
+            if is_final_resp and (asr_resp.transcript or "").strip():
+                event_req = AIInterviewSessionEventRequest(
+                    event_id=f"eot-flush-{uuid.uuid4().hex[:8]}",
+                    seq=max(1, seq),
+                    speaker="candidate",
+                    transcript=asr_resp.transcript,
+                    confidence=asr_resp.confidence,
+                    payload={"source": "eot_flush"},
+                )
+                # print(f"DEBUG [_safe_flush_asr] Triggering append_event for session={session_id} seq={event_req.seq}")
+                self.append_event(session_id, event_req)
+        except Exception as e:
+            logger.warning(f"Error in _safe_flush_asr for session={session_id}: {e}")
 
     def process_duplex_audio_chunk(
         self,
@@ -2483,7 +2559,7 @@ class AIInterviewService:
         compact_answer = " ".join((transcript or "").strip().split())[:320]
         active_question = self._get_active_question_context(session_id=session_id) or {}
         current_question = str(active_question.get("question") or "请结合当前问题补充细节。").strip()
-        expected_signal = str(active_question.get("expected_signal") or "补齐证据、量化结果、说明个人贡献").strip()
+        expected_signal = str(active_question.get("expected_signal") or "挖掘候选人陈述的项目细节、核心难点或技术决策背景").strip()
         turns = self._session_repository.list_recent_turns(session_id, limit=4)
         summaries: list[str] = []
         for item in turns:
@@ -2491,7 +2567,21 @@ class AIInterviewService:
             if not text:
                 continue
             speaker = "候选人" if item.speaker == "candidate" else "AI"
-            summaries.append(f"{speaker}:{text[:80]}")
+            summaries.append(f"{speaker}:{text[:240]}")
+        # Handle next question preview for v4 natural transition
+        next_q_text = ""
+        try:
+            # Look ahead for the next question to help the AI decide whether to transition
+            q_pack = self._runtime_store.get_question_pack(session_id=session_id)
+            if q_pack:
+                state = self._runtime_store.get_session_state(session_id=session_id)
+                current_idx = state.get("current_question_index", 0)
+                if current_idx + 1 < len(q_pack):
+                    next_q = q_pack[current_idx + 1]
+                    next_q_text = f"\n备选下一个正式问题：{next_q.get('question')}\n"
+        except Exception:
+            pass
+
         return {
             "language": language,
             "stage": interview_stage,
@@ -2500,6 +2590,7 @@ class AIInterviewService:
             "answer": compact_answer,
             "last_turns_summary": " | ".join(summaries) if summaries else "无历史上下文",
             "confidence": f"{confidence:.2f}" if confidence is not None else "",
+            "next_question_section": next_q_text,
         }
 
     def _parse_track_sids_from_settings(self) -> list[str]:
@@ -2902,7 +2993,7 @@ class AIInterviewService:
         print_stream: bool = False,
     ):
         """使用 LLM 生成实时追问，以生成器形式返回句子流。"""
-        template = self._resolve_prompt_template(task_key="interview_followup", default_version="v3")
+        template = self._resolve_prompt_template(task_key="interview_followup", default_version="v4")
         prompt_ctx = self._build_followup_prompt_context(
             session_id=session_id,
             transcript=transcript,

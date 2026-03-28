@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   appendCandidateEvent,
@@ -43,6 +43,9 @@ let audioContext: AudioContext | null = null;
 let mediaStream: MediaStream | null = null;
 let sourceNode: MediaStreamAudioSourceNode | null = null;
 let workletNode: AudioWorkletNode | null = null;
+let playbackWorkletNode: AudioWorkletNode | null = null;
+let playbackWorkletReady = false;
+let playbackFallbackNextStartTime = 0;
 let audioPlayer: HTMLAudioElement | null = null;
 let sessionSocket: WebSocket | null = null;
 let duplexSocket: WebSocket | null = null;
@@ -53,7 +56,9 @@ let frameWindowEnergy = 0;
 
 const sentenceChunks: Int16Array[] = [];
 let sentenceSamples = 0;
+let sentenceSpeechSamples = 0;
 let silenceWindows = 0;
+let speechHangoverWindowsLeft = 0;
 let asrSeq = 1;
 let eventSeq = 1;
 let lastFollowupAt = 0;
@@ -63,7 +68,11 @@ let wsConnected = false;
 let duplexConnected = false;
 let duplexChunkIndex = 1;
 let duplexHasAudioInSeq = false;
+let endpointState: "listening" | "candidate_end" = "listening";
+let candidateEndAtMs = 0;
+let lastFinalAtMs = 0;
 const offlineBuffer: Int16Array[] = [];
+let pendingEndOfTurn: { seq: number; frameId: string; sentenceSamples: number } | null = null;
 const fallbackSubmittedSeq = new Set<number>();
 
 const SAMPLE_RATE = 16000;
@@ -72,18 +81,27 @@ const SAMPLES_PER_FRAME = Math.floor((SAMPLE_RATE * FRAME_MS) / 1000);
 const ACK_TIMEOUT_MS = 180;
 const MAX_RETRY = 2;
 const ENERGY_THRESHOLD = 0.0022;
-const PAUSE_WINDOWS_TO_COMMIT = 3; // 3 * 150ms = 450ms
+const PAUSE_WINDOWS_TO_COMMIT = 2; // 2 * 150ms = 300ms, faster pause commit
 const ANALYZE_INTERVAL_MS = 150;
 const MAX_SENTENCE_SECONDS = 12;
 const MAX_SENTENCE_SAMPLES = SAMPLE_RATE * MAX_SENTENCE_SECONDS;
 const MIN_SENTENCE_SAMPLES = SAMPLE_RATE * 0.4;
+const MIN_VOICED_SAMPLES = SAMPLE_RATE * 0.18;
+const MIN_VOICED_RATIO = 0.16;
+const SPEECH_HANGOVER_WINDOWS = 2;
 const FAILSAFE_SILENCE_WINDOWS = 6; // 6 * 150ms = 900ms (Failsafe for very short words)
+const HARD_FAILSAFE_SILENCE_WINDOWS = 10; // 10 * 150ms = 1500ms, force commit to avoid deadlock
 const FOLLOWUP_COOLDOWN_MS = 2200;
 const TTS_CAPTURE_BLOCK_MS = 900;
 const ADAPTIVE_SPEECH_FACTOR = 3.4;
 const NOISE_ALPHA = 0.08;
+const SILENCE_FAST_ALPHA = 0.26;
 const ADAPTIVE_MIN_THRESHOLD = 0.0012;
 const ADAPTIVE_MAX_THRESHOLD = 0.012;
+const CANDIDATE_END_SILENCE_WINDOWS = 3; // 3 * 150ms = 450ms
+const COMMIT_CONFIRM_MS = 350;
+const MIN_FINAL_GAP_MS = 700;
+const MIN_SENTENCE_MS_FOR_FINAL = 650;
 let noiseFloor = 0.0018;
 let adaptiveThreshold = ENERGY_THRESHOLD;
 let lastTtsEndedAt = 0;
@@ -92,7 +110,7 @@ let ttsPlaying = false;
 const rawTtsQueue: AudioBuffer[] = [];
 let rawTtsPlaying = false;
 let nextStartTime = 0;
-const pendingFrames = new Map<string, { payload: string; retry: number; timer: number }>();
+const pendingFrames = new Map<string, { payload: string; retry: number; timer: number; isFinal: boolean; seq: number; chunkIndex: number }>();
 
 const meetingTimeText = computed(() => {
   const mins = Math.floor(elapsedSeconds.value / 60)
@@ -279,38 +297,80 @@ async function playAudioDataUris(uris: string[]): Promise<void> {
 }
 
 function playRawPcm(buffer: ArrayBuffer): void {
+  void pushPcmToPlayback(buffer);
+}
+
+function playRawPcmFallback(buffer: ArrayBuffer): void {
   if (!audioContext) {
     audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
   }
   if (audioContext.state === "suspended") {
     void audioContext.resume();
   }
-
-  // Convert Int16 PCM to Float32
   const int16 = new Int16Array(buffer);
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) {
     float32[i] = int16[i] / 32768.0;
   }
-
   const audioBuffer = audioContext.createBuffer(1, float32.length, SAMPLE_RATE);
   audioBuffer.getChannelData(0).set(float32);
-
   const source = audioContext.createBufferSource();
   source.buffer = audioBuffer;
   source.connect(audioContext.destination);
-
-  // Stitching logic for seamless playback
   const currentTime = audioContext.currentTime;
-  if (nextStartTime < currentTime) {
-    nextStartTime = currentTime + 0.01;
+  if (playbackFallbackNextStartTime < currentTime) {
+    playbackFallbackNextStartTime = currentTime + 0.01;
   }
-  source.start(nextStartTime);
-  nextStartTime += audioBuffer.duration;
-  
+  source.start(playbackFallbackNextStartTime);
+  playbackFallbackNextStartTime += audioBuffer.duration;
   source.onended = () => {
     lastTtsEndedAt = Date.now();
   };
+  rawTtsPlaying = true;
+}
+
+async function ensurePlaybackWorklet(): Promise<boolean> {
+  if (playbackWorkletReady && playbackWorkletNode && audioContext) {
+    return true;
+  }
+  if (!audioContext) {
+    audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+  }
+  try {
+    await audioContext.audioWorklet.addModule("/worklets/pcm-playback.js");
+    playbackWorkletNode = new AudioWorkletNode(audioContext, "pcm-playback-processor", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1]
+    });
+    playbackWorkletNode.connect(audioContext.destination);
+    playbackWorkletReady = true;
+    return true;
+  } catch {
+    playbackWorkletReady = false;
+    playbackWorkletNode = null;
+    return false;
+  }
+}
+
+async function pushPcmToPlayback(buffer: ArrayBuffer): Promise<void> {
+  if (!audioContext) {
+    audioContext = new AudioContext({ sampleRate: SAMPLE_RATE });
+  }
+  if (audioContext.state === "suspended") {
+    await audioContext.resume();
+  }
+  const int16 = new Int16Array(buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768.0;
+  }
+  const ok = await ensurePlaybackWorklet();
+  if (!ok || !playbackWorkletNode) {
+    playRawPcmFallback(buffer);
+    return;
+  }
+  playbackWorkletNode.port.postMessage({ type: "push", samples: float32 }, [float32.buffer]);
   rawTtsPlaying = true;
 }
 
@@ -349,6 +409,27 @@ function shouldBlockCaptureByTts(): boolean {
   return Date.now() - lastTtsEndedAt < TTS_CAPTURE_BLOCK_MS;
 }
 
+function interruptTts(): void {
+  // Stop HTMLAudio-based TTS
+  if (ttsPlaying && audioPlayer) {
+    audioPlayer.pause();
+    audioPlayer.src = "";
+    ttsQueue.length = 0;
+    ttsPlaying = false;
+    ttsStatus.value = "已打断";
+  }
+  // Stop WebAudio-based raw PCM TTS by advancing nextStartTime to now
+  if (rawTtsPlaying && audioContext) {
+    nextStartTime = audioContext.currentTime;
+    playbackFallbackNextStartTime = audioContext.currentTime;
+    if (playbackWorkletNode) {
+      playbackWorkletNode.port.postMessage({ type: "reset" });
+    }
+    rawTtsPlaying = false;
+  }
+  lastTtsEndedAt = Date.now();
+}
+
 function enqueueTtsUris(uris: string[]): void {
   for (const uri of uris) {
     if (uri) {
@@ -361,7 +442,11 @@ function enqueueTtsUris(uris: string[]): void {
 function resetSentenceBuffer(): void {
   sentenceChunks.length = 0;
   sentenceSamples = 0;
+  sentenceSpeechSamples = 0;
   silenceWindows = 0;
+  speechHangoverWindowsLeft = 0;
+  endpointState = "listening";
+  candidateEndAtMs = 0;
 }
 
 function splitFrames(samples: Int16Array): Int16Array[] {
@@ -399,6 +484,14 @@ function armFrameTimeout(frameId: string): void {
       return;
     }
     if (current.retry >= MAX_RETRY || current.payload.includes('"type":"audio_chunk"')) {
+      if (current.isFinal) {
+        console.warn("[FinalDiag][ACK timeout drop] final frame dropped without retry", {
+          frameId,
+          seq: current.seq,
+          chunkIndex: current.chunkIndex,
+          retry: current.retry
+        });
+      }
       pendingFrames.delete(frameId);
       return;
     }
@@ -523,13 +616,25 @@ function connectDuplexSocket(sessionId: string): void {
 
   ws.onopen = () => {
     duplexConnected = true;
-    ws.binaryType = "arraybuffer"; // 启用二进制支持
+    ws.binaryType = "arraybuffer";
     ws.send(JSON.stringify({ type: "ping" }));
     
     // Flush buffered chunks after reconnection
+    const bufferedCount = offlineBuffer.length;
+    if (bufferedCount > 0) {
+      console.info("[FinalDiag][Reconnect flush] replay buffered chunks", { bufferedCount });
+    }
     while (offlineBuffer.length > 0) {
       const chunk = offlineBuffer.shift();
       if (chunk) sendDuplexChunk(chunk, false);
+    }
+    if (pendingEndOfTurn) {
+      const pending = pendingEndOfTurn;
+      const ok = sendDuplexEndOfTurn(pending.seq, pending.sentenceSamples, pending.frameId);
+      console.info("[FinalDiag][Reconnect EOT resend]", { ok, seq: pending.seq, frameId: pending.frameId });
+      if (ok) {
+        pendingEndOfTurn = null;
+      }
     }
     
     // Heartbeat to prevent gateway timeout
@@ -542,7 +647,7 @@ function connectDuplexSocket(sessionId: string): void {
   };
   ws.onmessage = (event) => {
     if (event.data instanceof ArrayBuffer) {
-      // 收到 TTS 二进制音频帧
+      // 鏀跺埌 TTS 浜岃繘鍒堕煶棰戝抚
       playRawPcm(event.data);
       return;
     }
@@ -552,23 +657,41 @@ function connectDuplexSocket(sessionId: string): void {
       if (type === "duplex.ack") {
         const frameId = String(payload.frame_id || "").trim();
         const status = String(payload.status || "").trim().toLowerCase();
+        const pending = pendingFrames.get(frameId);
+        if (pending?.isFinal) {
+          console.info("[FinalDiag][ACK] final frame acked", {
+            frameId,
+            status,
+            seq: pending.seq,
+            chunkIndex: pending.chunkIndex,
+            ackLatencyMs: Number(payload.ack_latency_ms || 0)
+          });
+        }
         if (frameId && (status === "accepted" || status === "duplicate")) {
           clearPendingFrame(frameId);
         }
         return;
       }
+      if (type === "duplex.eot_ack") {
+        const frameId = String(payload.frame_id || "").trim();
+        const seq = Number(payload.seq || 0);
+        const status = String(payload.status || "").trim().toLowerCase();
+        console.info("[FinalDiag][EOT ACK]", {
+          frameId,
+          seq,
+          status,
+          ackLatencyMs: Number(payload.ack_latency_ms || 0)
+        });
+        return;
+      }
       if (type === "duplex.tts.packet") {
-        const uri = String(payload.audio_uri || "").trim();
         const transport = String(payload.transport || "");
         if (transport === "binary") {
           ttsStatus.value = "播报中...";
-          // 下一条消息将是二进制帧，由 ArrayBuffer 分支处理
+          // 下一条消息将是二进制音频帧，由 ArrayBuffer 分支处理
           return;
         }
-        if (uri) {
-          ttsStatus.value = "播报中...";
-          enqueueTtsUris([uri]);
-        }
+        console.warn("[duplex.tts.packet] unexpected non-binary transport:", transport);
         return;
       }
       if (type !== "duplex.turn") {
@@ -625,9 +748,15 @@ function connectDuplexSocket(sessionId: string): void {
 
 function sendDuplexChunk(samples: Int16Array, isFinal: boolean): boolean {
   if (!session.value || !duplexSocket) {
+    if (isFinal) {
+      console.warn("[FinalDiag][Send fail] missing session/socket", { hasSession: Boolean(session.value), hasSocket: Boolean(duplexSocket) });
+    }
     return false;
   }
   if (duplexSocket.readyState !== WebSocket.OPEN) {
+    if (isFinal) {
+      console.warn("[FinalDiag][Send fail] socket not open", { readyState: duplexSocket.readyState });
+    }
     if (duplexSocket.readyState === WebSocket.CLOSED || duplexSocket.readyState === WebSocket.CLOSING) {
       // Force reconnect if we have speech but no socket
       console.warn("Duplex socket closed during speech, re-initiating...");
@@ -636,6 +765,9 @@ function sendDuplexChunk(samples: Int16Array, isFinal: boolean): boolean {
       // Buffer the chunk to avoid losing initial words
       if (offlineBuffer.length < 50) { // Limit buffer size to 7.5s (50 * 150ms)
         offlineBuffer.push(samples);
+        if (isFinal) {
+          console.warn("[FinalDiag][Buffered] final chunk buffered while reconnecting as audio-only buffer");
+        }
       }
     }
     return false;
@@ -669,8 +801,17 @@ function sendDuplexChunk(samples: Int16Array, isFinal: boolean): boolean {
   duplexSocket.send(buffer);
   
   // For ACK tracking, we still use the JSON metadata as payload reference
-  pendingFrames.set(frameId, { payload: metaStr, retry: 0, timer: 0 });
+  pendingFrames.set(frameId, { payload: metaStr, retry: 0, timer: 0, isFinal, seq: asrSeq, chunkIndex: duplexChunkIndex });
   armFrameTimeout(frameId);
+  if (isFinal) {
+    console.info("[FinalDiag][Send ok] final frame sent", {
+      frameId,
+      seq: asrSeq,
+      chunkIndex: duplexChunkIndex,
+      sampleCount: samples.length,
+      byteLength: samples.byteLength
+    });
+  }
   
   duplexChunkIndex += 1;
   duplexHasAudioInSeq = true;
@@ -682,14 +823,47 @@ function sendDuplexChunk(samples: Int16Array, isFinal: boolean): boolean {
   return true;
 }
 
+function sendDuplexEndOfTurn(seq: number, sentenceSamples: number, frameId?: string): boolean {
+  if (!session.value || !duplexSocket) {
+    console.warn("[FinalDiag][EOT Send fail] missing session/socket", { seq, hasSession: Boolean(session.value), hasSocket: Boolean(duplexSocket) });
+    return false;
+  }
+  if (duplexSocket.readyState !== WebSocket.OPEN) {
+    console.warn("[FinalDiag][EOT Send fail] socket not open", { seq, readyState: duplexSocket.readyState });
+    if (duplexSocket.readyState === WebSocket.CLOSED || duplexSocket.readyState === WebSocket.CLOSING) {
+      connectDuplexSocket(session.value.id);
+    }
+    return false;
+  }
+  const id = frameId || `eot-${seq}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  duplexSocket.send(JSON.stringify({
+    type: "end_of_turn",
+    frame_id: id,
+    seq,
+    reason: "client_pause",
+    sentence_samples: sentenceSamples
+  }));
+  console.info("[FinalDiag][EOT Send ok]", { frameId: id, seq, sentenceSamples });
+  return true;
+}
+
 async function submitSentenceAudio(merged: Int16Array): Promise<void> {
   if (!session.value || busySubmitting) {
     return;
   }
   if (duplexConnected) {
     partialHint.value = "识别中...";
-    // Use actual sentence audio as final chunk; avoid silent final marker that causes placeholder transcripts.
-    sendDuplexChunk(merged, true);
+    const currentSeq = asrSeq;
+    const eotFrameId = `eot-${currentSeq}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const ok = sendDuplexEndOfTurn(currentSeq, merged.length, eotFrameId);
+    if (ok) {
+      asrSeq += 1;
+      duplexChunkIndex = 1;
+      duplexHasAudioInSeq = false;
+    } else {
+      pendingEndOfTurn = { seq: currentSeq, frameId: eotFrameId, sentenceSamples: merged.length };
+    }
+    console.info("[FinalDiag][Submit] attempted end_of_turn", { ok, duplexConnected, seq: currentSeq, sentenceSamples: merged.length });
     return;
   }
   busySubmitting = true;
@@ -750,22 +924,39 @@ async function analyzeSpeechWindow(): Promise<void> {
     resetSentenceBuffer();
     return;
   }
+  const nowMs = Date.now();
   const candidateSpeech = energy >= adaptiveThreshold;
 
   if (!candidateSpeech) {
-    noiseFloor = noiseFloor * (1 - NOISE_ALPHA) + energy * NOISE_ALPHA;
-    adaptiveThreshold = Math.min(
+    const alpha = sentenceSamples > 0 ? SILENCE_FAST_ALPHA : NOISE_ALPHA;
+    noiseFloor = noiseFloor * (1 - alpha) + energy * alpha;
+    const targetThreshold = Math.min(
       ADAPTIVE_MAX_THRESHOLD,
       Math.max(ADAPTIVE_MIN_THRESHOLD, noiseFloor * ADAPTIVE_SPEECH_FACTOR)
     );
+    const convergence = sentenceSamples > 0 ? 0.38 : 0.18;
+    adaptiveThreshold = adaptiveThreshold * (1 - convergence) + targetThreshold * convergence;
   }
 
   const isSpeech = energy >= adaptiveThreshold;
+  const isSpeechOrHangover = isSpeech || (speechHangoverWindowsLeft > 0 && sentenceSamples > 0);
 
-  if (isSpeech) {
+  if (isSpeechOrHangover) {
+    if (isSpeech) {
+      speechHangoverWindowsLeft = SPEECH_HANGOVER_WINDOWS;
+    } else {
+      speechHangoverWindowsLeft = Math.max(0, speechHangoverWindowsLeft - 1);
+    }
+    // 用户开口说话时，立即打断正在播报的 TTS
+    if (ttsPlaying || rawTtsPlaying) {
+      interruptTts();
+    }
     sentenceChunks.push(mergedWindow);
     sentenceSamples += samples;
+    sentenceSpeechSamples += samples;
     silenceWindows = 0;
+    endpointState = "listening";
+    candidateEndAtMs = 0;
     partialHint.value = "正在听你说话...";
     if (duplexConnected) {
       const frames = splitFrames(mergedWindow);
@@ -774,17 +965,40 @@ async function analyzeSpeechWindow(): Promise<void> {
       }
     }
   } else if (sentenceSamples > 0) {
+    speechHangoverWindowsLeft = 0;
     silenceWindows += 1;
+    if (
+      endpointState === "listening" &&
+      sentenceSamples >= MIN_SENTENCE_SAMPLES &&
+      silenceWindows >= CANDIDATE_END_SILENCE_WINDOWS
+    ) {
+      endpointState = "candidate_end";
+      candidateEndAtMs = nowMs;
+    }
   }
 
-  const shouldCommitByPause = sentenceSamples >= MIN_SENTENCE_SAMPLES && silenceWindows >= PAUSE_WINDOWS_TO_COMMIT;
-  const shouldCommitByFailsafe = sentenceSamples > 0 && silenceWindows >= FAILSAFE_SILENCE_WINDOWS;
-  const shouldCommitByLength = sentenceSamples >= MAX_SENTENCE_SAMPLES;
+  const sentenceMs = (sentenceSamples / SAMPLE_RATE) * 1000;
+  const speechRatio = sentenceSamples > 0 ? sentenceSpeechSamples / sentenceSamples : 0;
+  const hasEnoughVoiced =
+    (sentenceSpeechSamples >= MIN_VOICED_SAMPLES && speechRatio >= MIN_VOICED_RATIO) ||
+    sentenceSamples >= SAMPLE_RATE * 0.55;
+  const pauseCommitted = sentenceSamples >= MIN_SENTENCE_SAMPLES && silenceWindows >= PAUSE_WINDOWS_TO_COMMIT;
+  const confirmCommitted =
+    endpointState === "candidate_end" &&
+    nowMs - candidateEndAtMs >= COMMIT_CONFIRM_MS &&
+    sentenceMs >= MIN_SENTENCE_MS_FOR_FINAL &&
+    nowMs - lastFinalAtMs >= MIN_FINAL_GAP_MS;
+  const shouldCommitByPause = pauseCommitted && confirmCommitted && hasEnoughVoiced;
+  const shouldCommitByFailsafe = sentenceSamples > 0 && silenceWindows >= FAILSAFE_SILENCE_WINDOWS && hasEnoughVoiced;
+  const shouldCommitByHardFailsafe =
+    sentenceSamples >= MIN_SENTENCE_SAMPLES && silenceWindows >= HARD_FAILSAFE_SILENCE_WINDOWS;
+  const shouldCommitByLength = sentenceSamples >= MAX_SENTENCE_SAMPLES && hasEnoughVoiced;
   
-  if (!shouldCommitByPause && !shouldCommitByLength && !shouldCommitByFailsafe) {
+  if (!shouldCommitByPause && !shouldCommitByLength && !shouldCommitByFailsafe && !shouldCommitByHardFailsafe) {
     return;
   }
   const sentence = mergeInt16(sentenceChunks);
+  lastFinalAtMs = nowMs;
   resetSentenceBuffer();
   await submitSentenceAudio(sentence);
 }
