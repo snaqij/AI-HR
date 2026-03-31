@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   appendCandidateEvent,
@@ -80,28 +80,28 @@ const FRAME_MS = 30;
 const SAMPLES_PER_FRAME = Math.floor((SAMPLE_RATE * FRAME_MS) / 1000);
 const ACK_TIMEOUT_MS = 180;
 const MAX_RETRY = 2;
-const ENERGY_THRESHOLD = 0.0022;
-const PAUSE_WINDOWS_TO_COMMIT = 2; // 2 * 150ms = 300ms, faster pause commit
+const ENERGY_THRESHOLD = 0.0020; // Reverted to 0.0020
+const PAUSE_WINDOWS_TO_COMMIT = 1; // 1 * 150ms = 150ms, snappy pause commit
 const ANALYZE_INTERVAL_MS = 150;
 const MAX_SENTENCE_SECONDS = 12;
 const MAX_SENTENCE_SAMPLES = SAMPLE_RATE * MAX_SENTENCE_SECONDS;
-const MIN_SENTENCE_SAMPLES = SAMPLE_RATE * 0.4;
+const MIN_SENTENCE_SAMPLES = SAMPLE_RATE * 0.1; // 100ms, allow very short turns
 const MIN_VOICED_SAMPLES = SAMPLE_RATE * 0.18;
 const MIN_VOICED_RATIO = 0.16;
-const SPEECH_HANGOVER_WINDOWS = 2;
-const FAILSAFE_SILENCE_WINDOWS = 6; // 6 * 150ms = 900ms (Failsafe for very short words)
-const HARD_FAILSAFE_SILENCE_WINDOWS = 10; // 10 * 150ms = 1500ms, force commit to avoid deadlock
+const SPEECH_HANGOVER_WINDOWS = 1; // Reduced from 2 for faster cutoff
+const FAILSAFE_SILENCE_WINDOWS = 4; // 4 * 150ms = 600ms (Failsafe for short turns)
+const HARD_FAILSAFE_SILENCE_WINDOWS = 8; // 8 * 150ms = 1200ms, prevent deadlock
 const FOLLOWUP_COOLDOWN_MS = 2200;
 const TTS_CAPTURE_BLOCK_MS = 900;
-const ADAPTIVE_SPEECH_FACTOR = 3.4;
+const ADAPTIVE_SPEECH_FACTOR = 3.2; // Increased from 2.8 for better noise rejection
 const NOISE_ALPHA = 0.08;
 const SILENCE_FAST_ALPHA = 0.26;
 const ADAPTIVE_MIN_THRESHOLD = 0.0012;
 const ADAPTIVE_MAX_THRESHOLD = 0.012;
-const CANDIDATE_END_SILENCE_WINDOWS = 3; // 3 * 150ms = 450ms
-const COMMIT_CONFIRM_MS = 350;
-const MIN_FINAL_GAP_MS = 700;
-const MIN_SENTENCE_MS_FOR_FINAL = 650;
+const CANDIDATE_END_SILENCE_WINDOWS = 2; // 2 * 150ms = 300ms
+const COMMIT_CONFIRM_MS = 100;
+const MIN_FINAL_GAP_MS = 200; // Reduced from 700ms
+const MIN_SENTENCE_MS_FOR_FINAL = 400;
 let noiseFloor = 0.0018;
 let adaptiveThreshold = ENERGY_THRESHOLD;
 let lastTtsEndedAt = 0;
@@ -856,6 +856,7 @@ async function submitSentenceAudio(merged: Int16Array): Promise<void> {
     const currentSeq = asrSeq;
     const eotFrameId = `eot-${currentSeq}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const ok = sendDuplexEndOfTurn(currentSeq, merged.length, eotFrameId);
+    console.info(`[VAD-Commit] [Duplex] Sent end_of_turn: seq=${currentSeq}, ok=${ok}`);
     if (ok) {
       asrSeq += 1;
       duplexChunkIndex = 1;
@@ -866,6 +867,7 @@ async function submitSentenceAudio(merged: Int16Array): Promise<void> {
     console.info("[FinalDiag][Submit] attempted end_of_turn", { ok, duplexConnected, seq: currentSeq, sentenceSamples: merged.length });
     return;
   }
+  console.info(`[VAD-Commit] [Legacy] Falling back to REST ASR (duplexConnected=false)`);
   busySubmitting = true;
   partialHint.value = "识别中...";
   try {
@@ -926,6 +928,9 @@ async function analyzeSpeechWindow(): Promise<void> {
   }
   const nowMs = Date.now();
   const candidateSpeech = energy >= adaptiveThreshold;
+  if (Math.random() < 0.1) {
+    console.debug(`[VAD-Debug] energy=${energy.toFixed(6)} threshold=${adaptiveThreshold.toFixed(6)} isSpeech=${candidateSpeech}`);
+  }
 
   if (!candidateSpeech) {
     const alpha = sentenceSamples > 0 ? SILENCE_FAST_ALPHA : NOISE_ALPHA;
@@ -983,20 +988,24 @@ async function analyzeSpeechWindow(): Promise<void> {
     (sentenceSpeechSamples >= MIN_VOICED_SAMPLES && speechRatio >= MIN_VOICED_RATIO) ||
     sentenceSamples >= SAMPLE_RATE * 0.55;
   const pauseCommitted = sentenceSamples >= MIN_SENTENCE_SAMPLES && silenceWindows >= PAUSE_WINDOWS_TO_COMMIT;
-  const confirmCommitted =
-    endpointState === "candidate_end" &&
-    nowMs - candidateEndAtMs >= COMMIT_CONFIRM_MS &&
-    sentenceMs >= MIN_SENTENCE_MS_FOR_FINAL &&
-    nowMs - lastFinalAtMs >= MIN_FINAL_GAP_MS;
-  const shouldCommitByPause = pauseCommitted && confirmCommitted && hasEnoughVoiced;
+  const confirmCommitted = (nowMs - lastFinalAtMs >= MIN_FINAL_GAP_MS);
+  const shouldCommitByPause = pauseCommitted && confirmCommitted; // Removed hasEnoughVoiced to be more responsive
   const shouldCommitByFailsafe = sentenceSamples > 0 && silenceWindows >= FAILSAFE_SILENCE_WINDOWS && hasEnoughVoiced;
   const shouldCommitByHardFailsafe =
     sentenceSamples >= MIN_SENTENCE_SAMPLES && silenceWindows >= HARD_FAILSAFE_SILENCE_WINDOWS;
   const shouldCommitByLength = sentenceSamples >= MAX_SENTENCE_SAMPLES && hasEnoughVoiced;
   
+  if (sentenceSamples > 0 && silenceWindows > 0) {
+    console.debug(`[VAD-Trace] pauseCommitted=${pauseCommitted} confirmCommitted=${confirmCommitted} shouldCommitByPause=${shouldCommitByPause}`);
+  }
+
   if (!shouldCommitByPause && !shouldCommitByLength && !shouldCommitByFailsafe && !shouldCommitByHardFailsafe) {
+    if (sentenceSamples > 0 && silenceWindows >= 5) {
+       console.warn(`[VAD-Warning] Still NOT committing after ${silenceWindows} silent windows. Samples: ${sentenceSamples}`);
+    }
     return;
   }
+  console.info(`[VAD-Commit] Triggering final for sentence samples: ${sentenceSamples}, silenceWindows: ${silenceWindows}`);
   const sentence = mergeInt16(sentenceChunks);
   lastFinalAtMs = nowMs;
   resetSentenceBuffer();

@@ -14,6 +14,8 @@ from ...core.config import get_settings
 from ..speech.base import ASRProvider, TTSProvider
 from .followup_cache import DEFAULT_FOLLOWUP_CACHE
 from .streaming_utils import split_sentences
+import math
+import struct
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,35 @@ class RealtimeOrchestrator:
         self._asr_provider = asr_provider
         self._tts_provider = tts_provider
         self._settings = get_settings()
+
+    def _trim_pcm_silence(self, audio: bytes, threshold: int = 120) -> bytes:
+        """去除 PCM (16bit, mono) 音频首尾的静音/数字化噪声（低振幅）片段。"""
+        if not audio or len(audio) < 2:
+            return audio
+        try:
+            # 16-bit PCM: 2 bytes per sample
+            n_samples = len(audio) // 2
+            samples = struct.unpack(f"{n_samples}h", audio)
+            
+            # Find first non-silent sample
+            start_idx = 0
+            for i, s in enumerate(samples):
+                if abs(s) > threshold:
+                    start_idx = i
+                    break
+            
+            # Find last non-silent sample
+            end_idx = n_samples
+            for i in range(n_samples - 1, -1, -1):
+                if abs(samples[i]) > threshold:
+                    end_idx = i + 1
+                    break
+            
+            if start_idx >= end_idx:
+                return b""
+            return struct.pack(f"{end_idx - start_idx}h", *samples[start_idx:end_idx])
+        except Exception:
+            return audio
 
     def process_candidate_turn(
         self,
@@ -177,12 +208,25 @@ class RealtimeOrchestrator:
                                 # Robust termination check: wait for coordination to finish AND jobs to be drained
                                 try:
                                     res_q = job_queue.get(timeout=0.05)
+                                    is_sentence_start = True
                                     while True:
                                         packet = res_q.get()
                                         if packet is None:
                                             break
                                         if abort_event and abort_event.is_set():
                                             break
+                                        
+                                        # 针对 PCM 编码进行首句去噪/去静音，让切换更无感
+                                        if is_sentence_start and packet.get("audio_bytes"):
+                                            # 只对每一句合出来的第一个包进行头部去静音
+                                            trimmed = self._trim_pcm_silence(packet["audio_bytes"], threshold=150)
+                                            if trimmed:
+                                                packet["audio_bytes"] = trimmed
+                                                is_sentence_start = False
+                                            else:
+                                                # 如果整包都是静音，继续等下一个包再切
+                                                continue
+                                        
                                         if packet.get("audio_uri") or (isinstance(packet.get("audio_bytes"), bytes) and len(packet.get("audio_bytes")) > 0):
                                             on_audio_packet(packet)
                                             if packet.get("audio_uri"):

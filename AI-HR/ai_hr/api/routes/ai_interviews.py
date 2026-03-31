@@ -907,7 +907,7 @@ async def ws_ai_interview_duplex(
                     eot_frame_id,
                     eot_seq,
                 )
-                # print(f"DEBUG [WS EndOfTurn] session={session_id} seq={eot_seq}")
+                logger.info(f"DEBUG [WS EndOfTurn] 用户已停止说话: session={session_id} seq={eot_seq}")
                 try:
                     def _run_eot():
                         from ...db.session import SessionLocal

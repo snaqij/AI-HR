@@ -1,4 +1,4 @@
-﻿export interface InterviewSession {
+export interface InterviewSession {
   id: string;
   candidate_id: string;
   job_id: string;

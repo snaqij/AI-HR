@@ -193,13 +193,20 @@ class AliyunNlsASRProvider(ASRProvider):
                     self._stat_audio_bytes += len(audio_bytes)
             
             if is_final:
-                # 强制停止以触发布服端 Finalize 逻辑，解决末尾吞字/延迟问题
+                # Procedural Finalization: 立即推送当前已有的最全转写作为 Final
+                # 这解决了 ASR 服务端判定停顿延迟导致的回报缓慢问题
+                # 注意：必须在 stop() 之前调用，以防 SDK stop 过程阻塞
+                final_now = ctx.callback.full_transcript
+                if final_now.strip():
+                    ctx.callback._publish_asr_turn(is_final=True, fragment=final_now)
+
+                # 强制停止以触发布服端 Finalize 逻辑
                 try:
                     ctx.recognizer.stop()
                 except Exception as stop_err:
                     logger.warning(f"NLS stop error: {stop_err}")
-                
-                # 给服务端一点时间完成最后一句话的转写（Drain）
+
+                # 给服务端一点时间确认最终完成，用于同步返回
                 ctx.callback.completed_event.wait(timeout=1.2)
             
             # 移除同步阻塞等待逻辑。顺序执行由上层 Queue 保证。
@@ -517,6 +524,12 @@ class _AliyunNlsCallback:
         """增量推送 ASR 片段到事件总线，避免历史累积造成的 UI 重复。"""
         if not fragment.strip():
             return
+
+        # 校验：如果当前 Epoch 的最终结果已经发布过，则不再重复发布（防止 stop() 与 on_sentence_end 重复触发）
+        if is_final:
+             if getattr(self, "_last_final_published_epoch", -1) == self.epoch:
+                 return
+             self._last_final_published_epoch = self.epoch
 
         try:
             from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS

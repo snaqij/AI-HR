@@ -374,17 +374,13 @@ class AIInterviewService:
                     session_id=session_id,
                     transcript=effective_transcript or "",
                     confidence=effective_confidence,
-                    interview_stage=interview_stage,
-                    state=state,
+                    question_pack=question_pack,
                 )
-                action = flow_result.get("action") or action
-                decision_reason = flow_result.get("decision_reason") or decision_reason
-                decision_flags = [*decision_flags, *(flow_result.get("decision_flags") or [])]
-                followup_question = flow_result.get("followup_question") or followup_question
                 if flow_result.get("interview_stage"):
                     interview_stage = flow_result["interview_stage"]
                 if flow_result.get("need_followup"):
                     decision_flags = [*decision_flags, "insufficient_evidence"]
+                    decision_reason = flow_result.get("reason") or decision_reason
 
         turn, deduplicated = self._session_repository.create_turn_event(
             session_id=session_id,
