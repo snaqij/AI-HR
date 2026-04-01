@@ -14,6 +14,7 @@ import random
 import re
 import threading
 import time
+import queue
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -715,12 +716,95 @@ class TencentTTSProvider(TTSProvider):
         self._first_chunk_size = max(8, int(first_chunk_size))
         self._warmup_enabled = bool(warmup_enabled)
         self._warm_cache: dict[str, float] = {}
+        
+        # Pre-warmed Connection Pool (Fresh connections, not reused)
+        self._ws_pool = queue.Queue(maxsize=2)
+        self._pool_stop_event = threading.Event()
+        self._refiller_thread = threading.Thread(target=self._pool_refill_loop, daemon=True)
+        self._refiller_thread.start()
+
+    def _pool_refill_loop(self):
+        """Background thread that keeps fresh, authenticated connections ready."""
+        try:
+            from websockets.sync.client import connect as ws_connect
+        except ImportError:
+            return
+
+        while not self._pool_stop_event.is_set():
+            if self._ws_pool.full():
+                time.sleep(0.5)
+                continue
+            
+            try:
+                ws_url = self._build_tts_ws_url()
+                # 禁用内置 ping_interval，防止后台心跳超时抛错（由我们自己通过获取时的 ws.ping() 管理）
+                ws = ws_connect(
+                    ws_url, 
+                    open_timeout=self._ws_open_timeout_seconds,
+                    ping_interval=None
+                )
+                
+                # Consume initial ready packet to make it 'hot'
+                ready_deadline = time.perf_counter() + 0.5
+                is_ready = False
+                while time.perf_counter() < ready_deadline:
+                    try:
+                        msg = ws.recv(timeout=0.05)
+                        if isinstance(msg, (bytes, bytearray)):
+                            is_ready = True
+                            break
+                        payload = self._parse_ws_json(msg)
+                        if payload.get("ready") in {1, True, "1", "true"}:
+                            is_ready = True
+                            break
+                    except Exception:
+                        break
+                
+                if is_ready:
+                    self._ws_pool.put(ws, timeout=1.0)
+                    logger.debug("[Tencent TTS Pool] Pre-warmed a fresh connection. Current pool size: %d", self._ws_pool.qsize())
+                else:
+                    try: ws.close()
+                    except: pass
+            except Exception as e:
+                logger.debug("[Tencent TTS Pool] Failed to pre-warm: %s", e)
+                time.sleep(2.0) # Backoff on error
 
     def warmup(self, *, session_id: str, voice: str) -> None:
         if not self._warmup_enabled:
             return
         key = f"{voice}:{session_id[:8]}"
         self._warm_cache[key] = time.time()
+
+    def _acquire_ws(self, ws_connect):
+        """Acquire a pre-warmed WebSocket from the pool or create a new one."""
+        while not self._ws_pool.empty():
+            try:
+                ws = self._ws_pool.get(timeout=0.01)
+                # 优化：不再使用阻塞式的 ws.ping()，因为它会增加 50-100ms 的网络往返延迟。
+                # 改为直接返回，如果发送数据时报错，由 synthesization 逻辑重试。
+                logger.debug("[Tencent TTS Pool] Using pre-warmed WebSocket (ping-check skipped for latency).")
+                return ws, True
+            except queue.Empty:
+                break
+
+        # Fallback if pool is empty
+        ws_url = self._build_tts_ws_url()
+        logger.debug("[Tencent TTS Pool] No valid pre-warmed WS. Fallback to SYNC handshake.")
+        ws = ws_connect(
+            ws_url, 
+            open_timeout=self._ws_open_timeout_seconds,
+            ping_interval=None
+        )
+        return ws, False
+
+    def _release_ws(self, ws):
+        """Once used, close the WebSocket session as Tencent doesn't support session reuse."""
+        try:
+            if ws: ws.close()
+        except:
+            pass
+
 
     def synthesize_stream(
         self,
@@ -844,94 +928,78 @@ class TencentTTSProvider(TTSProvider):
         text: str,
         voice: str,
         chunk_size: int,
-    ):
-        _ = voice
-        if not self._app_id:
-            raise ConnectorOperationError("Tencent TTS websocket mode requires app_id")
+    ) -> Iterable[dict]:
         try:
             from websockets.sync.client import connect as ws_connect
-        except Exception as exc:
+        except ImportError as exc:
             raise ConnectorOperationError("Tencent TTS websocket mode requires dependency 'websockets'") from exc
 
-        chunks = self._split_text_chunks(text=text, chunk_size=chunk_size)
-        ws_url = self._build_tts_ws_url()
         start_time = time.perf_counter()
-        stream_session_id = f"{session_id}-{uuid.uuid4().hex[:8]}"
+        stream_session_id = f"tts-{session_id}-{uuid.uuid4().hex[:8]}"
+        chunks = self._split_text_chunks(text=text, chunk_size=chunk_size)
+        
         packet_idx = 0
-        pending_audio: bytes | None = None
-        pending_text = chunks[0] if chunks else text
-        last_yield_text = pending_text
+        last_yield_text = text
+        pending_audio = None
+        ws = None
+        connection_reused = False
 
         try:
-            with ws_connect(
-                ws_url,
-                open_timeout=self._ws_open_timeout_seconds,
-                close_timeout=1,
-                max_size=8 * 1024 * 1024,
-            ) as ws:
-                # Optional readiness probe; do not block too long.
+            # Use connection pool!
+            ws, connection_reused = self._acquire_ws(ws_connect)
+
+            # If it's a new connection, we MUST consume the initial "ready" packet.
+            if not connection_reused:
                 ready_deadline = time.perf_counter() + 0.35
                 while time.perf_counter() < ready_deadline:
                     try:
                         msg = ws.recv(timeout=0.05)
-                    except TimeoutError:
-                        break
-                    except Exception:
-                        break
-                    if isinstance(msg, (bytes, bytearray)):
-                        if msg:
-                            pending_audio = bytes(msg)
-                        break
-                    payload = self._parse_ws_json(msg)
-                    if payload.get("code") not in (None, 0, "0"):
-                        raise ConnectorOperationError(
-                            f"Tencent TTS websocket ready error: code={payload.get('code')} message={payload.get('message')}"
-                        )
-                    if payload.get("ready") in {1, True, "1", "true"}:
-                        break
+                        if isinstance(msg, (bytes, bytearray)):
+                            if msg: pending_audio = bytes(msg)
+                            break
+                        payload = self._parse_ws_json(msg)
+                        if payload.get("code") not in (None, 0, "0"):
+                            raise RuntimeError(f"Tencent TTS ready error: {payload.get('message')}")
+                        if payload.get("ready") in {1, True, "1", "true"}: break
+                    except (TimeoutError, Exception):
+                        pass
 
-                for idx, chunk in enumerate(chunks, start=1):
-                    cmd = {
-                        "session_id": stream_session_id,
-                        "message_id": f"{stream_session_id}-{idx}",
-                        "action": "ACTION_SYNTHESIS",
-                        "data": chunk,
-                    }
-                    ws.send(json.dumps(cmd, ensure_ascii=False))
-                ws.send(
-                    json.dumps(
-                        {
-                            "session_id": stream_session_id,
-                            "message_id": f"{stream_session_id}-complete",
-                            "action": "ACTION_COMPLETE",
-                            "data": "",
-                        },
-                        ensure_ascii=False,
-                    )
-                )
+            # Send synthesis command
+            for idx, chunk in enumerate(chunks, start=1):
+                # We use a unique message_id per synthesis attempt even on reused connection
+                task_id = f"{stream_session_id}-{idx}"
+                ws.send(json.dumps({
+                    "session_id": stream_session_id,
+                    "message_id": task_id,
+                    "action": "ACTION_SYNTHESIS",
+                    "data": chunk,
+                }, ensure_ascii=False))
 
-                finished = False
-                while not finished:
-                    try:
-                        message = ws.recv(timeout=self._ws_recv_timeout_seconds)
-                    except TimeoutError as exc:
-                        raise ConnectorOperationError("Tencent TTS websocket recv timeout") from exc
+            ws.send(json.dumps({
+                "session_id": stream_session_id,
+                "message_id": f"{stream_session_id}-complete",
+                "action": "ACTION_COMPLETE",
+                "data": "",
+            }, ensure_ascii=False))
 
-                    if isinstance(message, (bytes, bytearray)):
-                        audio_bytes = bytes(message)
-                        if not audio_bytes:
-                            continue
-                        if self._codec == "pcm" and self._looks_like_mp3(audio_bytes):
-                            raise ConnectorOperationError("Tencent TTS codec mismatch: expected pcm but got mp3-like payload")
+            finished = False
+            while not finished:
+                try:
+                    message = ws.recv(timeout=self._ws_recv_timeout_seconds)
+                except (TimeoutError, Exception) as exc:
+                    # If timeout in pool, connection might be dead
+                    raise ConnectorOperationError("Tencent TTS websocket recv timeout or connection lost") from exc
 
-                        if pending_audio is None:
-                            pending_audio = audio_bytes
-                            continue
-
+                if isinstance(message, (bytes, bytearray)):
+                    audio_bytes = bytes(message)
+                    if not audio_bytes: continue
+                    
+                    if pending_audio is None:
+                        pending_audio = audio_bytes
+                    else:
                         packet_idx += 1
                         yield {
                             "index": packet_idx,
-                            "audio_uri": "",  # BE-013: Skip heavy Base64/DataURI encoding in the hot loop
                             "audio_bytes": pending_audio,
                             "audio_codec": str(self._codec or "").lower(),
                             "sample_rate": int(self._sample_rate),
@@ -939,32 +1007,37 @@ class TencentTTSProvider(TTSProvider):
                             "is_final_packet": False,
                         }
                         pending_audio = audio_bytes
-                        continue
-
+                else:
                     payload = self._parse_ws_json(message)
-                    code = payload.get("code")
-                    if code not in (None, 0, "0"):
-                        raise ConnectorOperationError(
-                            f"Tencent TTS websocket error: code={code} message={payload.get('message')}"
-                        )
+                    if payload.get("code") not in (None, 0, "0"):
+                        raise ConnectorOperationError(f"Tencent TTS business error: {payload.get('message')}")
                     if payload.get("final") in {1, True, "1", "true"}:
                         finished = True
 
-                if pending_audio:
-                    packet_idx += 1
-                    yield {
-                        "index": packet_idx,
-                        "audio_uri": self._pcm_bytes_to_wav_data_uri(pending_audio),
-                        "audio_bytes": pending_audio,
-                        "audio_codec": str(self._codec or "").lower(),
-                        "sample_rate": int(self._sample_rate),
-                        "text": last_yield_text,
-                        "is_final_packet": True,
-                    }
-        except ConnectorOperationError:
-            raise
+            if pending_audio:
+                packet_idx += 1
+                yield {
+                    "index": packet_idx,
+                    "audio_bytes": pending_audio,
+                    "audio_codec": str(self._codec or "").lower(),
+                    "sample_rate": int(self._sample_rate),
+                    "text": last_yield_text,
+                    "is_final_packet": True,
+                }
+            
+            # Release back to pool!
+            self._release_ws(ws)
+            ws = None
+
         except Exception as exc:
+            if ws:
+                try: ws.close()
+                except: pass
             raise ConnectorOperationError(f"Tencent TTS websocket error: {exc}") from exc
+        finally:
+            if ws:
+                try: ws.close()
+                except: pass
 
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         logger.debug("Tencent TTS websocket stream finished session=%s packets=%s elapsed_ms=%s", session_id, packet_idx, elapsed_ms)

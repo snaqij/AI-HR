@@ -39,9 +39,12 @@ def split_sentences(text_stream: Iterable[str]) -> Iterable[str]:
                     yield sentence
                     is_first_sentence = False # 只要出过一句，之后恢复正常断句逻辑
             else:
-                # Lower thresholds so the first audible chunk arrives faster.
-                threshold = 8 if is_first_sentence else 24
-                if len(buffer) > threshold:
+                # 为了首包延迟，如果没有标点但字数够了也发出
+                # 将 8 改为 16，防止第一句太短导致后续衔接不上
+                threshold = 16 if is_first_sentence else 24
+                
+                # 优化：如果缓冲区末尾是英文或数字（如 AI, HR），先不切分，防止切断专业术语
+                if len(buffer) > threshold and not (buffer[-1].isalnum() or buffer[-1] == '-'):
                     yield buffer.strip()
                     buffer = ""
                     is_first_sentence = False
