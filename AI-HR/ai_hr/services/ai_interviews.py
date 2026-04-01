@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime
 
 # ── 进程级 Provider 单例（双检锁）──
 # AliyunNlsASRProvider 维护 NLS WebSocket 长连接，必须全局复用。
@@ -36,6 +37,7 @@ from .rtc.base import RTCGateway
 from .rtc.factory import create_rtc_gateway
 from .speech.base import ASRProvider, TTSProvider
 from .speech.factory import create_asr_provider, create_tts_provider
+from .ten_runtime import TENRuntimeManager
 from .llm.client import InvokeContext, LLMClient
 from .llm.guardrails import GuardrailService
 from .llm.prompts import PromptTemplate, get_prompt_template
@@ -60,6 +62,7 @@ from ..schemas.ai_interviews import (
     AIInterviewRTCJoinResponse,
     AIInterviewRTCReconnectRequest,
     AIInterviewRTCReconnectResponse,
+    AIInterviewTENRuntimeResponse,
     AIInterviewReplayResponse,
     AIInterviewReportResponse,
     AIInterviewSessionCreateRequest,
@@ -92,6 +95,7 @@ class AIInterviewService:
         llm_client: LLMClient,
         orchestrator: RealtimeOrchestrator,
         runtime_store: InterviewRuntimeStore,
+        ten_runtime_manager: TENRuntimeManager | None = None,
     ):
         self._settings = get_settings()
         self._session_repository = session_repository
@@ -111,6 +115,7 @@ class AIInterviewService:
         )
         self._orchestrator = orchestrator
         self._runtime_store = runtime_store
+        self._ten_runtime_manager = ten_runtime_manager or TENRuntimeManager(self._settings)
         self._question_flow_engine = InterviewQuestionFlowEngine()
         self._duplex_prefetch_lock = threading.Lock()
         self._duplex_prefetch_cache: dict[str, dict] = {}
@@ -134,8 +139,16 @@ class AIInterviewService:
             rtc_room_id=rtc_info.room_id,
             join_token=rtc_info.join_token or join_token,
             note=payload.note,
-            payload={"interview_stage": "intro", "rtc_vendor": rtc_info.vendor, **dict(payload.payload)},
+            payload={
+                "interview_stage": "intro",
+                **self._build_rtc_payload(rtc_info),
+                **dict(payload.payload),
+            },
         )
+        ten_patch = self._prepare_ten_runtime(entity)
+        if ten_patch:
+            entity = self._session_repository.update_status(entity.id, status=entity.status, payload_patch=ten_patch)
+            entity = self._maybe_auto_launch_ten(entity)
         return self._to_session_dict(entity)
 
     def start_session(self, session_id: str, payload: AIInterviewSessionStartRequest) -> dict:
@@ -796,11 +809,23 @@ class AIInterviewService:
             candidate_id=payload.candidate_id,
             join_token=entity.join_token,
         )
-        merged = dict(entity.payload or {})
-        merged["rtc_client_id"] = payload.client_id
-        merged["rtc_joined"] = True
-        merged["rtc_vendor"] = join_info.vendor
-        self._session_repository.update_status(session_id, status=entity.status, payload_patch=merged)
+        updated_entity = self._session_repository.update_status(
+            session_id,
+            status=entity.status,
+            payload_patch={
+                "rtc_client_id": payload.client_id,
+                "rtc_joined": True,
+                **self._build_rtc_payload(join_info),
+            },
+        )
+        ten_patch = self._prepare_ten_runtime(updated_entity, rtc_override=join_info)
+        if ten_patch:
+            updated_entity = self._session_repository.update_status(
+                session_id,
+                status=updated_entity.status,
+                payload_patch=ten_patch,
+            )
+            updated_entity = self._maybe_auto_launch_ten(updated_entity)
         self._event_repository.create(
             event_type="ai_interview.rtc.join",
             entity_type="ai_interview_session",
@@ -813,11 +838,30 @@ class AIInterviewService:
         )
         return AIInterviewRTCJoinResponse(
             session_id=session_id,
+            provider=join_info.vendor,
             room_id=join_info.room_id,
+            channel_name=join_info.channel_name or join_info.room_id,
             join_token=join_info.join_token,
+            app_id=join_info.app_id,
+            uid=join_info.uid,
+            expire_at=join_info.expire_at,
             reconnectable=True,
             transport=join_info.transport,
         )
+
+    def get_ten_runtime_config(self, session_id: str) -> AIInterviewTENRuntimeResponse:
+        entity = self._session_repository.get(session_id)
+        return AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
+
+    def launch_ten_session(self, session_id: str) -> AIInterviewTENRuntimeResponse:
+        entity = self._session_repository.get(session_id)
+        ten_patch = self._prepare_ten_runtime(entity)
+        if ten_patch:
+            entity = self._session_repository.update_status(session_id, status=entity.status, payload_patch=ten_patch)
+        property_file = str((entity.payload or {}).get("ten_property_file") or "")
+        launch_patch = self._ten_runtime_manager.launch_session(session_id=session_id, property_file=property_file)
+        entity = self._session_repository.update_status(session_id, status=entity.status, payload_patch=launch_patch)
+        return AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
 
     def rtc_reconnect(self, session_id: str, payload: AIInterviewRTCReconnectRequest) -> AIInterviewRTCReconnectResponse:
         """RTC-001：断线重连。"""
@@ -2107,9 +2151,111 @@ class AIInterviewService:
             return None
         return cached
 
+    def _build_rtc_payload(self, rtc_info) -> dict:
+        payload = {
+            "rtc_vendor": rtc_info.vendor,
+            "rtc_transport": rtc_info.transport,
+            "rtc_app_id": rtc_info.app_id,
+            "rtc_channel_name": rtc_info.channel_name or rtc_info.room_id,
+            "rtc_uid": rtc_info.uid,
+        }
+        if rtc_info.expire_at is not None:
+            payload["rtc_token_expire_at"] = self._serialize_datetime(rtc_info.expire_at)
+        metadata = dict(rtc_info.metadata or {})
+        if metadata.get("ten_bot_uid"):
+            payload["ten_agent_user_id"] = metadata["ten_bot_uid"]
+        if metadata.get("ten_bot_token"):
+            payload["ten_agent_token"] = metadata["ten_bot_token"]
+        if metadata.get("ten_bot_expire_at"):
+            payload["ten_agent_token_expire_at"] = metadata["ten_bot_expire_at"]
+        return {key: value for key, value in payload.items() if value is not None}
+
+    def _prepare_ten_runtime(self, entity, rtc_override=None) -> dict:
+        rtc_block = self._build_rtc_dict(entity, rtc_override=rtc_override)
+        if not rtc_block.get("app_id") or not rtc_block.get("channel_name"):
+            return {}
+        return self._ten_runtime_manager.prepare_session(
+            session_id=entity.id,
+            candidate_id=entity.candidate_id,
+            job_id=entity.job_id,
+            language=entity.language,
+            rtc={
+                **rtc_block,
+                "ten_bot_user_id": str((entity.payload or {}).get("ten_agent_user_id") or rtc_block.get("ten_bot_user_id") or ""),
+                "ten_bot_token": str((entity.payload or {}).get("ten_agent_token") or rtc_block.get("ten_bot_token") or ""),
+            },
+            payload=entity.payload or {},
+        )
+
+    def _build_rtc_dict(self, entity, rtc_override=None) -> dict:
+        base = self._build_rtc_payload(rtc_override) if rtc_override is not None else dict(entity.payload or {})
+        return {
+            "provider": str(base.get("rtc_vendor") or self._rtc_gateway.provider_name),
+            "transport": str(base.get("rtc_transport") or self._settings.rtc_default_transport),
+            "room_id": entity.rtc_room_id,
+            "channel_name": str(base.get("rtc_channel_name") or entity.rtc_room_id),
+            "token": entity.join_token,
+            "app_id": base.get("rtc_app_id"),
+            "uid": base.get("rtc_uid"),
+            "expire_at": self._parse_datetime(base.get("rtc_token_expire_at")),
+            "ten_bot_user_id": base.get("ten_agent_user_id"),
+            "ten_bot_token": base.get("ten_agent_token"),
+        }
+
+    def _build_ten_runtime_response(self, entity) -> dict:
+        rtc = self._build_rtc_dict(entity)
+        payload = dict(entity.payload or {})
+        return {
+            "session_id": entity.id,
+            "enabled": bool(payload.get("ten_enabled")),
+            "room_id": entity.rtc_room_id,
+            "provider": rtc["provider"],
+            "app_id": rtc.get("app_id"),
+            "channel_name": rtc.get("channel_name"),
+            "agent_user_id": payload.get("ten_agent_user_id"),
+            "remote_user_id": payload.get("ten_remote_user_id") or rtc.get("uid"),
+            "property_file": payload.get("ten_property_file"),
+            "launch_status": str(payload.get("ten_launch_status") or ("disabled" if not payload.get("ten_enabled") else "prepared")),
+            "launch_command": payload.get("ten_launch_command"),
+            "process_pid": payload.get("ten_process_pid"),
+        }
+
+    def _maybe_auto_launch_ten(self, entity):
+        if not self._settings.ai_interview_ten_auto_launch:
+            return entity
+        property_file = str((entity.payload or {}).get("ten_property_file") or "")
+        if not property_file:
+            return entity
+        current_status = str((entity.payload or {}).get("ten_launch_status") or "")
+        if current_status == "launched":
+            return entity
+        launch_patch = self._ten_runtime_manager.launch_session(session_id=entity.id, property_file=property_file)
+        return self._session_repository.update_status(entity.id, status=entity.status, payload_patch=launch_patch)
+
+    @staticmethod
+    def _serialize_datetime(value: datetime | str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        return value.isoformat()
+
+    @staticmethod
+    def _parse_datetime(value: str | datetime | None) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+
     def _to_session_dict(self, entity) -> dict:
         """将会话实体转换为统一响应结构。"""
         join_url = f"/ai-interview/session/{entity.id}?token={entity.join_token}"
+        rtc = self._build_rtc_dict(entity)
+        ten = self._build_ten_runtime_response(entity)
         return {
             "id": entity.id,
             "candidate_id": entity.candidate_id,
@@ -2120,6 +2266,16 @@ class AIInterviewService:
             "rtc_room_id": entity.rtc_room_id,
             "join_token": entity.join_token,
             "join_url": join_url,
+            "rtc": rtc,
+            "ten": {
+                "enabled": ten["enabled"],
+                "room_id": ten["room_id"],
+                "agent_user_id": ten["agent_user_id"],
+                "remote_user_id": ten["remote_user_id"],
+                "property_file": ten["property_file"],
+                "launch_status": ten["launch_status"],
+                "launch_command": ten["launch_command"],
+            },
             "started_at": entity.started_at,
             "ended_at": entity.ended_at,
             "payload": entity.payload,

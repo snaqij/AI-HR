@@ -93,6 +93,9 @@ def test_create_ai_interview_session_success() -> None:
     assert data["rtc_room_id"].startswith("ai-intv-")
     assert data["join_url"].startswith("/ai-interview/session/")
     assert "token=" in data["join_url"]
+    assert data["rtc"]["room_id"] == data["rtc_room_id"]
+    assert data["rtc"]["channel_name"] == data["rtc_room_id"]
+    assert data["ten"]["room_id"] == data["rtc_room_id"]
 
 
 def test_create_ai_interview_session_invalid_candidate() -> None:
@@ -549,6 +552,8 @@ def test_rtc_join_and_reconnect_should_succeed() -> None:
     join_payload = join_resp.json()["data"]
     assert join_payload["reconnectable"] is True
     assert join_payload["room_id"].startswith("ai-intv-")
+    assert join_payload["channel_name"] == join_payload["room_id"]
+    assert join_payload["provider"] in {"mock", "livekit", "agora"}
 
     reconnect_resp = client.post(
         f"/api/v1/ai/interviews/sessions/{session_id}/rtc/reconnect",
@@ -558,6 +563,19 @@ def test_rtc_join_and_reconnect_should_succeed() -> None:
     reconnect_payload = reconnect_resp.json()["data"]
     assert reconnect_payload["reconnected"] is True
     assert reconnect_payload["reconnect_count"] >= 1
+
+
+def test_ten_runtime_config_endpoint_should_reflect_session_state() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+    session_id = _create_ai_session(job_id, candidate_id)
+
+    runtime_resp = client.get(f"/api/v1/ai/interviews/sessions/{session_id}/ten/runtime-config")
+    assert runtime_resp.status_code == 200
+    runtime_payload = runtime_resp.json()["data"]
+    assert runtime_payload["session_id"] == session_id
+    assert runtime_payload["room_id"].startswith("ai-intv-")
+    assert runtime_payload["provider"] in {"mock", "livekit", "agora"}
 
 
 def test_rtc_asr_and_tts_stream_should_work() -> None:

@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     rtc_provider: str = "mock"
     rtc_default_transport: str = "webrtc"
     rtc_token_ttl_seconds: int = 3600
+    agora_app_id: str | None = None
+    agora_app_certificate: str | None = None
+    agora_room_prefix: str = "ai-intv-"
+    agora_token_ttl_seconds: int = 3600
+    agora_ten_bot_user_id_prefix: str = "aihr-bot-"
     livekit_base_url: str | None = None
     livekit_api_key: str | None = None
     livekit_api_secret: str | None = None
@@ -97,6 +102,13 @@ class Settings(BaseSettings):
     ai_interview_rtc_video_subscriber_identity: str = "ai-bot"
     ai_interview_rtc_duplex_ws_enabled: bool = True
     ai_interview_rtc_asr_ingest_ws_enabled: bool = True
+    ai_interview_ten_enabled: bool = False
+    ai_interview_ten_auto_launch: bool = False
+    ai_interview_ten_agent_dir: str | None = None
+    ai_interview_ten_tman_cmd: str = "tman"
+    ai_interview_ten_session_dir: str | None = None
+    ai_interview_ten_property_template: str | None = None
+    ai_interview_ten_python_lib_path: str | None = None
     ai_interview_duplex_seen_frame_window: int = 2048
     ai_interview_duplex_max_inflight_chunks: int = 6
     ai_interview_duplex_stats_emit_every: int = 20

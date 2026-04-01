@@ -39,6 +39,20 @@ class ProviderHealthService:
             if reasons:
                 return self._error(provider, reasons=reasons)
             return self._ok(provider, extra={"mode": "livekit", "endpoint": self._normalize_url(self._settings.livekit_base_url)})
+        if provider == "agora":
+            reasons = []
+            if not self._settings.agora_app_id:
+                reasons.append("agora_app_id_missing")
+            if reasons:
+                return self._error(provider, reasons=reasons)
+            return self._ok(
+                provider,
+                extra={
+                    "mode": "agora",
+                    "app_id": self._settings.agora_app_id,
+                    "room_prefix": self._settings.agora_room_prefix,
+                },
+            )
         return self._error(provider, reasons=["rtc_provider_unsupported"])
 
     def _check_llm(self) -> dict:

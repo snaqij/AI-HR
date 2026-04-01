@@ -1,4 +1,4 @@
-﻿"""Root API router."""
+"""Root API router."""
 
 from fastapi import APIRouter
 

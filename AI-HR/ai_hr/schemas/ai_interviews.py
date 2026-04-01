@@ -19,6 +19,31 @@ class AIInterviewSessionCreateRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AIInterviewSessionRTCInfo(BaseModel):
+    """RTC runtime details returned to frontend clients."""
+
+    provider: str
+    transport: str
+    room_id: str
+    channel_name: str
+    token: str
+    app_id: str | None = None
+    uid: str | None = None
+    expire_at: datetime | None = None
+
+
+class AIInterviewSessionTENInfo(BaseModel):
+    """TEN runtime details owned by backend orchestration."""
+
+    enabled: bool = False
+    room_id: str
+    agent_user_id: str | None = None
+    remote_user_id: str | None = None
+    property_file: str | None = None
+    launch_status: str = "disabled"
+    launch_command: str | None = None
+
+
 class AIInterviewSessionResponse(BaseModel):
     """AI 面试会话响应。"""
 
@@ -33,6 +58,8 @@ class AIInterviewSessionResponse(BaseModel):
     rtc_room_id: str
     join_token: str
     join_url: str
+    rtc: AIInterviewSessionRTCInfo
+    ten: AIInterviewSessionTENInfo
     started_at: datetime | None
     ended_at: datetime | None
     payload: dict[str, Any]
@@ -240,10 +267,32 @@ class AIInterviewRTCJoinResponse(BaseModel):
     """RTC 入会响应。"""
 
     session_id: str
+    provider: str
     room_id: str
+    channel_name: str
     join_token: str
+    app_id: str | None = None
+    uid: str | None = None
+    expire_at: datetime | None = None
     reconnectable: bool
     transport: str
+
+
+class AIInterviewTENRuntimeResponse(BaseModel):
+    """TEN runtime config or launch result."""
+
+    session_id: str
+    enabled: bool
+    room_id: str
+    provider: str
+    app_id: str | None = None
+    channel_name: str | None = None
+    agent_user_id: str | None = None
+    remote_user_id: str | None = None
+    property_file: str | None = None
+    launch_status: str
+    launch_command: str | None = None
+    process_pid: int | None = None
 
 
 class AIInterviewRTCReconnectRequest(BaseModel):

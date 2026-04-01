@@ -41,6 +41,7 @@ from ...schemas.ai_interviews import (
     AIInterviewRTCJoinResponse,
     AIInterviewRTCReconnectRequest,
     AIInterviewRTCReconnectResponse,
+    AIInterviewTENRuntimeResponse,
     AIInterviewReplayResponse,
     AIInterviewReportResponse,
     AIInterviewSessionCreateRequest,
@@ -199,6 +200,28 @@ def rtc_join_ai_interview_session(
     """Route handler."""
     service = get_ai_interview_service(session)
     result = service.rtc_join(session_id, payload)
+    return Envelope.success(result)
+
+
+@router.get("/sessions/{session_id}/ten/runtime-config", response_model=Envelope[AIInterviewTENRuntimeResponse])
+def get_ai_interview_ten_runtime_config(
+    session_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[AIInterviewTENRuntimeResponse]:
+    """Route handler."""
+    service = get_ai_interview_service(session)
+    result = service.get_ten_runtime_config(session_id)
+    return Envelope.success(result)
+
+
+@router.post("/sessions/{session_id}/ten/launch", response_model=Envelope[AIInterviewTENRuntimeResponse])
+def launch_ai_interview_ten_session(
+    session_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[AIInterviewTENRuntimeResponse]:
+    """Route handler."""
+    service = get_ai_interview_service(session)
+    result = service.launch_ten_session(session_id)
     return Envelope.success(result)
 
 

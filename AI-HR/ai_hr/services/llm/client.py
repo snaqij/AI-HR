@@ -15,6 +15,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Callable
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 from ...repositories.ai_observability import AIObservabilityRepository
@@ -59,6 +61,13 @@ class LLMClient:
         self._observability = observability_repository
         self._settings = get_settings()
         self._responses_api_unsupported_hosts: set[str] = set()
+        
+        # Persistent HTTPX Client for Connection Pooling (Keep-Alive)
+        self._session = httpx.Client(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=5.0),
+            follow_redirects=True
+        )
 
     def invoke_json(
         self,
@@ -536,31 +545,37 @@ class LLMClient:
             "temperature": round(route.temperature_milli / 1000, 3),
             "stream": True,
         }
-        req = urllib.request.Request(
-            url=f"{base_url}/v1/chat/completions",
-            method="POST",
-            data=json.dumps(chat_body).encode("utf-8"),
-            headers=headers,
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=max(1, route.timeout_seconds)) as resp:
-                for line_bytes in resp:
-                    if not line_bytes: continue
-                    line = line_bytes.decode("utf-8").strip()
-                    if not line or not line.startswith("data:"): continue
-                    body = line[5:].strip()
-                    if body == "[DONE]": break
-                    try:
-                        payload = json.loads(body)
-                        delta_text = self._extract_stream_delta_text(payload)
-                        if delta_text:
-                            if on_text_delta: on_text_delta(delta_text)
-                            yield delta_text
-                    except Exception:
-                        continue
-        except Exception as exc:
-            logger.error(f"LLM Stream Yield Error: {exc}", exc_info=True)
-            raise
+        
+        for attempt in range(2):
+            try:
+                url = f"{base_url}/v1/chat/completions"
+                with self._session.stream("POST", url, json=chat_body, headers=headers, timeout=max(1, route.timeout_seconds)) as resp:
+                    resp.raise_for_status()
+                    for line in resp.iter_lines():
+                        if not line: continue
+                        line = line.strip()
+                        if not line or not line.startswith("data:"): continue
+                        body = line[5:].strip()
+                        if body == "[DONE]": break
+                        try:
+                            payload = json.loads(body)
+                            delta_text = self._extract_stream_delta_text(payload)
+                            if delta_text:
+                                if on_text_delta: on_text_delta(delta_text)
+                                yield delta_text
+                        except Exception:
+                            continue
+                return  # 正常完成，退出生成器
+            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as exc:
+                if attempt == 0:
+                    logger.warning(f"LLM Stream connection error (likely stale keep-alive), retrying: {exc}")
+                    continue
+                logger.error(f"LLM Stream Yield Error after retry: {exc}", exc_info=True)
+                raise
+            except Exception as exc:
+                logger.error(f"LLM Stream Yield Error: {exc}", exc_info=True)
+                raise
+
 
     def _invoke_openai_stream(
         self,
@@ -625,14 +640,14 @@ class LLMClient:
         headers: dict[str, str],
         timeout_seconds: int,
     ) -> dict[str, Any]:
-        req = urllib.request.Request(
+        resp = self._session.post(
             url=url,
-            method="POST",
-            data=json.dumps(request_body).encode("utf-8"),
+            json=request_body,
             headers=headers,
+            timeout=max(1, timeout_seconds)
         )
-        with urllib.request.urlopen(req, timeout=max(1, timeout_seconds)) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        resp.raise_for_status()
+        return resp.json()
 
     @staticmethod
     def _extract_responses_text(payload: dict[str, Any]) -> str:

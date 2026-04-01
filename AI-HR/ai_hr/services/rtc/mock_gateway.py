@@ -16,10 +16,24 @@ class MockRTCGateway(RTCGateway):
     def create_room(self, *, session_id: str, preferred_room_id: str | None = None) -> RTCSessionInfo:
         room_id = preferred_room_id or f"ai-intv-{uuid.uuid4()}"
         join_token = uuid.uuid4().hex
-        return RTCSessionInfo(room_id=room_id, join_token=join_token, vendor=self.provider_name)
+        uid = f"mock-{sha1(session_id.encode('utf-8')).hexdigest()[:12]}"
+        return RTCSessionInfo(
+            room_id=room_id,
+            join_token=join_token,
+            vendor=self.provider_name,
+            channel_name=room_id,
+            uid=uid,
+        )
 
     def join_room(self, *, session_id: str, room_id: str, client_id: str, candidate_id: str, join_token: str) -> RTCSessionInfo:
-        return RTCSessionInfo(room_id=room_id, join_token=join_token, vendor=self.provider_name)
+        uid = f"mock-{sha1(f'{candidate_id}:{client_id}'.encode('utf-8')).hexdigest()[:12]}"
+        return RTCSessionInfo(
+            room_id=room_id,
+            join_token=join_token,
+            vendor=self.provider_name,
+            channel_name=room_id,
+            uid=uid,
+        )
 
     def reconnect_room(
         self,

@@ -47,11 +47,24 @@ class LiveKitRTCGateway(RTCGateway):
         room_id = preferred_room_id or f"{self._cfg.room_prefix}{uuid.uuid4()}"
         self._create_room_if_needed(room_id)
         join_token = self._build_access_token(identity=f"candidate-{session_id}", room=room_id)
-        return RTCSessionInfo(room_id=room_id, join_token=join_token, vendor=self.provider_name)
+        return RTCSessionInfo(
+            room_id=room_id,
+            join_token=join_token,
+            vendor=self.provider_name,
+            channel_name=room_id,
+            uid=f"candidate-{session_id}",
+        )
 
     def join_room(self, *, session_id: str, room_id: str, client_id: str, candidate_id: str, join_token: str) -> RTCSessionInfo:
-        token = join_token or self._build_access_token(identity=f"{candidate_id}:{client_id}", room=room_id)
-        return RTCSessionInfo(room_id=room_id, join_token=token, vendor=self.provider_name)
+        identity = f"{candidate_id}:{client_id}"
+        token = join_token or self._build_access_token(identity=identity, room=room_id)
+        return RTCSessionInfo(
+            room_id=room_id,
+            join_token=token,
+            vendor=self.provider_name,
+            channel_name=room_id,
+            uid=identity,
+        )
 
     def reconnect_room(
         self,

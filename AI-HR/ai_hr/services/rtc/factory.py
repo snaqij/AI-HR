@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ...core.config import Settings
 from ...core.exceptions import InvalidConnectorConfigError
+from .agora_gateway import AgoraConfig, AgoraRTCGateway
 from .base import RTCGateway
 from .livekit_gateway import LiveKitConfig, LiveKitRTCGateway
 from .mock_gateway import MockRTCGateway
@@ -28,6 +29,18 @@ def create_rtc_gateway(settings: Settings) -> RTCGateway:
                 room_prefix=settings.livekit_room_prefix,
                 token_ttl_seconds=settings.rtc_token_ttl_seconds,
                 timeout_seconds=max(1.0, settings.boss_timeout_seconds),
+            )
+        )
+    if provider == "agora":
+        if not settings.agora_app_id:
+            raise InvalidConnectorConfigError("Agora provider requires app_id")
+        return AgoraRTCGateway(
+            AgoraConfig(
+                app_id=settings.agora_app_id,
+                app_certificate=settings.agora_app_certificate,
+                room_prefix=settings.agora_room_prefix,
+                token_ttl_seconds=settings.agora_token_ttl_seconds,
+                ten_bot_user_id_prefix=settings.agora_ten_bot_user_id_prefix,
             )
         )
     raise InvalidConnectorConfigError(f"Unsupported rtc_provider='{settings.rtc_provider}'")

@@ -415,7 +415,7 @@ class _AliyunNlsCallback:
 
     def on_start(self, message, *args):
         """Called when TranscriptionStarted is received (for Transcriber)."""
-        print(f"DEBUG [NLS Start] RAW: {message}")
+        # print(f"DEBUG [NLS Start] RAW: {message}")
         logger.debug("Aliyun NLS Transcriber started")
         # 初始同步 Epoch，确保第一个句子不会因为初始化顺序而跳过
         self.current_sentence_epoch = self.epoch
@@ -423,7 +423,7 @@ class _AliyunNlsCallback:
         self.started_ok.set()
 
     def on_sentence_begin(self, message, *args):
-        print(f"DEBUG [NLS SentenceBegin] RAW: {message}")
+        # print(f"DEBUG [NLS SentenceBegin] RAW: {message}")
         try:
             # 记录当前句子的 Epoch。只有在该 Epoch 内产生的中间/最终结果才被视为有效。
             self.current_sentence_epoch = self.epoch
@@ -431,27 +431,22 @@ class _AliyunNlsCallback:
         except Exception:
             pass
     def on_result_changed(self, message, *args):
-        print(f"DEBUG [NLS ResultChanged] RAW: {message}")
+        # print(f"DEBUG [NLS ResultChanged] RAW: {message}")
         try:
             data = json.loads(message)
             payload = data.get("payload", {})
             
             # 校验 Epoch：忽略来自旧回合的结果
-            # 注意：如果是第一句话且 epoch 刚从 0 变到 1，我们可能需要更宽松的逻辑。
-            # 但最直接的是确保 flush() 不要在这个时刻被误触发。
             if self.current_sentence_epoch != self.epoch:
-                # 软 Epoch 校验：允许在此前一个回合刚刚结束后的 150ms 内接收迟到的最终转写片段
-                # 这解决了由于服务端处理延迟导致的“末尾吞字”问题
                 if time.time() - self.last_flush_at < 0.150:
-                    pass # 允许通过
+                    pass 
                 elif not self.sentences and self.epoch == self.current_sentence_epoch + 1:
-                    self.current_sentence_epoch = self.epoch # 自动修正
+                    self.current_sentence_epoch = self.epoch 
                 else:
-                    print(f"DEBUG [NLS Epoch Skip] current_sentence_epoch={self.current_sentence_epoch}, self.epoch={self.epoch}")
                     return
 
             self.current_sentence = payload.get("result", "")
-            print(f"DEBUG [ASR Progress] {self.current_sentence}")
+            # print(f"DEBUG [ASR Progress] {self.current_sentence}")
             logger.debug(f"NLS Intermediate: {self.current_sentence}")
             # 增量发布：仅发布当前正在识别的句子片段
             self._publish_asr_turn(is_final=False, fragment=self.current_sentence)
@@ -459,14 +454,13 @@ class _AliyunNlsCallback:
             pass
 
     def on_sentence_end(self, message, *args):
-        print(f"DEBUG [NLS SentenceEnd] RAW: {message}")
+        # print(f"DEBUG [NLS SentenceEnd] RAW: {message}")
         try:
             data = json.loads(message)
             payload = data.get("payload", {})
             
             # 校验 Epoch：忽略来自旧回合的句子结束回调（同样应用 150ms 软容错）
             if self.current_sentence_epoch != self.epoch and (time.time() - self.last_flush_at > 0.150):
-                print(f"DEBUG [NLS SentenceEnd Epoch Skip] current_sentence_epoch={self.current_sentence_epoch}, self.epoch={self.epoch}")
                 return
 
             final_text = payload.get("result", "")
@@ -478,7 +472,7 @@ class _AliyunNlsCallback:
             self.received_completed = True
             self.completed_event.set()
             
-            print(f"DEBUG [ASR Final] {final_text}")
+            print(f"[ASR Final] {final_text}")
             logger.debug(f"NLS Sentence End: {final_text}")
             # 增量发布：仅发布刚刚完成的这一句全文
             self._publish_asr_turn(is_final=True, fragment=final_text)
@@ -533,7 +527,9 @@ class _AliyunNlsCallback:
 
         try:
             from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
-            print(f"DEBUG [EventBus] Publishing asr.turn: session={self.session_id} is_final={is_final} text='{fragment[:50]}'")
+            if is_final:
+                print(f"[EventBus] Publishing final asr.turn: {fragment[:60]}...")
+            
             DEFAULT_INTERVIEW_EVENT_BUS.publish(
                 session_id=self.session_id,
                 event_type="asr.turn",

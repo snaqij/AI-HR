@@ -1,23 +1,30 @@
-"""RTC 网关抽象。"""
+"""RTC gateway abstractions."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
 class RTCSessionInfo:
-    """RTC 会话基础信息。"""
+    """RTC session provisioning result."""
 
     room_id: str
     join_token: str
     vendor: str
     transport: str = "webrtc"
+    app_id: str | None = None
+    channel_name: str | None = None
+    uid: str | None = None
+    expire_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
 class RTCReconnectInfo:
-    """RTC 重连结果。"""
+    """RTC reconnect result."""
 
     room_id: str
     reconnect_count: int
@@ -26,7 +33,7 @@ class RTCReconnectInfo:
 
 @dataclass(frozen=True, slots=True)
 class RTCAudioSubscriptionInfo:
-    """RTC 音轨订阅结果。"""
+    """RTC audio subscription result."""
 
     room_id: str
     participant_identity: str
@@ -38,7 +45,7 @@ class RTCAudioSubscriptionInfo:
 
 @dataclass(frozen=True, slots=True)
 class RTCBotAudioPublishInfo:
-    """RTC AI bot 音频回灌结果。"""
+    """RTC bot audio publish result."""
 
     room_id: str
     bot_identity: str
@@ -49,7 +56,7 @@ class RTCBotAudioPublishInfo:
 
 @dataclass(frozen=True, slots=True)
 class RTCVideoPolicyInfo:
-    """RTC 视频策略应用结果。"""
+    """RTC video policy result."""
 
     room_id: str
     participant_identity: str
@@ -62,7 +69,7 @@ class RTCVideoPolicyInfo:
 
 
 class RTCGateway:
-    """RTC 网关能力约束。"""
+    """RTC gateway contract."""
 
     provider_name: str = "unknown"
 

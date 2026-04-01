@@ -7,9 +7,9 @@ def split_sentences(text_stream: Iterable[str]) -> Iterable[str]:
     """抽取流式文本中的完整句子，并针对首包延迟进行优化。"""
     buffer = ""
     is_first_sentence = True
-    # 核心句子结束符
+    # Core sentence delimiters.
     main_delimiters = (".", "!", "?", "。", "！", "？", "\n", ";", "；")
-    # 辅助切分符（仅用于首句快速出声）
+    # Allow the first sentence to break earlier for lower TTS latency.
     extra_delimiters = (",", "，", ":", "：")
     
     for chunk in text_stream:
@@ -39,8 +39,8 @@ def split_sentences(text_stream: Iterable[str]) -> Iterable[str]:
                     yield sentence
                     is_first_sentence = False # 只要出过一句，之后恢复正常断句逻辑
             else:
-                # 动态长度阈值：首句超过 15 字即切分，后续超过 40 字才切分
-                threshold = 15 if is_first_sentence else 40
+                # Lower thresholds so the first audible chunk arrives faster.
+                threshold = 8 if is_first_sentence else 24
                 if len(buffer) > threshold:
                     yield buffer.strip()
                     buffer = ""

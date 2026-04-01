@@ -65,7 +65,7 @@ class InterviewEventBus:
             loop = self._loop
             targets = list(self._subs.get(session_id, {}).values())
         if loop is None or not targets:
-            print(f"DEBUG [EventBus] Session: {session_id}, No targets found (loop={bool(loop)}, targets={len(targets)})")
+            # print(f"DEBUG [EventBus] Session: {session_id}, No targets found (loop={bool(loop)}, targets={len(targets)})")
             return
         # Silencing noisy publishing logs for production-like use
         # print(f"DEBUG [EventBus] Session: {session_id}, Publishing to {len(targets)} targets")

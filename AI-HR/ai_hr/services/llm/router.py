@@ -71,6 +71,7 @@ class ModelRouter:
         provider = (self._settings.llm_provider or "mock").strip().lower()
         model_name = (self._settings.llm_model or "").strip()
         if provider != "mock" and model_name:
+            temperature_milli = 250 if task_key == "interview_followup" else 200
             return self._ensure_route_allowed(
                 task_key=task_key,
                 route=ModelRoute(
@@ -78,7 +79,7 @@ class ModelRouter:
                     model_name=model_name,
                     timeout_seconds=max(1, int(self._settings.llm_timeout_seconds)),
                     max_retries=max(0, int(self._settings.llm_max_retries)),
-                    temperature_milli=700 if task_key == "interview_followup" else 200,
+                    temperature_milli=temperature_milli,
                     prompt_version=prompt_version,
                 ),
             )

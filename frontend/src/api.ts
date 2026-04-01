@@ -1,12 +1,65 @@
+export interface InterviewRTCInfo {
+  provider: string;
+  transport: string;
+  room_id: string;
+  channel_name: string;
+  token: string;
+  app_id: string | null;
+  uid: string | null;
+  expire_at: string | null;
+}
+
+export interface InterviewTENInfo {
+  enabled: boolean;
+  room_id: string;
+  agent_user_id: string | null;
+  remote_user_id: string | null;
+  property_file: string | null;
+  launch_status: string;
+  launch_command: string | null;
+}
+
 export interface InterviewSession {
   id: string;
   candidate_id: string;
   job_id: string;
   status: string;
+  channel: string;
+  language: string;
   rtc_room_id: string;
   join_token: string;
   join_url: string;
+  rtc: InterviewRTCInfo;
+  ten: InterviewTENInfo;
   payload: Record<string, unknown>;
+}
+
+export interface InterviewRTCJoinResponse {
+  session_id: string;
+  provider: string;
+  room_id: string;
+  channel_name: string;
+  join_token: string;
+  app_id: string | null;
+  uid: string | null;
+  expire_at: string | null;
+  reconnectable: boolean;
+  transport: string;
+}
+
+export interface InterviewTENRuntimeResponse {
+  session_id: string;
+  enabled: boolean;
+  room_id: string;
+  provider: string;
+  app_id: string | null;
+  channel_name: string | null;
+  agent_user_id: string | null;
+  remote_user_id: string | null;
+  property_file: string | null;
+  launch_status: string;
+  launch_command: string | null;
+  process_pid: number | null;
 }
 
 export interface ReplayItem {
@@ -15,28 +68,6 @@ export interface ReplayItem {
   speaker: string;
   transcript: string | null;
   occurred_at: string;
-}
-
-export interface ASRStreamResponse {
-  transcript: string;
-  confidence: number;
-  latency_ms: number;
-  turn_id: string | null;
-  event_id: string | null;
-  realtime_target_met: boolean;
-}
-
-export interface EventAppendResponse {
-  followup_question: string | null;
-  followup_audio_uris: string[];
-  accepted: boolean;
-  deduplicated: boolean;
-}
-
-export interface TTSStreamResponse {
-  chunks: string[];
-  audio_uris: string[];
-  published: boolean;
 }
 
 export interface InterviewRealtimeEvent {
@@ -76,26 +107,19 @@ export function buildInterviewEventsWsUrl(sessionId: string): string {
   return asUrl.toString();
 }
 
-export function buildInterviewDuplexWsUrl(sessionId: string): string {
-  const asUrl = new URL(API_BASE_URL);
-  asUrl.protocol = asUrl.protocol === "https:" ? "wss:" : "ws:";
-  const basePath = asUrl.pathname.replace(/\/$/, "");
-  asUrl.pathname = `${basePath}/ai/interviews/sessions/${sessionId}/rtc/duplex/ws`;
-  return asUrl.toString();
-}
-
-export function buildRtcAsrIngestWsUrl(): string {
-  const asUrl = new URL(API_BASE_URL);
-  asUrl.protocol = asUrl.protocol === "https:" ? "wss:" : "ws:";
-  const basePath = asUrl.pathname.replace(/\/$/, "");
-  asUrl.pathname = `${basePath}/ai/interviews/rtc/asr/ingest/ws`;
-  return asUrl.toString();
-}
-
 export async function createInterviewSession(candidateId: string, jobId: string): Promise<InterviewSession> {
   const data = await request<{ session: InterviewSession }>("/ai/interviews/sessions", {
     method: "POST",
-    body: JSON.stringify({ candidate_id: candidateId, job_id: jobId })
+    body: JSON.stringify({
+      candidate_id: candidateId,
+      job_id: jobId,
+      channel: "agora_web",
+      language: "zh-CN",
+      payload: {
+        source: "web_frontend",
+        rtc_strategy: "agora_ten"
+      }
+    })
   });
   return data.session;
 }
@@ -136,8 +160,7 @@ async function createDemoCandidate(): Promise<string> {
 export async function bootstrapDemoSession(): Promise<InterviewSession> {
   const jobId = await createDemoJob();
   const candidateId = await createDemoCandidate();
-  const created = await createInterviewSession(candidateId, jobId);
-  return startInterviewSession(created.id);
+  return createInterviewSession(candidateId, jobId);
 }
 
 export async function startInterviewSession(sessionId: string): Promise<InterviewSession> {
@@ -147,28 +170,25 @@ export async function startInterviewSession(sessionId: string): Promise<Intervie
   });
 }
 
-export async function loadInterviewReport(sessionId: string): Promise<{
-  session_id: string;
-  summary: string;
-  runtime_mode: string;
-  recommendation: string;
-}> {
-  return request(`/ai/interviews/sessions/${sessionId}/report`);
+export async function joinInterviewRTC(sessionId: string, candidateId: string, clientId = "agora-web"): Promise<InterviewRTCJoinResponse> {
+  return request<InterviewRTCJoinResponse>(`/ai/interviews/sessions/${sessionId}/rtc/join`, {
+    method: "POST",
+    body: JSON.stringify({
+      candidate_id: candidateId,
+      client_id: clientId
+    })
+  });
 }
 
-export async function generateQuestionSet(sessionId: string): Promise<Array<{ question: string }>> {
-  const data = await request<{ questions: Array<{ question: string }> }>(
-    `/ai/interviews/sessions/${sessionId}/question-set/generate`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        question_count: 6,
-        source: "resume+jd",
-        force_regenerate: false
-      })
-    }
-  );
-  return data.questions || [];
+export async function getTenRuntimeConfig(sessionId: string): Promise<InterviewTENRuntimeResponse> {
+  return request<InterviewTENRuntimeResponse>(`/ai/interviews/sessions/${sessionId}/ten/runtime-config`);
+}
+
+export async function launchTenSession(sessionId: string): Promise<InterviewTENRuntimeResponse> {
+  return request<InterviewTENRuntimeResponse>(`/ai/interviews/sessions/${sessionId}/ten/launch`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 export async function loadReplayItems(sessionId: string): Promise<ReplayItem[]> {
@@ -183,58 +203,6 @@ export async function finishInterviewSession(sessionId: string): Promise<Intervi
       result_status: "completed",
       operator: "candidate_web",
       note: "candidate_exit"
-    })
-  });
-}
-
-export async function streamASR(
-  sessionId: string,
-  payload: { seq: number; audioBase64: string; textHint?: string; chunkIndex?: number; chunkTotal?: number; isFinal?: boolean }
-): Promise<ASRStreamResponse> {
-  return request<ASRStreamResponse>(`/ai/interviews/sessions/${sessionId}/rtc/asr/stream`, {
-    method: "POST",
-    body: JSON.stringify({
-      seq: payload.seq,
-      text_hint: payload.textHint || "",
-      audio_base64: payload.audioBase64,
-      confidence: 0.9,
-      latency_ms: 320,
-      chunk_index: payload.chunkIndex || 1,
-      chunk_total: payload.chunkTotal || 1,
-      is_final: payload.isFinal ?? true,
-      input_format: "wav",
-      target_latency_ms: 700
-    })
-  });
-}
-
-export async function appendCandidateEvent(
-  sessionId: string,
-  payload: { seq: number; transcript: string; eventId: string }
-): Promise<EventAppendResponse> {
-  return request<EventAppendResponse>(`/ai/interviews/sessions/${sessionId}/events`, {
-    method: "POST",
-    body: JSON.stringify({
-      event_id: payload.eventId,
-      seq: payload.seq,
-      speaker: "candidate",
-      transcript: payload.transcript,
-      confidence: 0.9,
-      latency_ms: 320,
-      policy_flags: []
-    })
-  });
-}
-
-export async function streamTTS(sessionId: string, text: string): Promise<TTSStreamResponse> {
-  return request<TTSStreamResponse>(`/ai/interviews/sessions/${sessionId}/rtc/tts/stream`, {
-    method: "POST",
-    body: JSON.stringify({
-      text,
-      voice: "default",
-      chunk_size: 24,
-      publish_to_rtc: false,
-      target_latency_ms: 1200
     })
   });
 }
