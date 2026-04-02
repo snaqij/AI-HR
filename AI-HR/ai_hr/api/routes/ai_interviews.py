@@ -688,11 +688,12 @@ async def ws_ai_interview_duplex(
         coalesce_final = False
         coalesce_deadline = 0.0
         coalesce_first_produced_at: float | None = None
+        coalesce_tts_first_pcm_at_ms: int | None = None
         coalesce_target_bytes = int(16000 * 2 * 0.02)
         local_interrupt_generation = interrupt_generation
 
         async def _flush_coalesced(now: float) -> None:
-            nonlocal packet_index, prev_sent_at, coalesce_bytes, coalesce_sample_rate, coalesce_text, coalesce_final, coalesce_deadline, coalesce_first_produced_at
+            nonlocal packet_index, prev_sent_at, coalesce_bytes, coalesce_sample_rate, coalesce_text, coalesce_final, coalesce_deadline, coalesce_first_produced_at, coalesce_tts_first_pcm_at_ms
             if not coalesce_bytes:
                 return
             packet_index += 1
@@ -715,6 +716,7 @@ async def ws_ai_interview_duplex(
                 "sample_rate": int(coalesce_sample_rate or 16000),
                 "packet_latency_ms": packet_latency_ms,
                 "inter_packet_gap_ms": inter_packet_gap_ms,
+                "tts_first_pcm_at_ms": int(coalesce_tts_first_pcm_at_ms or 0),
             })
             await _safe_send_bytes(bytes(coalesce_bytes))
             coalesce_bytes = bytearray()
@@ -722,6 +724,7 @@ async def ws_ai_interview_duplex(
             coalesce_final = False
             coalesce_deadline = 0.0
             coalesce_first_produced_at = None
+            coalesce_tts_first_pcm_at_ms = None
 
         try:
             while not websocket_closed:
@@ -732,6 +735,7 @@ async def ws_ai_interview_duplex(
                         coalesce_final = False
                         coalesce_deadline = 0.0
                         coalesce_first_produced_at = None
+                        coalesce_tts_first_pcm_at_ms = None
                         local_interrupt_generation = interrupt_generation
 
                     wait_timeout = 0.02
@@ -769,6 +773,10 @@ async def ws_ai_interview_duplex(
                     coalesce_final = coalesce_final or bool(packet.get("is_final_packet", False))
                     if coalesce_first_produced_at is None:
                         coalesce_first_produced_at = produced_at
+                    if coalesce_tts_first_pcm_at_ms is None:
+                        raw_tts_first_pcm_at_ms = packet.get("tts_first_pcm_at_ms")
+                        if isinstance(raw_tts_first_pcm_at_ms, int) and raw_tts_first_pcm_at_ms > 0:
+                            coalesce_tts_first_pcm_at_ms = int(raw_tts_first_pcm_at_ms)
                     if coalesce_deadline <= 0:
                         coalesce_deadline = now + 0.02
 
@@ -955,6 +963,42 @@ async def ws_ai_interview_duplex(
                             "detail": str(exc),
                         }
                     )
+                continue
+            if msg_type == "client_playback_mark":
+                playback_seq = int(message.get("seq") or 0)
+                if playback_seq <= 0:
+                    await _safe_send({"type": "duplex.error", "error": "invalid_playback_seq"})
+                    continue
+                packet_idx = int(message.get("packet_index") or 0)
+                client_ts_ms_raw = message.get("client_ts_ms")
+                client_ts_ms = int(client_ts_ms_raw) if isinstance(client_ts_ms_raw, (int, float)) else None
+                ack_latency_ms = max(1, int((time.perf_counter() - recv_start) * 1000))
+                await _safe_send(
+                    {
+                        "type": "duplex.client_playback_ack",
+                        "session_id": session_id,
+                        "seq": playback_seq,
+                        "packet_index": packet_idx,
+                        "status": "accepted",
+                        "ack_latency_ms": ack_latency_ms,
+                    }
+                )
+                try:
+                    def _run_playback_mark():
+                        from ...db.session import SessionLocal
+                        with SessionLocal() as local_session:
+                            local_service = get_ai_interview_service(local_session)
+                            return local_service.record_client_playback_mark(
+                                session_id=session_id,
+                                seq=playback_seq,
+                                packet_index=packet_idx if packet_idx > 0 else None,
+                                client_ts_ms=client_ts_ms,
+                                transport=str(message.get("transport") or "binary"),
+                            )
+
+                    asyncio.create_task(asyncio.to_thread(_run_playback_mark))
+                except Exception as playback_exc:
+                    logger.error("Error recording client playback mark: session=%s seq=%s err=%s", session_id, playback_seq, playback_exc)
                 continue
             if msg_type != "audio_chunk":
                 await websocket.send_json({"type": "duplex.error", "error": "unsupported_message_type"})

@@ -206,21 +206,24 @@ class AliyunNlsASRProvider(ASRProvider):
                 except Exception as stop_err:
                     logger.warning(f"NLS stop error: {stop_err}")
 
-                # 给服务端一点时间确认最终完成，用于同步返回
-                ctx.callback.completed_event.wait(timeout=1.2)
-            
-            # 移除同步阻塞等待逻辑。顺序执行由上层 Queue 保证。
-            # 这里直接返回当前已收到的最全转写。
+            # 移除同步阻塞等待逻辑。直接从 Callback 中获取当前最全转写。
             transcript = ctx.callback.full_transcript
+            
+            # 增加时延埋点：记录 ASR 产生的绝对时间戳
+            metadata = {
+                "is_final": is_final, 
+                "sentence_completed": ctx.received_completed,
+                "asr_final_ts": time.perf_counter(),
+                "asr_sentence_start_ts": ctx.callback.sentence_start_ts,
+                "asr_physical_stop_ts": getattr(ctx.callback, "asr_physical_stop_ts", 0.0),
+            }
             
             return ASRStreamResult(
                 transcript=transcript,
                 confidence=0.98,
                 latency_ms=max(1, int((time.perf_counter() - call_start) * 1000)),
                 provider=self.provider_name,
-                # metadata={"is_final": ctx.received_completed}, 
-                # 不要把“句子结束”透传为“回合结束”，这会误导编排器进行 flush
-                metadata={"is_final": is_final, "sentence_completed": ctx.received_completed},
+                metadata=metadata,
                 is_active_pushed=True,
             )
         except Exception as e:
@@ -412,6 +415,7 @@ class _AliyunNlsCallback:
         self.current_sentence_epoch = -1
         self.completed_event = threading.Event()
         self.last_flush_at = 0.0
+        self.sentence_start_ts = 0.0
 
     def on_start(self, message, *args):
         """Called when TranscriptionStarted is received (for Transcriber)."""
@@ -425,7 +429,10 @@ class _AliyunNlsCallback:
     def on_sentence_begin(self, message, *args):
         # print(f"DEBUG [NLS SentenceBegin] RAW: {message}")
         try:
-            # 记录当前句子的 Epoch。只有在该 Epoch 内产生的中间/最终结果才被视为有效。
+            # 记录本句开始处理的时刻，用于全链路时延首分计算
+            if not getattr(self, "sentence_start_ts", 0):
+                self.sentence_start_ts = time.perf_counter()
+                
             self.current_sentence_epoch = self.epoch
             logger.debug(f"NLS Sentence Begin | Epoch: {self.current_sentence_epoch}")
         except Exception:
@@ -468,7 +475,8 @@ class _AliyunNlsCallback:
                 self.sentences.append(final_text)
             self.current_sentence = ""
             
-            # 标记已收到过本回合的句子完成，用于 orchestrator 触发
+            # 物理闭口时刻：记录 ASR 确认断句的时刻，用于计算 Trigger Delay
+            self.asr_physical_stop_ts = time.perf_counter()
             self.received_completed = True
             self.completed_event.set()
             
@@ -508,6 +516,7 @@ class _AliyunNlsCallback:
         self.sentences = []
         self.current_sentence = ""
         self.received_completed = False
+        self.sentence_start_ts = 0.0
         self.completed_event.clear()
 
     @property

@@ -161,3 +161,39 @@ def test_duplex_ws_should_deduplicate_frame_id() -> None:
         else:
             app.dependency_overrides[get_db_session] = previous
         client.close()
+
+
+def test_duplex_ws_should_accept_client_playback_mark() -> None:
+    previous = app.dependency_overrides.get(get_db_session)
+    app.dependency_overrides[get_db_session] = override_get_db_session
+    client = TestClient(app)
+    try:
+        job_id = _create_job(client)
+        candidate_id = _create_candidate(client)
+        session_id = _create_started_session(client, job_id, candidate_id)
+
+        with client.websocket_connect(f"/api/v1/ai/interviews/sessions/{session_id}/rtc/duplex/ws") as ws:
+            connected = ws.receive_json()
+            assert connected["type"] == "duplex.connected"
+
+            ws.send_json(
+                {
+                    "type": "client_playback_mark",
+                    "seq": 1,
+                    "packet_index": 1,
+                    "client_ts_ms": 1710000000000,
+                    "transport": "binary",
+                }
+            )
+            ack = ws.receive_json()
+            assert ack["type"] == "duplex.client_playback_ack"
+            assert ack["seq"] == 1
+            assert ack["packet_index"] == 1
+            assert ack["status"] == "accepted"
+            assert int(ack.get("ack_latency_ms") or 0) >= 1
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_db_session, None)
+        else:
+            app.dependency_overrides[get_db_session] = previous
+        client.close()

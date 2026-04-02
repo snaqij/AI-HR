@@ -4,6 +4,7 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
     this.queue = [];
     this.readIndex = 0;
     this.current = null;
+    this.hasReportedFirstPlay = false;
     this.port.onmessage = (event) => {
       const data = event.data;
       if (!data) return;
@@ -11,6 +12,7 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
         this.queue = [];
         this.readIndex = 0;
         this.current = null;
+        this.hasReportedFirstPlay = false;
         return;
       }
       if (data.type === "push" && data.samples) {
@@ -33,10 +35,16 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
         continue;
       }
       channel[i] = this.current[this.readIndex++];
+      if (!this.hasReportedFirstPlay) {
+        this.hasReportedFirstPlay = true;
+        this.port.postMessage({
+          type: "first-play",
+          playedAtMs: Math.round(currentTime * 1000),
+        });
+      }
     }
     return true;
   }
 }
 
 registerProcessor("pcm-playback-processor", PcmPlaybackProcessor);
-

@@ -39,8 +39,20 @@ def split_sentences(text_stream: Iterable[str]) -> Iterable[str]:
                     yield sentence
                     is_first_sentence = False # 只要出过一句，之后恢复正常断句逻辑
             else:
-                # 为了首包延迟，如果没有标点但字数够了也发出
-                # 将 8 改为 16，防止第一句太短导致后续衔接不上
+                # 为了首句秒回，增加“语气词特快通道”
+                acknowledgments = ["明白了", "好的", "理解了", "原来如此", "收到", "没问题", "确实"]
+                
+                # 如果缓冲区开头是这些语气词，且后面有停顿趋势，优先切出
+                for ack in acknowledgments:
+                    if buffer.startswith(ack) and len(buffer) > len(ack):
+                        # 如果紧跟标点或空格，立即切出
+                        if not buffer[len(ack)].isalnum():
+                            yield buffer[:len(ack)+1].strip()
+                            buffer = buffer[len(ack)+1:]
+                            is_first_sentence = False
+                            break
+
+                # 常规首句切分逻辑
                 threshold = 16 if is_first_sentence else 24
                 
                 # 优化：如果缓冲区末尾是英文或数字（如 AI, HR），先不切分，防止切断专业术语

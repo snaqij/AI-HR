@@ -1,4 +1,4 @@
-﻿"""Connector abstractions for recruiting platforms."""
+"""Connector abstractions for recruiting platforms."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ class ConnectorCredentials:
     base_url: str | None = None
     publish_path: str | None = None
     status_path: str | None = None
+    list_jobs_path: str | None = None
     applicants_path: str | None = None
     greet_path: str | None = None
     fetch_messages_path: str | None = None

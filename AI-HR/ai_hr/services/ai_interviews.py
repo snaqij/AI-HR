@@ -22,6 +22,8 @@ _TTS_PROVIDER_SINGLETON: "TTSProvider | None" = None
 # Turn-level deduplication markers for duplex flow
 _DUPLEX_FINALIZE_LOCK = threading.Lock()
 _DUPLEX_FINALIZED_SEQ: dict[str, set[int]] = {}
+_DUPLEX_TIMELINE_LOCK = threading.Lock()
+_DUPLEX_TIMELINE_MARKERS: dict[str, dict[int, dict[str, int]]] = {}
 from sqlalchemy.orm import Session
 from ..core.config import get_settings
 from ..core.exceptions import InvalidStateError
@@ -75,6 +77,34 @@ from ..schemas.ai_interviews import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _record_duplex_timeline_marker(
+    *,
+    session_id: str,
+    seq: int,
+    marker_key: str,
+    at_ms: int | None = None,
+    overwrite: bool = False,
+) -> int:
+    safe_seq = max(1, int(seq or 1))
+    safe_at_ms = int(at_ms or _now_ms())
+    with _DUPLEX_TIMELINE_LOCK:
+        session_markers = _DUPLEX_TIMELINE_MARKERS.setdefault(session_id, {})
+        seq_markers = session_markers.setdefault(safe_seq, {})
+        if overwrite or marker_key not in seq_markers:
+            seq_markers[marker_key] = safe_at_ms
+        return int(seq_markers[marker_key])
+
+
+def _get_duplex_timeline_markers(*, session_id: str, seq: int) -> dict[str, int]:
+    safe_seq = max(1, int(seq or 1))
+    with _DUPLEX_TIMELINE_LOCK:
+        return dict((_DUPLEX_TIMELINE_MARKERS.get(session_id, {}) or {}).get(safe_seq, {}) or {})
 
 
 class AIInterviewService:
@@ -315,6 +345,13 @@ class AIInterviewService:
 
             def _on_audio_packet(packet: dict) -> None:
                 """将 TTS 分片推送至事件总线并打印调试。"""
+                if packet.get("audio_bytes") and not packet.get("_first_pcm_marker_recorded"):
+                    packet["tts_first_pcm_at_ms"] = _record_duplex_timeline_marker(
+                        session_id=session_id,
+                        seq=payload.seq,
+                        marker_key="tts_first_pcm_at_ms",
+                    )
+                    packet["_first_pcm_marker_recorded"] = True
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,
                     event_type="tts.packet",
@@ -324,6 +361,7 @@ class AIInterviewService:
             def llm_stream_wrapper(t, c, s, l):
                 return self._build_followup_question_with_llm(
                     session_id=session_id,
+                    seq=payload.seq,
                     transcript=t,
                     confidence=c,
                     interview_stage=s,
@@ -380,6 +418,8 @@ class AIInterviewService:
                 latency_breakdown["e2e_ms"] = max(1, int(latency_breakdown.get("e2e_ms") or 0) - original_llm_ms)
                 if prefetched_from_partial:
                     decision_flags = [*decision_flags, "llm_prefetch_from_partial"]
+
+            latency_breakdown.update(self._build_turn_timeline_breakdown(session_id=session_id, seq=payload.seq))
 
             effective_confidence = payload.confidence if payload.confidence is not None else 0.9
             if question_pack and action not in {"handoff", "blocked"}:
@@ -796,6 +836,71 @@ class AIInterviewService:
             alerting=bool(alert_reasons),
             alert_reasons=alert_reasons,
         )
+
+    def _build_turn_timeline_breakdown(self, *, session_id: str, seq: int) -> dict[str, int]:
+        markers = _get_duplex_timeline_markers(session_id=session_id, seq=seq)
+        if not markers:
+            return {}
+        breakdown: dict[str, int] = dict(markers)
+        end_of_speech_at_ms = markers.get("end_of_speech_at_ms")
+        asr_first_partial_at_ms = markers.get("asr_first_partial_at_ms")
+        asr_final_at_ms = markers.get("asr_final_at_ms")
+        llm_first_token_at_ms = markers.get("llm_first_token_at_ms")
+        tts_first_pcm_at_ms = markers.get("tts_first_pcm_at_ms")
+        client_first_play_at_ms = markers.get("client_first_play_at_ms")
+
+        if end_of_speech_at_ms and asr_first_partial_at_ms:
+            breakdown["asr_first_partial_ms"] = max(0, asr_first_partial_at_ms - end_of_speech_at_ms)
+        if end_of_speech_at_ms and asr_final_at_ms:
+            breakdown["end_of_speech_to_asr_final_ms"] = max(0, asr_final_at_ms - end_of_speech_at_ms)
+        if asr_final_at_ms and llm_first_token_at_ms:
+            breakdown["llm_first_token_ms"] = max(0, llm_first_token_at_ms - asr_final_at_ms)
+        if tts_first_pcm_at_ms:
+            tts_anchor_at_ms = llm_first_token_at_ms or asr_final_at_ms or end_of_speech_at_ms
+            if tts_anchor_at_ms:
+                breakdown["tts_first_packet_ms"] = max(0, tts_first_pcm_at_ms - tts_anchor_at_ms)
+        if client_first_play_at_ms and tts_first_pcm_at_ms:
+            breakdown["client_first_play_ms"] = max(0, client_first_play_at_ms - tts_first_pcm_at_ms)
+        return breakdown
+
+    def record_client_playback_mark(
+        self,
+        *,
+        session_id: str,
+        seq: int,
+        packet_index: int | None = None,
+        client_ts_ms: int | None = None,
+        transport: str | None = None,
+    ) -> dict[str, int | str]:
+        entity = self._session_repository.get(session_id)
+        played_at_ms = _record_duplex_timeline_marker(
+            session_id=session_id,
+            seq=seq,
+            marker_key="client_first_play_at_ms",
+            at_ms=client_ts_ms,
+        )
+        markers = self._build_turn_timeline_breakdown(session_id=session_id, seq=seq)
+        self._event_repository.create(
+            event_type="ai_interview.rtc.client_playback",
+            entity_type="ai_interview_session",
+            entity_id=session_id,
+            status="success",
+            operator="candidate_client",
+            session_id=session_id,
+            job_id=entity.job_id,
+            payload={
+                "seq": seq,
+                "packet_index": packet_index,
+                "client_first_play_at_ms": played_at_ms,
+                "transport": transport or "binary",
+                "latency_breakdown": markers,
+            },
+        )
+        return {
+            "session_id": session_id,
+            "seq": int(seq),
+            "client_first_play_at_ms": int(played_at_ms),
+        }
 
     def rtc_join(self, session_id: str, payload: AIInterviewRTCJoinRequest) -> AIInterviewRTCJoinResponse:
         """RTC-001：候选人入会，支持后续重连。"""
@@ -1680,9 +1785,23 @@ class AIInterviewService:
         session_entity = self._session_repository.get(session_id)
         if not session_entity:
             return {"status": "ignored", "reason": "session_not_found"}
+        payload = dict(payload or {})
+        client_ts_ms = payload.get("client_ts_ms")
+        safe_client_ts_ms = int(client_ts_ms) if isinstance(client_ts_ms, (int, float)) else None
+        end_of_speech_at_ms = _record_duplex_timeline_marker(
+            session_id=session_id,
+            seq=seq,
+            marker_key="end_of_speech_at_ms",
+            at_ms=safe_client_ts_ms,
+        )
         logger.info(f"[Duplex] Explicit end_of_turn received: session={session_id} seq={seq} frame_id={frame_id}")
         self._safe_flush_asr(session_id, seq=seq)
-        return {"status": "accepted", "session_id": session_id, "seq": seq}
+        return {
+            "status": "accepted",
+            "session_id": session_id,
+            "seq": seq,
+            "end_of_speech_at_ms": int(end_of_speech_at_ms),
+        }
 
     def _safe_flush_asr(self, session_id: str, seq: int = 1) -> None:
         """Helper to ensure ASR buffer is flushed and final response triggered."""
@@ -1698,6 +1817,11 @@ class AIInterviewService:
                 source="eot_flush"
             )
             asr_resp = self.asr_stream(session_id, asr_req)
+            _record_duplex_timeline_marker(
+                session_id=session_id,
+                seq=max(1, seq),
+                marker_key="asr_final_at_ms",
+            )
             
             # CRITICAL: Trigger the interview logic if we got a final transcript
             is_final_resp = (asr_resp.asr_meta or {}).get("is_final") or False
@@ -1776,6 +1900,11 @@ class AIInterviewService:
 
             print(f"DEBUG [ASR In] Session: {session_id}, Audio Length: {len(audio_bytes or payload.get('audio_base64') or '')}")
             asr_resp = self.asr_stream(session_id, asr_req)
+            _record_duplex_timeline_marker(
+                session_id=session_id,
+                seq=seq,
+                marker_key="asr_final_at_ms",
+            )
             # Flush ASR state after a final turn to avoid carry-over to next turn
             self._asr_provider.flush(session_id=session_id)
             logger.info(
@@ -1820,6 +1949,11 @@ class AIInterviewService:
                 },
             )
             if (asr_resp.transcript or "").strip() and not partial.is_active_pushed:
+                _record_duplex_timeline_marker(
+                    session_id=session_id,
+                    seq=seq,
+                    marker_key="asr_first_partial_at_ms",
+                )
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,
                     event_type="asr.turn",
@@ -2002,6 +2136,7 @@ class AIInterviewService:
                 llm_start = time.perf_counter()
                 followup_raw = worker_service._build_followup_question_with_llm(
                     session_id=session_id,
+                    seq=seq,
                     transcript=normalized,
                     confidence=confidence,
                     interview_stage=stage,
@@ -2076,6 +2211,13 @@ class AIInterviewService:
                 def _on_audio_packet(packet: dict) -> None:
                     if abort_event and abort_event.is_set():
                         return
+                    if packet.get("audio_bytes") and not packet.get("_first_pcm_marker_recorded"):
+                        packet["tts_first_pcm_at_ms"] = _record_duplex_timeline_marker(
+                            session_id=session_id,
+                            seq=seq,
+                            marker_key="tts_first_pcm_at_ms",
+                        )
+                        packet["_first_pcm_marker_recorded"] = True
                     DEFAULT_INTERVIEW_EVENT_BUS.publish(
                         session_id=session_id,
                         event_type="tts.packet",
@@ -2101,6 +2243,7 @@ class AIInterviewService:
                 def llm_stream_wrapper(t, c, s, l):
                     return worker_service._build_followup_question_with_llm(
                         session_id=session_id,
+                        seq=seq,
                         transcript=t,
                         confidence=c,
                         interview_stage=s,
@@ -3134,6 +3277,7 @@ class AIInterviewService:
         self,
         *,
         session_id: str,
+        seq: int | None = None,
         transcript: str,
         confidence: float | None,
         interview_stage: str,
@@ -3173,6 +3317,18 @@ class AIInterviewService:
         logger.info(f"LLM Follow-up Streaming Prompt: {prompt[:200]}...")
         
         # 使用 split_sentences 包装 LLM 流
+        llm_first_token_state = {"recorded": False}
+
+        def _on_text_delta(delta: str) -> None:
+            if not delta or llm_first_token_state["recorded"] or seq is None:
+                return
+            _record_duplex_timeline_marker(
+                session_id=session_id,
+                seq=seq,
+                marker_key="llm_first_token_at_ms",
+            )
+            llm_first_token_state["recorded"] = True
+
         text_stream = llm_client.stream_invoke(
             InvokeContext(
                 task_key="interview_followup",
@@ -3181,6 +3337,7 @@ class AIInterviewService:
                 entity_type="ai_interview_session",
                 entity_id=session_id,
             ),
+            on_text_delta=_on_text_delta,
             write_observability=write_observability,
         )
 

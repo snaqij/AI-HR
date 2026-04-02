@@ -41,8 +41,9 @@ class InvokeContext:
     task_key: str
     trace_id: str
     prompt: str
-    entity_type: str
-    entity_id: str
+    system_prompt: str = ""
+    entity_type: str = "candidate"
+    entity_id: str = "default_user"
 
 
 class LLMClient:
@@ -118,6 +119,7 @@ class LLMClient:
             yield from self._yield_openai_stream(
                 route=route,
                 prompt=sanitized_prompt,
+                system_prompt=context.system_prompt,
                 on_text_delta=_internal_delta_handler
             )
         elif route.provider == "mock":
@@ -427,6 +429,7 @@ class LLMClient:
                 return self._invoke_openai_stream(
                     route=route,
                     prompt=prompt,
+                    system_prompt=getattr(context, "system_prompt", ""),
                     base_url=base_url,
                     headers=headers,
                     on_text_delta=on_text_delta,
@@ -495,16 +498,19 @@ class LLMClient:
 
     def _invoke_openai_chat_completions(
         self,
-        *,
-        route: ModelRoute,
-        prompt: str,
         base_url: str,
         headers: dict[str, str],
+        system_prompt: str = "",
         mode: str = "json",
     ) -> Any:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        
         chat_body = {
             "model": route.model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": round(route.temperature_milli / 1000, 3),
         }
         if mode == "json":
@@ -531,6 +537,7 @@ class LLMClient:
         *,
         route: ModelRoute,
         prompt: str,
+        system_prompt: str = "",
         on_text_delta: Callable[[str], None] | None = None,
     ) -> Iterable[str]:
         """Internal generator for OpenAI stream."""
@@ -539,9 +546,14 @@ class LLMClient:
         base_url = (self._settings.llm_base_url or os.getenv("AI_HR_LLM_BASE_URL") or "https://api.openai.com").strip().rstrip("/")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         chat_body = {
             "model": route.model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": round(route.temperature_milli / 1000, 3),
             "stream": True,
         }
@@ -584,12 +596,18 @@ class LLMClient:
         prompt: str,
         base_url: str,
         headers: dict[str, str],
+        system_prompt: str = "",
         on_text_delta: Callable[[str], None] | None = None,
         mode: str = "json",
     ) -> Any:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         chat_body = {
             "model": route.model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": round(route.temperature_milli / 1000, 3),
             "stream": True,
         }

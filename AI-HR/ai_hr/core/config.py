@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     boss_base_url: str = "https://www.zhipin.com"
     boss_publish_path: str = "/wapi/zpjob/job/publish.json"
     boss_status_path: str = "/wapi/zpjob/job/status.json"
+    boss_list_jobs_path: str = "/wapi/zpjob/job/list.json"
     boss_applicants_path: str = "/wapi/zpjob/job/applicants.json"
     boss_greet_path: str = "/wapi/zpchat/greet/send.json"
     boss_fetch_messages_path: str = "/wapi/zpchat/conversation/messages.json"
