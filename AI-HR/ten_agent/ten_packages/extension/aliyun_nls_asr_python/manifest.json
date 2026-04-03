@@ -1,0 +1,25 @@
+{
+  "type": "extension",
+  "name": "aliyun_nls_asr_python",
+  "version": "0.1.0",
+  "api": {
+    "audio_frame_in": [
+      {
+        "name": "pcm_frame"
+      }
+    ],
+    "cmd_in": [
+      {
+        "name": "start_of_sentence"
+      },
+      {
+        "name": "end_of_sentence"
+      }
+    ],
+    "data_out": [
+      {
+        "name": "text_data"
+      }
+    ]
+  }
+}

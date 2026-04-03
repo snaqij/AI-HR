@@ -1,0 +1,6 @@
+{
+  "task_key": "interview_followup",
+  "max_followup": 2,
+  "candidate_name": "候选人",
+  "job_title": "Python 后端开发"
+}

@@ -10,6 +10,11 @@ from ai_hr.services.speech.base import ASRProvider, ASRStreamResult
 
 logger = logging.getLogger(__name__)
 
+try:
+    from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
+except ImportError:
+    DEFAULT_INTERVIEW_EVENT_BUS = None
+
 class AliyunNlsTokenManager:
     """管理阿里云 NLS Token 的单例管理器。"""
     _instance = None
@@ -70,11 +75,15 @@ class AliyunNlsASRProvider(ASRProvider):
         access_key_id: str,
         access_key_secret: str,
         streaming_enabled: bool = True,
+        vocabulary_id: str | None = None,
+        customization_id: str | None = None,
     ):
         self._appkey = appkey
         self._ak_id = access_key_id
         self._ak_secret = access_key_secret
         self._streaming_enabled = streaming_enabled
+        self._vocabulary_id = vocabulary_id
+        self._customization_id = customization_id
         self._token_manager = AliyunNlsTokenManager()
         self._contexts: dict[str, _AliyunNlsContext] = {}
         self._backoff_until: dict[str, float] = {}
@@ -246,10 +255,11 @@ class AliyunNlsASRProvider(ASRProvider):
             if stream_key in self._backoff_until and now < self._backoff_until[stream_key]:
                 self._stat_backoff_hits += 1
                 remaining = self._backoff_until[stream_key] - now
-                logger.warning(
-                    "[NLS] session=%s in backoff, %.1fs remaining | backoff_hits=%d",
-                    stream_key, remaining, self._stat_backoff_hits
-                )
+                if self._stat_backoff_hits % 100 == 1: # Only log every 100 hits to avoid spamming
+                    logger.warning(
+                        "[NLS] session=%s in backoff, %.1fs remaining | total_hits=%d",
+                        stream_key, remaining, self._stat_backoff_hits
+                    )
                 return None
             if stream_key in self._connecting_sessions:
                 # Another thread is already trying to establish connection for this session
@@ -311,14 +321,27 @@ class AliyunNlsASRProvider(ASRProvider):
                 on_close=callback.on_close,
                 callback_args=[]
             )
-            recognizer.start(
-                aformat="pcm",
-                sample_rate=16000,
-                ch=1,
-                enable_intermediate_result=True,
-                enable_punctuation_prediction=True,
-                enable_inverse_text_normalization=True,
-            )
+            # Prepare extended parameters for the 'ex' dict argument
+            ex_params = {}
+            if self._vocabulary_id:
+                ex_params["vocabulary_id"] = self._vocabulary_id
+            if self._customization_id:
+                ex_params["customization_id"] = self._customization_id
+
+            try:
+                # Based on SDK source, all extra params must go into the 'ex' dict
+                recognizer.start(
+                    aformat="pcm",
+                    sample_rate=16000,
+                    ch=1,
+                    enable_intermediate_result=True,
+                    enable_punctuation_prediction=True,
+                    enable_inverse_text_normalization=True,
+                    ex=ex_params if ex_params else None
+                )
+            except Exception as e:
+                logger.error(f"Failed to start NLS with extended params: {e}. Retrying with defaults.")
+                recognizer.start(aformat="pcm", sample_rate=16000, ch=1)
             
             # SDK BUG: start() returns as soon as __start_cond is notified.
             # On TaskFailed, the SDK notifies the cond FIRST, then calls on_error.
@@ -525,7 +548,7 @@ class _AliyunNlsCallback:
 
     def _publish_asr_turn(self, is_final: bool = False, fragment: str = ""):
         """增量推送 ASR 片段到事件总线，避免历史累积造成的 UI 重复。"""
-        if not fragment.strip():
+        if not fragment.strip() or not DEFAULT_INTERVIEW_EVENT_BUS:
             return
 
         # 校验：如果当前 Epoch 的最终结果已经发布过，则不再重复发布（防止 stop() 与 on_sentence_end 重复触发）
@@ -535,7 +558,6 @@ class _AliyunNlsCallback:
              self._last_final_published_epoch = self.epoch
 
         try:
-            from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
             if is_final:
                 print(f"[EventBus] Publishing final asr.turn: {fragment[:60]}...")
             

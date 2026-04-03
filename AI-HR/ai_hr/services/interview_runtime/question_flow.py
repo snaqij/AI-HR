@@ -16,7 +16,13 @@ class InterviewQuestionFlowEngine:
             "question_statuses": ["pending"] * question_count,
             "followup_count_current": 0,
             "completed_questions": 0,
-            "interview_stage": "intro",
+            "interview_stage": "P1",  # P1: Greeting, P2: Self-Intro, P3-P4: Tech, P5: QA, P6: Closing
+            "context_flags": {
+                "greeted": False,
+                "intro_ready": False,
+                "company_info_shared": False,
+                "closing_started": False
+            }
         }
 
     def current_question(self, *, state: dict[str, Any], question_pack: dict[str, Any]) -> dict[str, Any] | None:
@@ -31,21 +37,27 @@ class InterviewQuestionFlowEngine:
             return {"index": idx, **question}
         return None
 
-    def evaluate_answer(self, *, transcript: str, confidence: float | None, min_len: int = 18) -> dict[str, Any]:
+    def evaluate_answer(self, *, transcript: str, confidence: float | None, min_len: int = 15) -> dict[str, Any]:
         normalized = " ".join((transcript or "").strip().split())
         need_followup = False
         reason = "sufficient"
-        if confidence is not None and confidence < 0.60:
+        
+        # 针对空响应或极短响应（通常是噪音或由于 ASR 误触发）的判断
+        if not normalized or len(normalized) < 4:
+            need_followup = True
+            reason = "too_short_or_noise"
+        elif confidence is not None and confidence < 0.50:
             need_followup = True
             reason = "low_confidence"
-        elif len(normalized) < max(4, int(min_len)):
+        elif len(normalized) < int(min_len):
+            # 标记为需要追问，除非满足其它满意度条件
             need_followup = True
             reason = "insufficient_detail"
-        # Check for repetitive meaningless repetition (e.g. "hello hello hello")
-        # If the number of unique words is very low relative to the length
+        # 检查是否有单调且无意义的重复
         elif len(set(normalized.split())) <= 2 and len(normalized) > 10:
              need_followup = True
              reason = "repetitive_content"
+             
         return {
             "need_followup": need_followup,
             "reason": reason,
@@ -53,49 +65,64 @@ class InterviewQuestionFlowEngine:
             "confidence": confidence,
         }
 
-    def apply_turn_result(self, *, state: dict[str, Any], evaluation: dict[str, Any], max_followup_per_question: int) -> dict[str, Any]:
+    def apply_turn_result(self, *, state: dict[str, Any], evaluation: dict[str, Any], current_q_max_followups: int = 2, force_complete: bool = False) -> dict[str, Any]:
         merged = dict(state)
         statuses = list(merged.get("question_statuses", []))
+        
+        # P1 和 P5/P6 阶段的逻辑由 Orchestrator 结合语义决定切换
         if not statuses:
-            merged["completed_questions"] = 0
+            merged["interview_stage"] = self.derive_stage(state=merged)
             return merged
+
         idx = max(0, int(merged.get("active_question_index", 0)))
+        
+        # 如果已经超过题目索引，说明进入了 P5/P6
         if idx >= len(statuses):
-            merged["completed_questions"] = sum(1 for item in statuses if str(item).startswith("completed"))
-            return merged
+             merged["interview_stage"] = self.derive_stage(state=merged)
+             return merged
+
+        current_stage = merged.get("interview_stage", "P1")
+        if current_stage in ["P1", "P2"]:
+             return merged
 
         need_followup = bool(evaluation.get("need_followup"))
         followup_count = max(0, int(merged.get("followup_count_current", 0)))
-        max_followup = max(0, int(max_followup_per_question))
-        if need_followup and followup_count < max_followup:
-            statuses[idx] = "asked"
-            merged["followup_count_current"] = followup_count + 1
-        else:
-            statuses[idx] = "completed" if not need_followup else "completed_with_gap"
+        
+        # 核心逻辑：满足以下任一条件即完成当前题目并推进：
+        # 1. 明确被外部强制完成 (force_complete - 用于 LLM 判定回答已经较好)
+        # 2. 评估认为不需要追问
+        # 3. 已经达到了该题设定的最大追问次数
+        if force_complete or not need_followup or followup_count >= current_q_max_followups:
+            statuses[idx] = "completed" if (not need_followup or force_complete) else "completed_with_gap"
             merged["active_question_index"] = idx + 1
             merged["followup_count_current"] = 0
+        else:
+            statuses[idx] = "asked"
+            merged["followup_count_current"] = followup_count + 1
 
         merged["question_statuses"] = statuses
         merged["completed_questions"] = sum(1 for item in statuses if str(item).startswith("completed"))
+        merged["interview_stage"] = self.derive_stage(state=merged)
         return merged
 
     def derive_stage(self, *, state: dict[str, Any]) -> str:
-        statuses = list(state.get("question_statuses", []))
-        if not statuses:
-            return "intro"
-        active_idx = max(0, int(state.get("active_question_index", 0)))
-        completed = sum(1 for item in statuses if str(item).startswith("completed"))
-        total = len(statuses)
+        """根据题目进度和上下文标记派生面试阶段。"""
+        active_stage = state.get("interview_stage", "P1")
+        
+        # 如果已经进入 P5/P6，保持或由 Orchestrator 切换
+        if active_stage in ["P5", "P6"]:
+            return active_stage
 
-        if completed == 0:
-            return "intro"
-        if completed <= 1:
-            return "verification"
-        if active_idx < max(2, int(total * 0.6)):
-            return "core_questions"
-        if active_idx < total:
-            return "deep_dive"
-        if completed < total:
-            return "candidate_questions"
-        return "closing"
+        statuses = list(state.get("question_statuses", []))
+        active_idx = int(state.get("active_question_index", 0))
+        
+        # 初始阶段
+        if active_stage == "P1":
+             return "P1"
+        
+        # 题库题目跑完，进入 QA 环节
+        if statuses and active_idx >= len(statuses):
+            return "P5"
+
+        return active_stage
 

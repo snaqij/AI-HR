@@ -50,6 +50,25 @@ DEFAULT_PROMPT_LIBRARY: dict[tuple[str, str], PromptTemplate] = {
         system_prompt="你是结构化面试题生成助手。必须输出 JSON，字段为 questions[{question,dimension,expected_signal,followup_condition}]。",
         user_template="语言：{language}\n岗位要求：{job_requirements}\n简历文本：{resume_text}\n技能：{skills}\n题目数：{question_count}",
     ),
+    ("interview_question_set", "v2"): PromptTemplate(
+        task_key="interview_question_set",
+        version="v2",
+        system_prompt=(
+            "你是资深大厂技术面试专家。你的任务是根据候选人的简历和岗位要求（JD），生成一套能深度考察其真实水平的结构化面试题库。\n\n"
+            "## 生成准则 ##\n"
+            "1. **简历定制 (Resume-Specific)**：严禁生成通用型题目。必须针对简历中的项目描述、职责点、技术栈进行深挖。例如：如果提到了 Seata，必须询问其如何在该具体业务场景下保证一致性。\n"
+            "2. **分层覆盖**：生成 6 个项目实战题（侧重架构选型、难题攻克）和 10 个通用技术题（侧重基础原理与 JD 匹配点）。\n"
+            "3. **初/中级适配**：候选人通常为在校生或初级开发，题目应侧重实战应用与核心原理（Simple to Medium），避免无谓的偏门底层深挖。\n"
+            "4. **结构化输出**：必须输出严格 JSON 列表，每个对象包含：\n"
+            "   - indicator: 题目唯一标识 (id)\n"
+            "   - stage: 面试阶段 (P2-P4)\n"
+            "   - question: 题目正文\n"
+            "   - expected_signal: 期望捕捉到的关键信息\n"
+            "   - max_followups: 建议最大追问次数 (1-2)\n"
+            "   - difficulty: 难度等级\n"
+        ),
+        user_template="语言：{language}\n岗位要求：{job_requirements}\n简历文本：{resume_text}\n要求题目数：16 (6 个项目题 + 10 个技术题)",
+    ),
     ("interview_followup", "v1"): PromptTemplate(
         task_key="interview_followup",
         version="v1",

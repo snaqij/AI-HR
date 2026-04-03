@@ -1,0 +1,22 @@
+{
+  "type": "extension",
+  "name": "interview_orchestrator_python",
+  "version": "0.1.0",
+  "api": {
+    "data_in": [
+      {
+        "name": "text_data"
+      }
+    ],
+    "data_out": [
+      {
+        "name": "text_data"
+      }
+    ],
+    "cmd_in": [
+      {
+        "name": "on_connected"
+      }
+    ]
+  }
+}

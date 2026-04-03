@@ -52,10 +52,62 @@ def split_sentences(text_stream: Iterable[str]) -> Iterable[str]:
                             is_first_sentence = False
                             break
 
-                # 常规首句切分逻辑
-                threshold = 16 if is_first_sentence else 24
+                # 激进策略：对于首句，如果没看到标点但是字数已经够多了，在大模型还没吐完时强行切断，让 TTS 先发声
+                # 配合时间戳检查：如果当前已经是首句，且长度达到一定程度
+                threshold = 8 if is_first_sentence else 24
                 
-                # 优化：如果缓冲区末尾是英文或数字（如 AI, HR），先不切分，防止切断专业术语
+                # 优化：如果缓冲区末尾不是英文或数字（如 AI, HR），先不切分，防止切断专业术语
+                if len(buffer) > threshold and not (buffer[-1].isalnum() or buffer[-1] == '-'):
+                    yield buffer.strip()
+                    buffer = ""
+                    is_first_sentence = False
+                break
+                
+    if buffer.strip():
+        yield buffer.strip()
+
+async def split_sentences_async(text_stream: AsyncIterable[str]) -> AsyncIterator[str]:
+    """抽取流式文本中的完整句子 (异步版本)。"""
+    from typing import AsyncIterable, AsyncIterator
+    buffer = ""
+    is_first_sentence = True
+    main_delimiters = (".", "!", "?", "。", "！", "？", "\n", ";", "；")
+    extra_delimiters = (",", "，", ":", "：")
+    
+    async for chunk in text_stream:
+        if not chunk:
+            continue
+        buffer += chunk
+        
+        while True:
+            current_delimiters = main_delimiters
+            if is_first_sentence:
+                current_delimiters = main_delimiters + extra_delimiters
+            
+            first_idx = -1
+            for d in current_delimiters:
+                pos = buffer.find(d)
+                if pos != -1:
+                    if first_idx == -1 or pos < first_idx:
+                        first_idx = pos
+            
+            if first_idx != -1:
+                sentence = buffer[:first_idx + 1].strip()
+                buffer = buffer[first_idx + 1:]
+                if sentence:
+                    yield sentence
+                    is_first_sentence = False
+            else:
+                acknowledgments = ["明白了", "好的", "理解了", "原来如此", "收到", "没问题", "确实"]
+                for ack in acknowledgments:
+                    if buffer.startswith(ack) and len(buffer) > len(ack):
+                        if not buffer[len(ack)].isalnum():
+                            yield buffer[:len(ack)+1].strip()
+                            buffer = buffer[len(ack)+1:]
+                            is_first_sentence = False
+                            break
+
+                threshold = 8 if is_first_sentence else 24
                 if len(buffer) > threshold and not (buffer[-1].isalnum() or buffer[-1] == '-'):
                     yield buffer.strip()
                     buffer = ""

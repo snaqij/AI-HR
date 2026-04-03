@@ -1,0 +1,25 @@
+{
+  "type": "extension",
+  "name": "tencent_tts_python",
+  "version": "0.1.0",
+  "api": {
+    "data_in": [
+      {
+        "name": "text_data"
+      }
+    ],
+    "cmd_in": [
+      {
+        "name": "interrupt"
+      },
+      {
+        "name": "start_of_sentence"
+      }
+    ],
+    "audio_frame_out": [
+      {
+        "name": "pcm_frame"
+      }
+    ]
+  }
+}

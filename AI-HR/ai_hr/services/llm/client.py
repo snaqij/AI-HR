@@ -8,12 +8,13 @@ import logging
 import random
 import re
 import time
+import asyncio
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Iterable, AsyncIterable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, AsyncIterator
 
 import httpx
 
@@ -63,10 +64,15 @@ class LLMClient:
         self._settings = get_settings()
         self._responses_api_unsupported_hosts: set[str] = set()
         
-        # Persistent HTTPX Client for Connection Pooling (Keep-Alive)
+        # Optimized for voice conversations: keep connection alive for 60s to cover candidate speech duration.
         self._session = httpx.Client(
             timeout=httpx.Timeout(10.0, connect=5.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=5.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=60.0),
+            follow_redirects=True
+        )
+        self._async_session = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=5.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=60.0),
             follow_redirects=True
         )
 
@@ -90,16 +96,14 @@ class LLMClient:
         """调用模型并返回纯文本结果。"""
         return self._invoke_core(context, on_text_delta=on_text_delta, write_observability=write_observability, mode="text")
 
-    def stream_invoke(
+    async def async_stream_invoke(
         self,
         context: InvokeContext,
         *,
         on_text_delta: Callable[[str], None] | None = None,
         write_observability: bool = True,
-    ) -> Iterable[str]:
-        """流式调用模型并返回 delta 迭代器。"""
-        # This is a bit tricky because we want to yield deltas but also record observability at the end.
-        # We wrap the internal provider stream.
+    ) -> AsyncIterator[str]:
+        """异步流式调用模型并返回 delta 迭代器。"""
         route = self._router.resolve_route(context.task_key)
         sanitized_prompt = self._guardrail.sanitize_input(context.prompt)
         request_hash = hashlib.sha256(sanitized_prompt.encode("utf-8")).hexdigest()
@@ -112,33 +116,59 @@ class LLMClient:
             if on_text_delta:
                 on_text_delta(delta)
 
-        # Note: In a real implementation, _invoke_provider would be a generator if streaming.
-        # Here we rely on the callback for now, but to make it a true generator for the caller:
+
         if route.provider == "openai":
-            # Direct yield from stream
-            yield from self._yield_openai_stream(
+            async for chunk in self._yield_openai_stream_async(
                 route=route,
                 prompt=sanitized_prompt,
                 system_prompt=context.system_prompt,
                 on_text_delta=_internal_delta_handler
-            )
+            ):
+                yield chunk
         elif route.provider == "mock":
-            # Simulate streaming
+            # Simulate streaming (async)
             mock_res = self._invoke_mock(task_key=context.task_key, prompt=sanitized_prompt)
             text = self._normalize_text_payload(task_key=context.task_key, raw_payload=mock_res)
-            # Yield in small chunks to simulate network
             chunk_size = 4
             for i in range(0, len(text), chunk_size):
                 chunk = text[i:i+chunk_size]
                 _internal_delta_handler(chunk)
                 yield chunk
-                time.sleep(0.02)
+                await asyncio.sleep(0.02)
         else:
-            # Fallback for other providers (as blocks)
-            raw = self._invoke_provider(route=route, task_key=context.task_key, prompt=sanitized_prompt, mode="text")
-            text = self._normalize_text_payload(task_key=context.task_key, raw_payload=raw)
-            _internal_delta_handler(text)
-            yield text
+            raise RuntimeError(f"Async mode not supported for provider '{route.provider}' yet")
+
+        # Post-stream Observability
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        if write_observability and self._observability:
+            full_text = "".join(full_text_collector)
+            self._observability.create_trace(
+                trace_id=context.trace_id,
+                task_key=context.task_key,
+                provider=route.provider,
+                model_name=route.model_name,
+                prompt_version=route.prompt_version,
+                request_hash=request_hash,
+                response_status="success",
+                latency_ms=latency_ms,
+                retry_count=0,
+                fallback_used=False,
+            )
+            self._observability.create_decision_log(
+                trace_id=context.trace_id,
+                module_key=context.task_key,
+                entity_type=context.entity_type,
+                entity_id=context.entity_id,
+                action="success",
+                confidence=0.9,
+                risk_tags=[],
+                policy_flags=[],
+                input_summary=sanitized_prompt[:200],
+                output_summary=full_text[:500],
+                provider=route.provider,
+                model_name=route.model_name,
+                prompt_version=route.prompt_version,
+            )
 
         # Post-stream Observability
         latency_ms = int((time.perf_counter() - start) * 1000)
@@ -184,6 +214,7 @@ class LLMClient:
         route = self._router.resolve_route(context.task_key)
         sanitized_prompt = self._guardrail.sanitize_input(context.prompt)
         request_hash = hashlib.sha256(sanitized_prompt.encode("utf-8")).hexdigest()
+
 
         start = time.perf_counter()
         retry_count = 0
@@ -498,6 +529,9 @@ class LLMClient:
 
     def _invoke_openai_chat_completions(
         self,
+        *,
+        route: ModelRoute,
+        prompt: str,
         base_url: str,
         headers: dict[str, str],
         system_prompt: str = "",
@@ -513,7 +547,7 @@ class LLMClient:
             "messages": messages,
             "temperature": round(route.temperature_milli / 1000, 3),
         }
-        if mode == "json":
+        if mode == "json" and ("gpt-" in route.model_name or "o1-" in route.model_name):
             chat_body["response_format"] = {"type": "json_object"}
         try:
             payload = self._post_json(
@@ -532,15 +566,15 @@ class LLMClient:
             raise RuntimeError("openai_empty_output")
         return self._parse_json_text(text_blob) if mode == "json" else text_blob
 
-    def _yield_openai_stream(
+    async def _yield_openai_stream_async(
         self,
         *,
         route: ModelRoute,
         prompt: str,
         system_prompt: str = "",
         on_text_delta: Callable[[str], None] | None = None,
-    ) -> Iterable[str]:
-        """Internal generator for OpenAI stream."""
+    ) -> AsyncIterator[str]:
+        """Internal async generator for OpenAI stream."""
         import os
         api_key = (self._settings.llm_api_key or os.getenv("AI_HR_LLM_API_KEY") or "").strip()
         base_url = (self._settings.llm_base_url or os.getenv("AI_HR_LLM_BASE_URL") or "https://api.openai.com").strip().rstrip("/")
@@ -561,9 +595,9 @@ class LLMClient:
         for attempt in range(2):
             try:
                 url = f"{base_url}/v1/chat/completions"
-                with self._session.stream("POST", url, json=chat_body, headers=headers, timeout=max(1, route.timeout_seconds)) as resp:
+                async with self._async_session.stream("POST", url, json=chat_body, headers=headers, timeout=max(1, route.timeout_seconds)) as resp:
                     resp.raise_for_status()
-                    for line in resp.iter_lines():
+                    async for line in resp.aiter_lines():
                         if not line: continue
                         line = line.strip()
                         if not line or not line.startswith("data:"): continue
@@ -577,15 +611,15 @@ class LLMClient:
                                 yield delta_text
                         except Exception:
                             continue
-                return  # 正常完成，退出生成器
+                return 
             except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError) as exc:
                 if attempt == 0:
-                    logger.warning(f"LLM Stream connection error (likely stale keep-alive), retrying: {exc}")
+                    logger.warning(f"LLM Async Stream connection error, retrying: {exc}")
                     continue
-                logger.error(f"LLM Stream Yield Error after retry: {exc}", exc_info=True)
+                logger.error(f"LLM Async Stream Yield Error after retry: {exc}", exc_info=True)
                 raise
             except Exception as exc:
-                logger.error(f"LLM Stream Yield Error: {exc}", exc_info=True)
+                logger.error(f"LLM Async Stream Yield Error: {exc}", exc_info=True)
                 raise
 
 
@@ -613,19 +647,17 @@ class LLMClient:
         }
         if mode == "json":
             chat_body["response_format"] = {"type": "json_object"}
-        req = urllib.request.Request(
-            url=f"{base_url}/v1/chat/completions",
-            method="POST",
-            data=json.dumps(chat_body).encode("utf-8"),
-            headers=headers,
-        )
+            
         text_parts: list[str] = []
         try:
-            with urllib.request.urlopen(req, timeout=max(1, route.timeout_seconds)) as resp:
-                for line_bytes in resp:
-                    if not line_bytes:
+            # Using httpx.Client (self._session) for connection pooling/keep-alive
+            url = f"{base_url}/v1/chat/completions"
+            with self._session.stream("POST", url, json=chat_body, headers=headers, timeout=max(1, route.timeout_seconds)) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
                         continue
-                    line = line_bytes.decode("utf-8").strip()
+                    line = line.strip()
                     if not line or not line.startswith("data:"):
                         continue
                     body = line[5:].strip()
@@ -641,8 +673,7 @@ class LLMClient:
                     except Exception:
                         continue
         except Exception as exc:
-            import logging
-            logging.getLogger("ai_hr.llm").error(f"LLM Stream Error: {exc}", exc_info=True)
+            logger.error(f"LLM Stream Error (httpx): {exc}", exc_info=True)
             raise
 
         full_text = "".join(text_parts).strip()
