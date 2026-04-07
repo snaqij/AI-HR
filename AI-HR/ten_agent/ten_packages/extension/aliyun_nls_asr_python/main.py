@@ -159,3 +159,8 @@ class AliyunNlsASRExtension(AsyncExtension):
         except Exception as exc:
             # Avoid flooding logs but show errors
             pass
+
+
+if __name__ == "__main__":
+    from ten_runtime import Main
+    Main(AliyunNlsASRExtension).run()

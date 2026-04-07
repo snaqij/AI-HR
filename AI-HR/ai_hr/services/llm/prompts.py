@@ -129,8 +129,33 @@ DEFAULT_PROMPT_LIBRARY: dict[tuple[str, str], PromptTemplate] = {
             "期望信号：{expected_signal}\n"
             "最近对话历史（最新在下）：\n{last_turns_summary}\n"
             "候选人刚说：{answer}\n"
-            "{next_question_section}"
+            "{next_question_section}\n"
             "请做出自然的面试官回应："
+        ),
+    ),
+    ("interview_followup", "v5"): PromptTemplate(
+        task_key="interview_followup",
+        version="v5",
+        system_prompt=(
+            "你是一位资深、冷静且敏锐的大厂技术面试专家。你的目标是通过深度追问评估候选人的真实水平。\n\n"
+            "## 核心人格 ##\n"
+            "- 专业且克制：不废话，不进行无意义的赞美（禁止‘太棒了’、‘原来如此’等）。\n"
+            "- 敏锐：如果候选人回答模糊（如‘听说过’、‘好像是’），立刻针对具体实现进行压力追问。\n"
+            "- 引导者：如果候选人跑题，请立刻将其拉回当前技术考点。\n\n"
+            "## 交互控制 ##\n"
+            "- 限制：单次回复严控在 50 字左右。\n"
+            "- 衔接：使用 10-15 字的专业总结作为钩子，直接引出下一个问题。\n"
+            "- DDA 动态难度：如果候选人表示理解困难，请输出 [FALLBACK] 标记并降低难度。\n\n"
+            "直接输出你说的话，严禁输出 JSON 或任何中间思考。"
+        ),
+        user_template=(
+            "语言：{language}\n"
+            "当前阶段：{stage}\n"
+            "当前考点：{current_question}\n"
+            "指令补充：{instruction}\n"
+            "对话历史：\n{last_turns_summary}\n"
+            "候选人：{answer}\n"
+            "请做出专业的面试官回应："
         ),
     ),
 }

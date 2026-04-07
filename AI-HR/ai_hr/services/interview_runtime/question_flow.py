@@ -16,9 +16,11 @@ class InterviewQuestionFlowEngine:
             "question_statuses": ["pending"] * question_count,
             "followup_count_current": 0,
             "completed_questions": 0,
-            "interview_stage": "P1",  # P1: Greeting, P2: Self-Intro, P3-P4: Tech, P5: QA, P6: Closing
+            "interview_stage": "S1",  # S1: Greeting, S2: Self-Intro, S3: Project Selection, S4: Deep Dive, S5: Skill Drill, S6: Stress, S7: QA, S8: Closing
+
             "context_flags": {
                 "greeted": False,
+                "connectivity_confirmed": False,
                 "intro_ready": False,
                 "company_info_shared": False,
                 "closing_started": False
@@ -69,7 +71,7 @@ class InterviewQuestionFlowEngine:
         merged = dict(state)
         statuses = list(merged.get("question_statuses", []))
         
-        # P1 和 P5/P6 阶段的逻辑由 Orchestrator 结合语义决定切换
+        # S1 和 S7/S8 阶段的逻辑由 Orchestrator 结合语义决定切换
         if not statuses:
             merged["interview_stage"] = self.derive_stage(state=merged)
             return merged
@@ -81,8 +83,8 @@ class InterviewQuestionFlowEngine:
              merged["interview_stage"] = self.derive_stage(state=merged)
              return merged
 
-        current_stage = merged.get("interview_stage", "P1")
-        if current_stage in ["P1", "P2"]:
+        current_stage = merged.get("interview_stage", "S1")
+        if current_stage in ["S1", "S2", "S3"]:
              return merged
 
         need_followup = bool(evaluation.get("need_followup"))
@@ -109,20 +111,20 @@ class InterviewQuestionFlowEngine:
         """根据题目进度和上下文标记派生面试阶段。"""
         active_stage = state.get("interview_stage", "P1")
         
-        # 如果已经进入 P5/P6，保持或由 Orchestrator 切换
-        if active_stage in ["P5", "P6"]:
+        # 如果已经进入 S7/S8，保持或由 Orchestrator 切换
+        if active_stage in ["S7", "S8"]:
             return active_stage
 
         statuses = list(state.get("question_statuses", []))
         active_idx = int(state.get("active_question_index", 0))
         
         # 初始阶段
-        if active_stage == "P1":
-             return "P1"
+        if active_stage == "S1":
+             return "S1"
         
-        # 题库题目跑完，进入 QA 环节
+        # 题库题目跑完，进入 S7 QA 环节
         if statuses and active_idx >= len(statuses):
-            return "P5"
+            return "S7"
 
         return active_stage
 

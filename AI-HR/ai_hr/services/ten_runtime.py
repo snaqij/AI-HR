@@ -113,9 +113,7 @@ class TENRuntimeManager:
                 metadata = rtc.get("metadata") or {}
                 bot_id_val = rtc.get("ten_bot_user_id") or metadata.get("ten_bot_uid") or 0
                 remote_id_val = rtc.get("uid") or 0
-                token = ""
-                if not self._settings.agora_app_certificate:
-                    token = rtc.get("ten_bot_token") or metadata.get("ten_bot_token") or ""
+                token = rtc.get("ten_bot_token") or metadata.get("ten_bot_token") or ""
                 
                 # Use str() for user_id/remote_user_id to satisfy manifest typing (string)
                 # Use int() for uid/remote_uid to satisfy internal extension logic (integer)
@@ -124,10 +122,10 @@ class TENRuntimeManager:
                         "app_id": rtc.get("app_id") or self._settings.agora_app_id or "",
                         "channel": rtc.get("channel_name") or rtc.get("room_id") or "",
                         "token": token,
+                        "stream_id": int(bot_id_val),
+                        "remote_stream_id": int(remote_id_val),
                         "user_id": str(bot_id_val),
-                        "uid": int(bot_id_val),
                         "remote_user_id": str(remote_id_val),
-                        "remote_uid": int(remote_id_val),
                         "enable_string_uid": False,
                         "subscribe_audio": True,
                         "publish_audio": True,

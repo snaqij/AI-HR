@@ -48,12 +48,14 @@ class TencentTTSExtension(AsyncExtension):
         secret_key = config.get("secret_key", "")
         region = config.get("region", "ap-guangzhou")
         app_id = config.get("app_id", "")
+        voice_type = config.get("voice_type", 101001) # Default to Zhiqi (Female)
 
         self.provider = TencentTTSProvider(
             secret_id=secret_id,
             secret_key=secret_key,
             region=region,
             app_id=app_id,
+            voice_type=voice_type,
             timeout_ms=5000,
             ws_streaming_enabled=True,
         )
@@ -240,3 +242,8 @@ class TencentTTSExtension(AsyncExtension):
 
     async def on_pcm_frame(self, ten_env: AsyncTenEnv, audio_frame: AudioFrame) -> None:
         pass
+
+
+if __name__ == "__main__":
+    from ten_runtime import Main
+    Main(TencentTTSExtension).run()

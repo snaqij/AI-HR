@@ -2,6 +2,13 @@
   "type": "extension",
   "name": "interview_orchestrator_python",
   "version": "0.1.0",
+  "dependencies": [
+    {
+      "type": "system",
+      "name": "ten_runtime_python",
+      "version": "0.11"
+    }
+  ],
   "api": {
     "data_in": [
       {
@@ -16,6 +23,9 @@
     "cmd_in": [
       {
         "name": "on_connected"
+      },
+      {
+        "name": "start_of_sentence"
       }
     ]
   }

@@ -46,32 +46,38 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.candidate_name = "候选人"
         self.company_info = ""
         self.BRIDGES = [
-            "好的，我大概了解了。那咱们换个话题，聊聊",
-            "明白，那关于这块我们就先聊到这里。下面我想了解一下",
-            "嗯，原来是这样。那咱们继续，我想听听你对...的看法。比如",
-            "听起来你在这一块确实有很多心得。那咱们深入一下，谈谈",
-            "好的，非常有参考价值。那咱们进入下一个环节，关于"
+            "明白了。那咱们聊聊",
+            "好的。关于这块，我想听听你对...的看法。比如",
+            "原来如此。那咱们针对你的项目场景深入一下，谈谈",
+            "理解了。那咱们进入下一个环节，关于"
         ]
         self.EXPERT_BRIDGES = [
-            "听起来你的项目经验非常扎实，业务逻辑也考虑得很清楚。那咱们正式开始技术交流，",
-            "明白，你的背景和我们这个岗位的匹配度确实挺高的。那咱们深入聊聊，",
-            "好的，感谢你的分享，我对你的履历有了初步了解。那咱们先从技术底层开始，",
-            "很有意思的经历。那咱们进入正题，我想针对你的项目细节问一下，"
+            "简历背景我大概了解了。保持高效，咱们直接进入技术交流，",
+            "明白。那咱们深挖一下你的项目底层，",
+            "好的。咱们先从系统实战演练开始聊起，",
+            "理解了。我想针对你提到的核心模块问一下，"
         ]
+        self.EXPERT_FILLERS = [
+            "好的。",
+            "OK。",
+            "明白了。",
+            "懂你的意思了。",
+            "嗯，听懂了。",
+            "了解。",
+            "关于这一点，",
+            "原来是这样。"
+        ]
+        self.last_filler = ""
         self.system_prompt = (
-            "你是一名亲切且专业的资深技术专家面试官。你的目标是让候选人解压，在大厂面试中遇到了一位非常老练且有人情味的朋友。\n\n"
-            "## 核心人格设定 ##\n"
-            "- 禁止透露你是 AI 或模型。严禁使用‘你好，我是 AI’或任何机器人的措辞。\n"
-            "- 语气要老道、沉稳但亲切。使用‘原来是这样’、‘那咱们聊聊...’、‘刚才你提到点子上去了’。\n"
-            "- 说话干脆利落，严禁啰嗦，总字数严控在 50 字左右。\n\n"
-            "## 判定逻辑 (重要) ##\n"
-            "- **回答相关性**：如果候选人的回答完全无关、过短或纯噪音（如‘去下载’、‘信号不好’），请不要判断为满意。你要温柔地引导候选人回到面试主题上，例如：‘咱们还是回到刚才聊的问题上...’。\n"
-            "- **满意判定**：只有当候选人的回答确实涉及了技术核心或项目细节，且比较透彻时，请在回复的最开始加上 [SATISFIED] 标记。\n\n"
-            "## 严禁使用的词汇 (禁术词表) ##\n"
-            "- ‘AI’、‘大模型’、‘指令’、‘任务’、‘评估’、‘正在处理’、‘明白’、‘收到’、‘收到你的回答’。\n\n"
-            "## 交互风格 ##\n"
-            "- 如果你判断当前题目已结束（输出 [SATISFIED]），**请不要**自行询问下一道大题，只需完整评价候选人的表现。下一道题目由系统编排器自动衔接。\n"
-            "- 严禁输出任何 Markdown 标记、标题或标签。"
+            "你是一名资深、冷静且敏锐的大厂技术面试专家（P8+）。你的目标是通过深维度追问评估候选人的真实实力。\n\n"
+            "## 核心人格 ##\n"
+            "- 专业且克制：严禁废话，不进行无意义的赞美（禁止‘太棒了’、‘原来如此’、‘非常有参考价值’等）。\n"
+            "- 敏锐：如果候选人回答模糊（如‘听说过’、‘好像是’），立刻针对具体实现进行压力追问。\n"
+            "- 引导者：如果候选人跑题，请立刻使用干练的衔接语将其拉回当前技术考点。\n"
+            "- 禁止透露 AI 身份。\n\n"
+            "## 交互控制 ##\n"
+            "- 限制：说话干脆利落，单次回复严控在 50 字以内，严禁 Markdown。\n"
+            "- DDA 动态难度：如果候选人对高难度问题理解困难（如连续回答‘不清楚’、‘没做过’），请在回复中包含‘[FALLBACK]’标记，并降低难度转而提问基础原理或应用场景。"
         )
 
     async def on_init(self, ten_env: AsyncTenEnv) -> None:
@@ -89,6 +95,10 @@ class InterviewOrchestratorExtension(AsyncExtension):
 
         self.task_key = config.get("task_key", "interview_followup")
         self.max_followup = int(config.get("max_followup", 2)) or 2
+        
+        # 核心状态初始化
+        self.is_user_speaking = False
+        self.session_id = str(uuid.uuid4())
         
         # 捕获简历和职位要求上下文
         self.resume_summary = config.get("resume_summary", "一名资深后端开发工程师")
@@ -158,18 +168,29 @@ class InterviewOrchestratorExtension(AsyncExtension):
 
     async def on_cmd(self, ten_env: AsyncTenEnv, cmd: Cmd) -> None:
         cmd_name = cmd.get_name()
-        print(f"[orchestrator] on_cmd: {cmd_name}", flush=True)
+        
+        if cmd_name == "start_of_sentence":
+            self.is_user_speaking = True
+            print("[orchestrator] User started speaking (VAD START)", flush=True)
+            # 同时通知 TTS 打断（冗余保护）
+            await ten_env.send_cmd(Cmd.create("interrupt"))
+            
+        elif cmd_name == "end_of_sentence":
+            self.is_user_speaking = False
+            print("[orchestrator] User stopped speaking (VAD END)", flush=True)
 
-        if cmd_name == "on_connected":
-            print("[orchestrator] Sending personalized greeting...", flush=True)
-            welcome_msg = (
-                f"{self.candidate_name}，你好。我是今天负责跟你交流的面试官。很高兴能有机会一起探讨一下。咱们今天的面试预计大概 35 到 60 分钟，"
-                f"会分为自我介绍、核心项目深挖、以及最后的公司介绍和答疑三个环节。准备好了吗？那咱们先从一个简短的自我介绍开始吧！"
-            )
-            await self._send_to_tts(ten_env, welcome_msg, is_final=False)
-            await self._send_to_tts(ten_env, "", is_final=True)
-            self.state["interview_stage"] = "P1"
-            self.state["context_flags"]["greeted"] = True
+        elif cmd_name == "on_connected":
+            # 只有当面试还未开始(处于S1)时，才允许初始化进度。
+            # 防止网络波动或音轨切换导致的 on_connected 信号重置面试。
+            if self.state.get("interview_stage", "S1") == "S1" and not self.state["context_flags"].get("greeted", False):
+                print("[orchestrator] First connection. Sending connectivity check handshake...", flush=True)
+                handshake_msg = f"{self.candidate_name}，你好。喂，听得到我说话吗？"
+                await self._send_to_tts(ten_env, handshake_msg, is_final=False)
+                await self._send_to_tts(ten_env, "", is_final=True)
+                self.state["interview_stage"] = "S1"
+                self.state["context_flags"]["greeted"] = True
+            else:
+                print(f"[orchestrator] Reconnection detected in stage {self.state.get('interview_stage')}. Skipping state reset.", flush=True)
         elif cmd_name == "start_of_sentence":
             print("[orchestrator] user interrupted. Resetting turn state.", flush=True)
             self.turn_triggered = False # 关键：用户开口，重置触发权限
@@ -184,24 +205,34 @@ class InterviewOrchestratorExtension(AsyncExtension):
     async def on_data(self, ten_env: AsyncTenEnv, data: Data) -> None:
         transcript, _ = data.get_property_string("text")
         is_final, _ = data.get_property_bool("is_final")
+        stage = self.state.get("interview_stage", "S1")
 
         transcript = (transcript or "").strip()
         asr_final_ts, _ = data.get_property_float("asr_final_ts")
         asr_sentence_start_ts, _ = data.get_property_float("asr_sentence_start_ts")
         asr_physical_stop_ts, _ = data.get_property_float("asr_physical_stop_ts")
         
-        # 扩展噪音/语气词黑名单
-        skip_phrases = {"嗯", "喂", "呃", "啊", "那个", "好的", "没关系", "就是", "其实", "对", "好", "行", "明白", "可以"}
-
+        # 扩展噪音/语气词黑名单与短语判定
+        skip_phrases = {"嗯", "呃", "啊", "那个", "就是", "其实", "你看", "这个", "那", "这个那个", "这种", "那样", "这么说"}
+        
         # 逻辑：对于 Final 包，增加过滤逻辑以防噪音误触发
         if is_final:
             if transcript == self.last_final_transcript:
                 return # 防止重复
             self.last_final_transcript = transcript
             
-            # 过滤短噪音或单字语气词
-            if transcript in skip_phrases or len(transcript) < 2:
+            # 使用更纯净的文本进行判定
+            clean_text = transcript.strip("。，？！ ")
+            
+            # 过滤短噪音、单字语气词，以及起始阶段的极短杂音 (如 "你看")
+            if clean_text in skip_phrases or len(clean_text) < 2:
                 print(f"[orchestrator] Final ignored (noise/filler): {transcript}", flush=True)
+                return
+            
+            # 针对 S1/S2 阶段，对 2 个字以内的短语进行更严格的语义拦截（除非是特定的握手词/确认词）
+            handshake_keywords = {"在的", "听到", "你好", "哈喽", "hello", "hi", "可以", "行", "好", "好的", "没问题", "对", "明白"}
+            if len(clean_text) <= 2 and stage in ["S1", "S2"] and clean_text not in handshake_keywords:
+                print(f"[orchestrator] Final ignored (short/potential noise in {stage}): {transcript}", flush=True)
                 return
 
             # 如果本回合已经抢跑过了，我们比对一下文本
@@ -224,57 +255,57 @@ class InterviewOrchestratorExtension(AsyncExtension):
 
     async def _handle_interaction(self, ten_env: AsyncTenEnv, transcript: str, asr_final_ts: float, asr_sentence_start_ts: float, asr_physical_stop_ts: float, orch_receive_ts: float) -> None:
         try:
-            # 1. 获取当前题目上下文
+            # 获取当前阶段和原始索引
+            stage = self.state.get("interview_stage", "S1")
+            original_index = self.state.get("active_question_index", 0)
+            
+            # 获取当前题目
             current_q = self.flow_engine.current_question(
                 state=self.state,
                 question_pack=self.question_pack,
             ) or {}
-            
+
+            # 同步题目中的阶段标签，但严禁在开场环节（S1-S3）被技术题库覆盖
+            if current_q and current_q.get("stage"):
+                q_stage = current_q.get("stage")
+                # 只有当系统已经进入 S4 及以后，或者不在前三个受保护环节时，才同步题库 Stage
+                if stage not in ["S1", "S2", "S3", "S7", "S8"]:
+                    stage = q_stage
+                    self.state["interview_stage"] = stage
+
             evaluation = self.flow_engine.evaluate_answer(
                 transcript=transcript,
                 confidence=0.95,
             )
-            
-            # 2. 基础评价判定 (同步阶段不提前推进状态，仅作为 LLM 判定参考)
-            # self.state = self.flow_engine.apply_turn_result(
-            #     state=self.state,
-            #     evaluation=evaluation,
-            #     current_q_max_followups=current_q.get("max_followups", 2),
-            #     force_complete=False 
-            # )
-            # 注：延迟到 LLM 输出后再决定是否推进状态
-            
-            stage = self.state.get("interview_stage", "P1")
-            print(f"[orchestrator] Interaction Triggered. Stage: {stage}", flush=True)
+                
+            print(f"[orchestrator] Interaction Triggered. Stage: {stage} (Index: {self.state.get('active_question_index')})", flush=True)
 
-            # --- 特殊阶段直接处理 ---
+            # --- 状态机流转与干练衔接逻辑 (S1-S3, S7-S8) ---
             
-            # P1 (Greeting 结束) -> P2 (自我介绍正在进行)
-            if stage == "P1":
-                 self.state["interview_stage"] = "P2"
-                 # 此处不进入 Fast Path，继续让 LLM 处理自我介绍
-
-            # P2 (自我介绍结束) -> P3 (正式技术环节)
-            if stage == "P2" and not self.state["context_flags"]["intro_ready"]:
-                 self.state["context_flags"]["intro_ready"] = True
-                 self.state["interview_stage"] = "P3"
-                 
-                 # FAST PATH: 自流转到第一道题
-                 import random
-                 bridge = random.choice(self.EXPERT_BRIDGES)
-                 first_q = self.flow_engine.current_question(state=self.state, question_pack=self.question_pack)
-                 if first_q:
-                      fast_msg = f"{bridge}{first_q['question']}"
-                      print(f"[orchestrator] P2->P3 FAST PATH: {fast_msg}", flush=True)
-                      await self._send_to_tts(ten_env, fast_msg, is_final=False)
-                      await self._send_to_tts(ten_env, "", is_final=True)
+            # S1 (Greeting Handshake) -> S2 (正式开场与自我介绍提示)
+            if stage == "S1":
+                 if not self.state["context_flags"]["connectivity_confirmed"]:
+                      # 此时已经通过了上面的 Noise 过滤，说明是正常的 2 字以上有效输入
+                      self.state["context_flags"]["connectivity_confirmed"] = True
+                      self.state["interview_stage"] = "S2"
                       
-                      # 同步更新历史，确保下一轮上下文一致
-                      self.history.append({"q": "自我介绍", "a": transcript})
+                      formal_welcome = (
+                          "好的，没问题。那咱们就正式开始了。我是今天的面试官，很高兴能和你交流。"
+                          "咱们今天的面试预计 40 分钟左右，分为：背景介绍、项目深挖、以及最后的公司介绍和答疑三个环节。"
+                          "那咱们先从一个简短的自我介绍开始吧，你可以重点讲讲最近的项目心得。"
+                      )
+                      print(f"[orchestrator] Handshake confirmed. Starting session. Input: {transcript}", flush=True)
+                      await self._send_to_tts(ten_env, formal_welcome, is_final=False)
+                      await self._send_to_tts(ten_env, "", is_final=True)
                       return
+                 
+                 self.state["interview_stage"] = "S2"
+
+            # S2/S3 的硬编码在前置环节已移除，改为依靠 LLM [SATISFIED] 信号在 turn 结束时触发。
+            # 这可以有效防止类似 "Come on" 等杂音由于被 ASR 误读而意外跳过自我介绍环节。
 
             # P5 (Company QA 环节)
-            if stage == "P5":
+            if stage == "S7":
                  if not self.state["context_flags"]["company_info_shared"]:
                       self.state["context_flags"]["company_info_shared"] = True
                       reply_msg = f"刚才的技术环节我们聊得很深入，我也对你的背景有了更清晰的认识。接下来，我为你简单介绍一下我们公司的情况。\n\n{self.company_info}\n\n那么，关于我们团队或者这个岗位，你有什么想了解的吗？"
@@ -284,10 +315,10 @@ class InterviewOrchestratorExtension(AsyncExtension):
                  
                  # 如果用户已经问完了
                  if any(p in transcript for p in ["没问题", "没有了", "大概了解", "谢谢", "再见"]):
-                      self.state["interview_stage"] = "P6"
+                      self.state["interview_stage"] = "S8"
                       # 下面会进入 P6 逻辑
 
-            if stage == "P6":
+            if stage == "S8":
                  if not self.state["context_flags"]["closing_started"]:
                       self.state["context_flags"]["closing_started"] = True
                       closing_msg = f"好的，那今天的交流就先到这里。后续的安排 HR 会在 3 个工作日内告知你。非常感谢你的支持，回见！"
@@ -295,16 +326,45 @@ class InterviewOrchestratorExtension(AsyncExtension):
                       await self._send_to_tts(ten_env, "", is_final=True)
                  return
 
-            # --- LLM 业务逻辑 (P2-P4) ---
+            # --- LLM 业务逻辑 (S2-S6) ---
+            
+            # 获取下一题预览，用于支持 LLM 主动转场
+            next_q = self.flow_engine.current_question(
+                state={"active_question_index": self.state["active_question_index"] + 1},
+                question_pack=self.question_pack
+            )
+            next_q_text = next_q.get("question", "面试结束，进入 QA 环节") if next_q else "没有更多技术题了，准备进入 QA 环节"
 
-            # 构造面试指令 (提前计算以维持 Prompt 稳定性)
-            if stage == "P5":
-                 instruction = f"你现在是答疑时间。请根据公司信息回答候选人的问题。公司信息：{self.company_info}。回答要专业且有吸引力。限制 50 字。"
+            # 构造面试指令 (结合 DDA、锚点信息与预览题目)
+            if stage == "S7":
+                 instruction = f"你现在是答疑时间。请根据公司信息简短回答。公司信息：{self.company_info}。限制 50 字以内，不准说废话。"
             else:
-                 instruction = (
-                     f"当前考察点：{current_q.get('question', '背景了解')}。期待信号：{current_q.get('expected_signal', '清晰表达')}。\n"
-                     f"如果回答不足，请进行技术追问。如果回答已经非常透彻，请输出 [SATISFIED] 标记。限制 50 字。"
-                 )
+                 is_last_followup = (self.state["followup_count_current"] >= current_q.get("max_followups", 2) - 1)
+                 success_signals = ", ".join(current_q.get("success_signals", []))
+                 tech_context = current_q.get("technical_context", "")
+
+                 # 针对不同阶段的动态指令
+                 # 针对不同阶段的动态指令
+                 if stage in ["S1", "S2", "S3"]:
+                     instruction = (
+                         f"当前环节：{stage}。核心引导：请继续深度引导候选人介绍项目背景及个人职责。\n"
+                         f"## 重要流转指令 ##\n"
+                         f"1. 这是一个引导环节。当确认背景完整时，请务必输出 [SATISFIED] 标记推进到技术环节。\n"
+                         f"2. 限制 50 字以内。资深面试官语气。禁止复读。"
+                     )
+                 else:
+                     instruction = (
+                         f"当前环节：{stage}。核心锚点题：{current_q.get('question')}。\n"
+                         f"技术背景：{tech_context}\n"
+                         f"期望成功信号：{success_signals}\n"
+                         f"## 重要流转指令 ##\n"
+                         f"1. 答透或说“跳过”即输出 [SATISFIED] 跳转。\n"
+                         f"2. 下一题预览：{next_q_text}\n"
+                         f"3. 限制 50 字。严禁复读问题。"
+                     )
+                 
+                 if is_last_followup:
+                     instruction += "\n注意：这是本题最后一次追问机会，无论回答如何，结束后请准备切题。"
 
             # --- 核心改进：针对 DeepSeek V3 的 Context Caching 优化 ---
             # 这里的顺序极其重要：System Prompt -> Instructions -> History -> Latest Context
@@ -336,13 +396,35 @@ class InterviewOrchestratorExtension(AsyncExtension):
             )
 
             print(f"[orchestrator] triggering async LLM worker for stage {stage}...", flush=True)
+            
+            # --- 核心改进：Filler ACK 抢跑 (仅在技术深挖环节开启) ---
+            if stage in ["S4", "S5", "S6"]:
+                import random
+                available_fillers = [f for f in self.EXPERT_FILLERS if f != self.last_filler]
+                filler = random.choice(available_fillers)
+                self.last_filler = filler
+                print(f"[orchestrator] Sending filler for stage {stage}: {filler}", flush=True)
+                await self._send_to_tts(ten_env, filler, is_final=False)
+            
             llm_start_ts = time.perf_counter()
             self.llm_task = asyncio.create_task(self._llm_streaming_worker(ten_env, context, asr_final_ts, asr_sentence_start_ts, asr_physical_stop_ts, orch_receive_ts, llm_start_ts, transcript))
             full_reply_text = await self.llm_task
 
+            # --- 安全性防御：检查 LLM 返回值是否有效 ---
+            if full_reply_text is None:
+                print("[orchestrator] LLM Task returned None. Skipping state update.", flush=True)
+                return
+
             # --- 核心改进：状态推进与接下来逻辑 ---
             # 无论 LLM 是否满意，或者是回答质量本身太差需结束追问
             was_satisfied = "[SATISFIED]" in full_reply_text
+            was_fallback = "[FALLBACK]" in full_reply_text
+            
+            if was_fallback:
+                 print(f"[orchestrator] LLM triggered FALLBACK for stage {stage}. Consuming one follow-up turn.", flush=True)
+                 was_satisfied = False
+                 evaluation["need_followup"] = True
+
             self.state = self.flow_engine.apply_turn_result(
                 state=self.state,
                 evaluation=evaluation,
@@ -350,28 +432,38 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 force_complete=was_satisfied
             )
 
+            if was_satisfied:
+                if stage == "S2":
+                    self.state["interview_stage"] = "S3"
+                elif stage == "S3":
+                    self.state["interview_stage"] = "S4"
+            else:
+                # 兜底：如果在 S2/S3 阶段且已回答了实质性内容 (或者回答较长)，也执行转场，防止卡死
+                if stage in ["S2", "S3"] and (not evaluation.get("need_followup", True) or len(transcript) > 15):
+                    next_stage = "S3" if stage == "S2" else "S4"
+                    print(f"[orchestrator] Heuristic transition: {stage} -> {next_stage} (input length/quality)", flush=True)
+                    self.state["interview_stage"] = next_stage
+                    print("[orchestrator] Transitioning S2 -> S3", flush=True)
+                elif stage == "S3":
+                    self.state["interview_stage"] = "S4"
+                    print("[orchestrator] Transitioning S3 -> S4", flush=True)
+
             if was_satisfied or self.state["followup_count_current"] == 0:
-                print(f"[orchestrator] Terminating topic. was_satisfied={was_satisfied}, final_followup={self.state['followup_count_current']==0}", flush=True)
+                print(f"[orchestrator] Terminating topic. was_satisfied={was_satisfied}", flush=True)
                 
-                # 获取刷新后的下一题
                 next_q = self.flow_engine.current_question(state=self.state, question_pack=self.question_pack)
                 next_stage = self.state.get("interview_stage")
 
-                # 如果有下一题且还在技术环节，执行 Fast Path
-                if next_q and next_stage in ["P3", "P4"]:
-                    import random
-                    bridge = random.choice(self.BRIDGES)
-                    fast_msg = f"{bridge}{next_q['question']}"
-                    print(f"[orchestrator] FAST PATH TRIGGERED: {fast_msg}", flush=True)
-                    
-                    # 发送 Fast Path 内容
-                    await self._send_to_tts(ten_env, fast_msg, is_final=False)
-                    await self._send_to_tts(ten_env, "", is_final=True)
-                    return
+                # 如果还在技术环节 (S4/S5/S6)，执行干练衔接
+                if next_q and next_stage in ["S4", "S5", "S6"]:
+                    bridge_instr = "针对刚聊的内容做一个 10 字以内的专业确认，然后立刻进入下一个考点。"
+                    # 实际由下一轮处理，或者在这里预发一个引导。
+                    # 为了保证“丝滑”，我们由下一轮 LLM 自动处理，此处不发 Fast Path。
+                    pass
 
             # 题库消耗完毕后派生阶段更新
-            if self.state["active_question_index"] >= len(self.question_pack["questions"]) and stage not in ["P5", "P6"]:
-                 self.state["interview_stage"] = "P5"
+            if self.state["active_question_index"] >= len(self.question_pack["questions"]) and stage not in ["S7", "S8"]:
+                 self.state["interview_stage"] = "S7"
         except asyncio.CancelledError:
             print("[orchestrator] LLM interaction task cancelled.", flush=True)
         except Exception as exc:
@@ -431,12 +523,17 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 emitted = True
                 import re
                 print(f"[orchestrator] llm raw sentence: {sentence}", flush=True)
-                # 过滤 [SATISFIED] 标记，防止念出内部标签
+                # 过滤 [SATISFIED] 和 [FALLBACK] 标记，防止念出内部标签
                 clean_sentence = re.sub(r'\[.*?\]', '', sentence).strip()
                 if not clean_sentence:
                     continue
                 
                 print(f"[orchestrator] llm clean sentence: {clean_sentence}", flush=True)
+                # 核心避让逻辑：在发送给 TTS 之前，检查用户是否正在说话
+                while self.is_user_speaking:
+                    print(f"[orchestrator] AI Avoidance: Waiting for user to finish speaking before sending: {clean_sentence[:20]}...", flush=True)
+                    await asyncio.sleep(0.2) # 每 200ms 检查一次
+
                 # 透传物理闭口时间，用于 TTS 侧计算真实闭环时延
                 await self._send_to_tts(ten_env, clean_sentence, is_final=False, asr_physical_stop_ts=asr_physical_stop_ts, trace_id=context.trace_id)
 
