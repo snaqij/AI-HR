@@ -143,7 +143,7 @@ class AIInterviewSessionHandoffResult(BaseModel):
 class AIInterviewQuestionGenerateRequest(BaseModel):
     """生成面试问题集请求。"""
 
-    question_count: int = Field(default=8, ge=1, le=20)
+    question_count: int = Field(default=14, ge=1, le=20)
     source: str = Field(default="resume+jd", min_length=1, max_length=64)
     force_regenerate: bool = True
 
@@ -155,6 +155,9 @@ class AIInterviewQuestionItem(BaseModel):
     dimension: str
     expected_signal: str
     followup_condition: str
+    stage: str | None = None
+    max_followups: int | None = None
+    success_signals: list[str] = Field(default_factory=list)
 
 
 class AIInterviewQuestionGenerateResult(BaseModel):
@@ -173,7 +176,7 @@ class AIInterviewQuestionPackPrebuildRequest(BaseModel):
     candidate_id: str = Field(min_length=1)
     job_id: str = Field(min_length=1)
     language: str = Field(default="zh-CN", pattern="^(zh-CN|en-US)$")
-    question_count: int = Field(default=10, ge=1, le=20)
+    question_count: int = Field(default=14, ge=1, le=20)
     source: str = Field(default="resume+jd", min_length=1, max_length=64)
 
 

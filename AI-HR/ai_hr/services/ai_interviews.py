@@ -2698,17 +2698,102 @@ class AIInterviewService:
         }
 
     @staticmethod
+    def _shorten_question_text(question: str) -> str:
+        """Lightly normalize question text without aggressive truncation."""
+
+        text = re.sub(r"\s+", " ", str(question or "")).strip()
+        return text
+
+    @staticmethod
+    def _normalize_stage_code(raw_stage: str, dimension: str = "") -> str:
+        stage = str(raw_stage or "").strip().upper()
+        if stage in {"S2", "S3", "S4", "S5", "S6", "S7"}:
+            return stage
+
+        hint = f"{raw_stage} {dimension}".lower()
+        if any(
+            token in hint
+            for token in ("自我介绍", "沟通", "经历概述", "intro", "self_intro", "introduction")
+        ):
+            return "S2"
+        if any(
+            token in hint
+            for token in ("项目深挖", "项目经验", "ownership", "模块", "挑战", "project", "tradeoff")
+        ):
+            return "S4"
+        if any(token in hint for token in ("实习", "职责", "协作", "intern", "experience_validation")):
+            return "S5"
+        if any(
+            token in hint
+            for token in ("系统设计", "排查", "性能", "故障", "system", "troubleshooting", "capability_probe")
+        ):
+            return "S6"
+        if any(token in hint for token in ("反问", "团队", "公司介绍", "qa", "company_qa")):
+            return "S7"
+        return "S3"
+
+    @staticmethod
+    def _repair_question_text(question: str, *, dimension: str, language: str = "zh-CN") -> str:
+        text = str(question or "").strip()
+        if not text or language == "en-US":
+            return text
+
+        interrogatives = (
+            "怎么",
+            "为什么",
+            "如何",
+            "哪些",
+            "哪块",
+            "哪个",
+            "有没有",
+            "能否",
+            "能不能",
+            "介绍",
+            "聊聊",
+            "说说",
+            "举例",
+            "结合",
+            "什么",
+        )
+        if text.endswith(("？", "?")) and not any(token in text for token in interrogatives):
+            stem = text.rstrip("？?").rstrip("。")
+            if stem.startswith(("你提到", "你说", "你简历里写了", "你简历里提到", "你对", "你熟悉", "你做过", "岗位要求")):
+                return f"{stem}，能具体说说吗？"
+        if len(text) < 14 and text.endswith(("？", "?")):
+            stem = text.rstrip("？?").rstrip("。")
+            return f"{stem}，具体是怎么做的？"
+        return text
+
+    @staticmethod
     def _normalize_question_item(item: dict | object) -> dict | None:
         if not isinstance(item, dict):
             return None
-        question = str(item.get("question") or "").strip()
+        dimension = str(item.get("dimension") or "communication").strip() or "communication"
+        stage = AIInterviewService._normalize_stage_code(str(item.get("stage") or ""), dimension)
+        question = AIInterviewService._shorten_question_text(str(item.get("question") or "").strip())
+        question = AIInterviewService._repair_question_text(question, dimension=dimension, language="zh-CN")
         if not question:
             return None
+        try:
+            max_followups = int(item.get("max_followups") or 2)
+        except (TypeError, ValueError):
+            max_followups = 2
         return {
             "question": question,
-            "dimension": str(item.get("dimension") or "communication").strip() or "communication",
+            "dimension": dimension,
             "expected_signal": str(item.get("expected_signal") or "").strip(),
             "followup_condition": str(item.get("followup_condition") or "").strip(),
+            "stage": stage,
+            "max_followups": max(1, min(3, max_followups)),
+            "success_signals": [
+                str(value).strip()
+                for value in (
+                    item.get("success_signals")
+                    if isinstance(item.get("success_signals"), list)
+                    else [item.get("success_signals")] if item.get("success_signals") else []
+                )
+                if str(value).strip()
+            ],
         }
 
     @staticmethod
@@ -2719,7 +2804,7 @@ class AIInterviewService:
             for token in re.findall(r"[a-z][a-z0-9_+\-.]{2,}", text):
                 tokens.add(token)
         else:
-            for term in ("性能", "并发", "架构", "稳定性", "排查", "数据库", "系统", "上线", "故障", "可用性", "扩展性"):
+            for term in ("性能", "并发", "架构", "稳定性", "排查", "数据库", "系统", "线上", "故障", "可用性", "扩展性"):
                 if term in text:
                     tokens.add(term)
         return {token for token in tokens if token}
@@ -2744,9 +2829,49 @@ class AIInterviewService:
             if any(term in text for term in ("latency", "throughput", "tradeoff", "incident", "scalability", "observability")):
                 base += 8
         else:
-            if any(term in text for term in ("性能", "并发", "架构", "排查", "指标", "容量", "稳定性", "故障", "权衡")):
+            if any(term in text for term in ("\u6027\u80fd", "\u5e76\u53d1", "\u67b6\u6784", "\u6392\u67e5", "\u6307\u6807", "\u5bb9\u91cf", "\u7a33\u5b9a\u6027", "\u6545\u969c", "\u6743\u8861")):
                 base += 8
         return base
+
+    @staticmethod
+    def _stage_quota_plan(question_count: int) -> dict[str, int]:
+        total = max(1, int(question_count or 0))
+        if total >= 14:
+            return {"S2": 1, "S3": 8, "S4": 2, "S5": 1, "S6": 1, "S7": 1}
+        if total >= 12:
+            return {"S2": 1, "S3": 7, "S4": 1, "S5": 1, "S6": 1, "S7": 1}
+        if total >= 10:
+            return {"S2": 1, "S3": 6, "S4": 1, "S5": 1, "S6": 1}
+        return {"S2": 1, "S3": max(1, total - 3), "S4": 1, "S6": 1}
+
+    def _build_stage_seed_questions(
+        self,
+        *,
+        job_requirements: str,
+        skills: list[str],
+        language: str,
+    ) -> list[dict]:
+        primary_skill = next((str(item).strip() for item in (skills or []) if str(item).strip()), "核心技术")
+        job_hint = (job_requirements or "").strip()[:80] or "岗位要求"
+        if language == "en-US":
+            primary_skill = primary_skill or "core skill"
+            job_hint = (job_requirements or "").strip()[:80] or "job requirements"
+            return [
+                {"stage": "S2", "question": "Please give me a short self-introduction, focusing on your recent project and role.", "dimension": "self_intro", "expected_signal": "Recent experience, role, and main project", "followup_condition": "Follow up if the introduction is scattered", "max_followups": 1, "success_signals": ["recent experience", "role", "main project"]},
+                {"stage": "S4", "question": f"In the project where you used {primary_skill} most deeply, what was the hardest part you handled yourself?", "dimension": "project_deep_dive", "expected_signal": "Personal ownership, technical challenge, handling approach", "followup_condition": "Follow up if ownership is unclear", "max_followups": 2, "success_signals": ["personal ownership", "technical challenge", "handling approach"]},
+                {"stage": "S4", "question": "Which design choice in that project needed the most trade-off, and why?", "dimension": "project_tradeoff", "expected_signal": "Trade-off thinking, constraints, design rationale", "followup_condition": "Follow up if trade-offs are missing", "max_followups": 2, "success_signals": ["trade-off", "constraints", "design rationale"]},
+                {"stage": "S5", "question": "Looking at your collaboration or internship-like experience, what did you really own end to end?", "dimension": "experience_validation", "expected_signal": "Actual ownership, delivery depth, collaboration boundary", "followup_condition": "Follow up if the answer stays at team level", "max_followups": 2, "success_signals": ["actual ownership", "delivery depth", "collaboration boundary"]},
+                {"stage": "S6", "question": "If one of your services suddenly slows down online, what troubleshooting order would you follow?", "dimension": "capability_probe", "expected_signal": "Troubleshooting path, metrics awareness, diagnosis order", "followup_condition": "Follow up if there are no concrete steps", "max_followups": 2, "success_signals": ["troubleshooting path", "metrics awareness", "diagnosis order"]},
+                {"stage": "S7", "question": "After the technical part, what would you most want to know about this role or team?", "dimension": "company_qa", "expected_signal": "Candidate concern, role understanding focus", "followup_condition": "No follow-up unless unclear", "max_followups": 1, "success_signals": ["candidate concern", "role understanding focus"]},
+            ]
+        return [
+            {"stage": "S2", "question": "先简单介绍一下你自己，重点说最近的项目和你的角色。", "dimension": "self_intro", "expected_signal": "最近经历、项目方向、角色定位", "followup_condition": "如果介绍发散，追问最近项目和核心职责", "max_followups": 1, "success_signals": ["最近经历", "项目方向", "角色定位"]},
+            {"stage": "S4", "question": f"你用 {primary_skill} 最深的那个项目里，最难的点是什么？你当时是怎么处理的？", "dimension": "project_deep_dive", "expected_signal": "个人职责、技术难点、处理方式", "followup_condition": "如果没有讲清本人做了什么，继续追问", "max_followups": 2, "success_signals": ["个人职责", "技术难点", "处理方式"]},
+            {"stage": "S4", "question": "那个项目里有没有哪个方案你们反复权衡过？最后为什么这么定？", "dimension": "project_tradeoff", "expected_signal": "取舍思路、约束条件、方案原因", "followup_condition": "如果没有说清取舍和约束，继续追问", "max_followups": 2, "success_signals": ["取舍思路", "约束条件", "方案原因"]},
+            {"stage": "S5", "question": "如果看实习或协作经历，你真正独立负责到交付的是哪一块？", "dimension": "experience_validation", "expected_signal": "真实负责范围、交付深度、协作边界", "followup_condition": "如果回答还停留在团队层面，继续追问", "max_followups": 2, "success_signals": ["真实负责范围", "交付深度", "协作边界"]},
+            {"stage": "S6", "question": "如果你负责的服务线上突然变慢了，你一般按什么顺序排查？", "dimension": "capability_probe", "expected_signal": "排查路径、指标意识、定位顺序", "followup_condition": "如果没有具体排查步骤，继续追问", "max_followups": 2, "success_signals": ["排查路径", "指标意识", "定位顺序"]},
+            {"stage": "S7", "question": f"技术部分聊完后，结合这个岗位“{job_hint}”，你最想了解我们哪一块？", "dimension": "company_qa", "expected_signal": "候选人关注点、岗位理解方向", "followup_condition": "除非候选人的问题不清楚，否则不继续追问", "max_followups": 1, "success_signals": ["候选人关注点", "岗位理解方向"]},
+        ]
 
     def _merge_question_candidates(
         self,
@@ -2759,7 +2884,7 @@ class AIInterviewService:
         skills: list[str],
         language: str,
     ) -> list[dict]:
-        """Blend rule + LLM questions, deduplicate and keep dimension diversity."""
+        """Blend rule + LLM questions with hard stage quotas."""
         keyword_tokens = self._extract_keyword_tokens(
             skills=skills,
             job_requirements=job_requirements,
@@ -2767,7 +2892,12 @@ class AIInterviewService:
             language=language,
         )
         candidates: list[dict] = []
-        for source, questions in (("rule", rule_questions), ("llm", llm_questions)):
+        stage_seeds = self._build_stage_seed_questions(
+            job_requirements=job_requirements,
+            skills=skills,
+            language=language,
+        )
+        for source, questions in (("rule", rule_questions), ("llm", llm_questions), ("seed", stage_seeds)):
             for raw in questions:
                 normalized = self._normalize_question_item(raw)
                 if normalized is None:
@@ -2797,26 +2927,94 @@ class AIInterviewService:
             if key not in dedup:
                 dedup[key] = item
         ranked = list(dedup.values())
-        ranked.sort(key=lambda entry: (entry["score"], 1 if entry["source"] == "llm" else 0), reverse=True)
+        ranked.sort(
+            key=lambda entry: (
+                entry["score"],
+                1 if entry["source"] == "llm" else 0,
+                1 if entry["source"] == "seed" else 0,
+            ),
+            reverse=True,
+        )
 
+        quota_plan = self._stage_quota_plan(question_count)
         picked: list[dict] = []
-        seen_dimensions: set[str] = set()
+        seen_questions: set[str] = set()
+        seen_dimensions_by_stage: dict[str, set[str]] = {}
+
+        for stage_code, quota in quota_plan.items():
+            if quota <= 0:
+                continue
+            stage_picked = 0
+            for item in ranked:
+                question = item["question"]
+                if str(question.get("stage") or "S3") != stage_code:
+                    continue
+                normalized_text = item["normalized_text"]
+                if normalized_text in seen_questions:
+                    continue
+                stage_dims = seen_dimensions_by_stage.setdefault(stage_code, set())
+                dimension = str(question.get("dimension") or "communication").strip().lower()
+                if dimension and dimension in stage_dims and item["source"] != "seed":
+                    continue
+                picked.append(question)
+                seen_questions.add(normalized_text)
+                if dimension:
+                    stage_dims.add(dimension)
+                stage_picked += 1
+                if stage_picked >= quota or len(picked) >= question_count:
+                    break
+            if len(picked) >= question_count:
+                return picked[:question_count]
+
+        stage_counts = {}
+        for question in picked:
+            code = str(question.get("stage") or "S3")
+            stage_counts[code] = stage_counts.get(code, 0) + 1
+
+        seed_ranked = [item for item in ranked if item["source"] == "seed"]
+        for stage_code, quota in quota_plan.items():
+            current_count = int(stage_counts.get(stage_code, 0))
+            if current_count >= quota:
+                continue
+            for item in seed_ranked:
+                question = item["question"]
+                if str(question.get("stage") or "S3") != stage_code:
+                    continue
+                normalized_text = item["normalized_text"]
+                if normalized_text in seen_questions:
+                    continue
+                picked.append(question)
+                seen_questions.add(normalized_text)
+                stage_counts[stage_code] = stage_counts.get(stage_code, 0) + 1
+                if len(picked) >= question_count or stage_counts[stage_code] >= quota:
+                    break
+            if len(picked) >= question_count:
+                return picked[:question_count]
+
         for item in ranked:
             question = item["question"]
+            normalized_text = item["normalized_text"]
+            if normalized_text in seen_questions:
+                continue
+            stage_code = str(question.get("stage") or "S3")
+            stage_dims = seen_dimensions_by_stage.setdefault(stage_code, set())
             dimension = str(question.get("dimension") or "communication").strip().lower()
-            if dimension and dimension in seen_dimensions:
+            if dimension and dimension in stage_dims:
                 continue
             picked.append(question)
+            seen_questions.add(normalized_text)
             if dimension:
-                seen_dimensions.add(dimension)
+                stage_dims.add(dimension)
             if len(picked) >= question_count:
                 return picked
 
         for item in ranked:
             question = item["question"]
-            if question in picked:
+            normalized_text = item["normalized_text"]
+            if normalized_text in seen_questions:
                 continue
             picked.append(question)
+            seen_questions.add(normalized_text)
             if len(picked) >= question_count:
                 break
         return picked[:question_count]
@@ -3013,95 +3211,192 @@ class AIInterviewService:
         question_count: int,
         language: str,
     ) -> list[dict]:
-        """用规则方式生成结构化问题，保证输出稳定可解释。"""
+        """Build a stable fallback question pack with stronger S3 coverage."""
+
         normalized_skills = [str(item).strip() for item in (skills or []) if str(item).strip()]
         if not normalized_skills:
-            normalized_skills = ["项目经验", "技术栈匹配", "问题定位能力"]
+            normalized_skills = ["Java", "Spring Boot", "MySQL", "Redis"]
+
+        middleware_keywords = (
+            "mysql", "postgres", "redis", "kafka", "rocketmq", "rabbitmq",
+            "es", "elasticsearch", "mongodb", "clickhouse",
+        )
+        core_skills = normalized_skills[:2]
+        while len(core_skills) < 2:
+            core_skills.append("?????" if language != "en-US" else "core stack")
+
+        middleware_skills = [
+            skill for skill in normalized_skills
+            if any(keyword in skill.lower() for keyword in middleware_keywords) and skill not in core_skills
+        ][:2]
+        for candidate in ["MySQL", "Redis"]:
+            if len(middleware_skills) >= 2:
+                break
+            if candidate not in middleware_skills and candidate not in core_skills:
+                middleware_skills.append(candidate)
+
+        def _signals(*items: str) -> list[str]:
+            return [item for item in items if item]
+
+        def _q(
+            *,
+            question: str,
+            dimension: str,
+            expected_signal: str,
+            followup_condition: str,
+            stage: str = "S3",
+            max_followups: int = 2,
+            success_signals: list[str] | None = None,
+        ) -> dict:
+            return {
+                "question": question,
+                "dimension": dimension,
+                "expected_signal": expected_signal,
+                "followup_condition": followup_condition,
+                "stage": stage,
+                "max_followups": max_followups,
+                "success_signals": success_signals or [],
+            }
 
         question_bank: list[dict] = []
-        for skill in normalized_skills:
+
+        for skill in core_skills[:2]:
             if language == "en-US":
                 question_bank.append(
-                    {
-                        "question": f"Please share one project where you applied {skill} and the measurable outcome.",
-                        "dimension": "project_experience",
-                        "expected_signal": "Clear ownership and measurable impact",
-                        "followup_condition": "Follow up if answer lacks concrete metrics",
-                    }
-                )
-                question_bank.append(
-                    {
-                        "question": f"If a production incident is related to {skill}, how would you diagnose and recover?",
-                        "dimension": "problem_solving",
-                        "expected_signal": "Structured diagnosis and recovery steps",
-                        "followup_condition": "Follow up if steps are missing",
-                    }
+                    _q(
+                        question=f"You mentioned {skill} quite prominently in your resume. In which project did you use it most deeply, and what exactly were you responsible for?",
+                        dimension="core_stack_validation",
+                        expected_signal="Concrete ownership, real usage scenario, and project context",
+                        followup_condition="Follow up if the answer stays at the concept level or lacks personal ownership",
+                        success_signals=_signals("project context", "personal ownership", "real usage scenario"),
+                    )
                 )
             else:
                 question_bank.append(
-                    {
-                        "question": f"请介绍你在 {skill} 相关项目中的实践和结果。",
-                        "dimension": "project_experience",
-                        "expected_signal": "可量化的项目结果与个人贡献",
-                        "followup_condition": "回答不具体或缺少结果指标时追问",
-                    }
-                )
-                question_bank.append(
-                    {
-                        "question": f"如果线上出现与 {skill} 相关故障，你会如何定位并恢复？",
-                        "dimension": "problem_solving",
-                        "expected_signal": "定位步骤清晰，兼顾止损和根因分析",
-                        "followup_condition": "只给结论缺少步骤时追问",
-                    }
+                    _q(
+                        question=f"???? {skill} ????????????????????????????????",
+                        dimension="core_stack_validation",
+                        expected_signal="??????????????????",
+                        followup_condition="?????????????????????????",
+                        success_signals=_signals("????", "????", "??????"),
+                    )
                 )
 
-        job_hint = job_requirements[:120] if job_requirements else "岗位要求"
+        for skill in middleware_skills[:2]:
+            if language == "en-US":
+                question_bank.append(
+                    _q(
+                        question=f"In your real project work, where did {skill} fit into the architecture, and why did you choose it there?",
+                        dimension="middleware_usage",
+                        expected_signal="Architecture position, selection reason, and practical usage details",
+                        followup_condition="Follow up if the answer does not explain why this component was needed",
+                        success_signals=_signals("architecture position", "selection reason", "practical usage"),
+                    )
+                )
+            else:
+                question_bank.append(
+                    _q(
+                        question=f"?????????{skill} ?????????????????????",
+                        dimension="middleware_usage",
+                        expected_signal="??????????????",
+                        followup_condition="??????????????????????",
+                        success_signals=_signals("????", "????", "????"),
+                    )
+                )
+
         if language == "en-US":
             question_bank.extend(
                 [
-                    {
-                        "question": f"Given the role requirement '{job_hint}', what are your top three matching strengths?",
-                        "dimension": "job_fit",
-                        "expected_signal": "Direct mapping from experience to requirement",
-                        "followup_condition": "Follow up if mapping is vague",
-                    },
-                    {
-                        "question": "What was the most complex project you led in the last year? How did you break down milestones?",
-                        "dimension": "ownership",
-                        "expected_signal": "Clear leadership and milestone ownership",
-                        "followup_condition": "Follow up if ownership is unclear",
-                    },
-                    {
-                        "question": "Tell me about a conflict in collaboration and how you drove alignment.",
-                        "dimension": "communication",
-                        "expected_signal": "Conflict handling with clear outcomes",
-                        "followup_condition": "Follow up if no concrete resolution is given",
-                    },
+                    _q(
+                        question="If the system latency suddenly rises after a release, what signals would you look at first, and how would you narrow it down?",
+                        dimension="performance_troubleshooting",
+                        expected_signal="Monitoring awareness, narrowing-down path, and diagnosis order",
+                        followup_condition="Follow up if the answer lacks concrete troubleshooting steps",
+                        success_signals=_signals("monitoring signals", "diagnosis order", "troubleshooting path"),
+                    ),
+                    _q(
+                        question="Pick one design choice in your recent project that affected performance or stability. Why did you settle on that option?",
+                        dimension="system_design",
+                        expected_signal="Trade-off thinking, system constraints, and design rationale",
+                        followup_condition="Follow up if the answer has no trade-off or no practical constraint",
+                        success_signals=_signals("trade-off", "constraints", "design rationale"),
+                    ),
                 ]
             )
         else:
             question_bank.extend(
                 [
-                    {
-                        "question": f"结合岗位要求“{job_hint}”，你认为自己最匹配的三点是什么？",
-                        "dimension": "job_fit",
-                        "expected_signal": "能将经历与岗位要求逐条映射",
-                        "followup_condition": "匹配点空泛或缺证据时追问",
-                    },
-                    {
-                        "question": "过去一年你主导过的最复杂项目是什么？你如何拆解目标与里程碑？",
-                        "dimension": "ownership",
-                        "expected_signal": "目标拆解清晰，体现主导能力",
-                        "followup_condition": "未体现主导职责时追问",
-                    },
-                    {
-                        "question": "请分享一次与团队协作出现分歧的经历，你如何推进达成一致？",
-                        "dimension": "communication",
-                        "expected_signal": "沟通策略与结果闭环明确",
-                        "followup_condition": "缺少冲突处理细节时追问",
-                    },
+                    _q(
+                        question="????????????????????????????????????",
+                        dimension="performance_troubleshooting",
+                        expected_signal="??????????????",
+                        followup_condition="????????????????",
+                        success_signals=_signals("????", "????", "????"),
+                    ),
+                    _q(
+                        question="?????????????????????????????????????????",
+                        dimension="system_design",
+                        expected_signal="??????????????",
+                        followup_condition="?????????????????",
+                        success_signals=_signals("????", "????", "????"),
+                    ),
                 ]
             )
+
+        job_hint = job_requirements[:120] if job_requirements else ("role requirements" if language == "en-US" else "????")
+        if language == "en-US":
+            question_bank.extend(
+                [
+                    _q(
+                        question=f"From the requirement '{job_hint}', which part matches your past experience most directly? Walk me through a concrete case.",
+                        dimension="jd_match_case",
+                        expected_signal="Direct mapping from JD to real experience",
+                        followup_condition="Follow up if the mapping is broad but not evidence-based",
+                        success_signals=_signals("JD mapping", "concrete case", "evidence"),
+                    ),
+                    _q(
+                        question="Which requirement in this role would you be most ready to pick up immediately, and what experience gives you that confidence?",
+                        dimension="jd_readiness",
+                        expected_signal="Readiness judgment tied to real delivery experience",
+                        followup_condition="Follow up if confidence is not backed by actual work",
+                        success_signals=_signals("readiness judgment", "delivery experience"),
+                    ),
+                    _q(
+                        question="Which requirement in this JD is less familiar to you, and how would you close that gap after joining?",
+                        dimension="jd_gap_analysis",
+                        expected_signal="Self-awareness, learning plan, and realistic gap assessment",
+                        followup_condition="Follow up if the answer avoids the gap or lacks a concrete plan",
+                        success_signals=_signals("gap awareness", "learning plan", "realistic assessment"),
+                    ),
+                ]
+            )
+        else:
+            question_bank.extend(
+                [
+                    _q(
+                        question=f"?????????{job_hint}??????????????????????????????",
+                        dimension="jd_match_case",
+                        expected_signal="JD ??????????????",
+                        followup_condition="???????????????????????",
+                        success_signals=_signals("JD ????", "????", "??"),
+                    ),
+                    _q(
+                        question="????????????????????????????????",
+                        dimension="jd_readiness",
+                        expected_signal="??????????????",
+                        followup_condition="?????????????????????",
+                        success_signals=_signals("??????", "????"),
+                    ),
+                    _q(
+                        question="??????????????????????????????????",
+                        dimension="jd_gap_analysis",
+                        expected_signal="????????????????",
+                        followup_condition="??????????????????????",
+                        success_signals=_signals("??????", "????", "????"),
+                    ),
+                ]
+            )
+
         return question_bank[:question_count]
 
     def _build_and_persist_report(self, session_id: str, *, runtime_mode: str, turns=None, run_id: str):
@@ -3227,7 +3522,7 @@ class AIInterviewService:
         language: str,
     ) -> list[dict]:
         """使用 LLM 生成问题树，失败时返回空列表用于回退。"""
-        template = self._resolve_prompt_template(task_key="interview_question_set", default_version="v1")
+        template = self._resolve_prompt_template(task_key="interview_question_set", default_version="v2")
         try:
             rendered = template.render(
                 language=language,
@@ -3260,18 +3555,22 @@ class AIInterviewService:
         questions = payload.get("questions", [])
         cleaned: list[dict] = []
         for item in questions:
-            if not isinstance(item, dict):
+            normalized = self._normalize_question_item(item)
+            if normalized is None:
                 continue
-            cleaned.append(
-                {
-                    "question": str(item.get("question") or "").strip(),
-                    "dimension": str(item.get("dimension") or "communication").strip(),
-                    "expected_signal": str(item.get("expected_signal") or "").strip(),
-                    "followup_condition": str(item.get("followup_condition") or "").strip(),
-                }
-            )
+            cleaned.append(normalized)
         cleaned = [item for item in cleaned if item["question"]]
-        return cleaned[:question_count]
+        if not cleaned:
+            return []
+        return self._merge_question_candidates(
+            rule_questions=[],
+            llm_questions=cleaned,
+            question_count=question_count,
+            resume_text=resume_text,
+            job_requirements=job_requirements,
+            skills=skills,
+            language=language,
+        )[:question_count]
 
     def _build_followup_question_with_llm(
         self,
@@ -3289,7 +3588,7 @@ class AIInterviewService:
         print_stream: bool = False,
     ):
         """使用 LLM 生成实时追问，以生成器形式返回句子流。"""
-        template = self._resolve_prompt_template(task_key="interview_followup", default_version="v4")
+        template = self._resolve_prompt_template(task_key="interview_followup", default_version="v5")
         prompt_ctx = self._build_followup_prompt_context(
             session_id=session_id,
             transcript=transcript,
