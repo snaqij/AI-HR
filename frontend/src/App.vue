@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { AgoraRTCGateway } from "./agoraGateway";
 import {
   bootstrapDemoSession,
   buildInterviewEventsWsUrl,
   finishInterviewSession,
+  getInterviewSession,
   getTenRuntimeConfig,
   joinInterviewRTC,
   launchTenSession,
@@ -18,8 +19,13 @@ import {
 interface TimelineItem {
   speaker: string;
   transcript: string;
-  occurredAt: string;
+  startSecond: number;
+  endSecond: number;
 }
+
+const TRANSCRIPT_MERGE_WINDOW_SECONDS = 12;
+
+const SESSION_STORAGE_KEY = "ai_hr_active_session";
 
 const loading = ref(true);
 const errorText = ref("");
@@ -31,16 +37,22 @@ const cameraEnabled = ref(true);
 const showSettingsHint = ref(false);
 const interviewerSpeaking = ref(false);
 const candidateVideoMount = ref<HTMLElement | null>(null);
+const summaryScrollRef = ref<HTMLElement | null>(null);
 
 const session = ref<InterviewSession | null>(null);
 const sessionId = computed(() => session.value?.id || "");
 
 const micStatus = ref("等待初始化");
-const ttsStatus = ref("等待 AI 接入");
+const ttsStatus = ref("等待面试官接入");
 const currentQuestion = ref("正在准备面试链路...");
 const followupQuestion = ref("");
 const transportStatus = ref("未连接");
 const transcriptView = ref<TimelineItem[]>([]);
+const candidateDraft = ref("");
+const timelineBaseEpochMs = ref<number | null>(null);
+const tenLaunchCommand = ref("");
+const audioRecoveryHint = ref("");
+const tenPendingHint = ref("");
 
 let tickerTimer: number | null = null;
 let eventsSocket: WebSocket | null = null;
@@ -48,27 +60,19 @@ let eventsSocket: WebSocket | null = null;
 const roleTitle = computed(() => "后端开发工程师面试");
 const sessionLabel = computed(() => (loading.value ? "正在建立链路" : "实时技术面试"));
 const networkTone = computed(() => {
-  const status = transportStatus.value.toUpperCase();
-  if (status.includes("CONNECTED")) {
+  const status = transportStatus.value;
+  if (status.includes("已连接")) {
     return { text: "网络优秀", state: "good" };
   }
-  if (status.includes("CONNECTING") || transportStatus.value.includes("接入")) {
+  if (status.includes("连接中") || status.includes("重连中") || status.includes("接入")) {
     return { text: "连接中", state: "pending" };
   }
-  if (transportStatus.value.includes("异常") || transportStatus.value.includes("断开")) {
+  if (status.includes("异常") || status.includes("断开") || status.includes("失败")) {
     return { text: "连接异常", state: "bad" };
   }
   return { text: "等待连接", state: "idle" };
 });
-const candidateStageStatus = computed(() => {
-  if (loading.value) {
-    return "正在接入音频与面试服务";
-  }
-  if (errorText.value) {
-    return "会话建立失败";
-  }
-  return micStatus.value;
-});
+
 const interviewerBannerText = computed(() => {
   if (interviewerSpeaking.value) {
     return "面试官正在发问";
@@ -85,23 +89,119 @@ const footerHint = computed(() => {
   if (errorText.value) {
     return "当前会话未建立成功，请检查后端服务与 Agora 配置。";
   }
+  if (audioRecoveryHint.value) {
+    return audioRecoveryHint.value;
+  }
+  if (tenPendingHint.value) {
+    return tenPendingHint.value;
+  }
   return "正在自动记录面试内容，请保持自然表达与稳定网络环境。";
 });
 
+function formatTenLaunchStatus(status?: string | null): string {
+  switch (String(status || "").trim().toLowerCase()) {
+    case "manual_ready":
+      return "面试官服务待手动启动";
+    case "launching":
+      return "面试官服务启动中";
+    case "launched":
+      return "面试官服务已就绪";
+    case "failed":
+      return "面试官服务启动失败";
+    case "disabled":
+      return "面试官服务未启用";
+    default:
+      return status ? `面试官服务状态：${status}` : "面试官服务状态未知";
+  }
+}
+
+function formatAgoraReason(reason?: string | null): string {
+  const value = String(reason || "").trim();
+  if (!value) {
+    return "";
+  }
+  const normalized = value.toUpperCase();
+  if (normalized === "JOIN_SUCCESS") {
+    return "加入成功";
+  }
+  if (normalized === "INTERRUPTED") {
+    return "网络中断";
+  }
+  if (normalized === "LEAVE_CHANNEL") {
+    return "已离开频道";
+  }
+  if (normalized === "BANNED_BY_SERVER") {
+    return "被服务端禁用";
+  }
+  if (normalized === "KEEP_ALIVE_TIMEOUT") {
+    return "心跳超时";
+  }
+  return value;
+}
+
+function formatTransportStatus(state?: string | null, reason?: string | null): string {
+  const normalized = String(state || "").trim().toUpperCase();
+  const reasonText = formatAgoraReason(reason);
+  let stateText = "等待连接";
+
+  switch (normalized) {
+    case "CONNECTED":
+      stateText = "Agora 已连接";
+      break;
+    case "CONNECTING":
+      stateText = "Agora 连接中";
+      break;
+    case "RECONNECTING":
+      stateText = "Agora 重连中";
+      break;
+    case "DISCONNECTED":
+      stateText = "Agora 已断开";
+      break;
+    case "DISCONNECTING":
+      stateText = "Agora 断开中";
+      break;
+    case "FAILED":
+      stateText = "Agora 连接失败";
+      break;
+    default:
+      if (state) {
+        stateText = `Agora 状态：${state}`;
+      }
+  }
+
+  return reasonText ? `${stateText}（${reasonText}）` : stateText;
+}
+
 const rtcGateway = new AgoraRTCGateway({
   onRemoteAudioSubscribed(uid) {
-    ttsStatus.value = `AI 已入会并可播放音频 (${uid})`;
-    interviewerSpeaking.value = true;
+    ttsStatus.value = `面试官已接入 (${uid})`;
+    interviewerSpeaking.value = false;
+    audioRecoveryHint.value = "";
+    tenPendingHint.value = "";
+    errorText.value = "";
   },
   onRemoteAudioUnsubscribed() {
-    ttsStatus.value = "AI 音频已暂停";
+    ttsStatus.value = "面试官音频已暂停";
     interviewerSpeaking.value = false;
   },
+  onRemoteAudioSpeakingChanged(speaking) {
+    interviewerSpeaking.value = speaking;
+    if (speaking) {
+      ttsStatus.value = "面试官正在发问";
+    } else if (ttsStatus.value.includes("播报") || ttsStatus.value.includes("音频")) {
+      ttsStatus.value = "面试官正在聆听";
+    }
+  },
   onConnectionStateChanged(state, reason) {
-    transportStatus.value = reason ? `${state} (${reason})` : state;
+    transportStatus.value = formatTransportStatus(state, reason);
     if (state === "CONNECTED") {
       micStatus.value = micEnabled.value ? "候选人音频已接入" : "候选人已静音";
+      errorText.value = "";
     }
+  },
+  onRemoteAudioPlaybackError(message) {
+    ttsStatus.value = "面试官音频待浏览器放行";
+    audioRecoveryHint.value = message || "浏览器阻止了自动播报，请点击“开启声音”后重试。";
   }
 });
 
@@ -119,6 +219,45 @@ function formatOccurredAt(input?: string | null): string {
   });
 }
 
+function parseOccurredAtMs(input?: string | null): number | null {
+  if (!input) {
+    return null;
+  }
+  const parsed = new Date(input);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.getTime();
+}
+
+function formatTimelineSecond(value: number): string {
+  const safe = Math.max(0, Math.floor(value));
+  const mins = Math.floor(safe / 60)
+    .toString()
+    .padStart(2, "0");
+  const secs = Math.floor(safe % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${mins}:${secs}`;
+}
+
+function formatTimelineRange(startSecond: number, endSecond: number): string {
+  const start = formatTimelineSecond(startSecond);
+  const end = formatTimelineSecond(endSecond);
+  return start === end ? start : `${start}-${end}`;
+}
+
+function resolveTimelineSecond(input?: string | null): number {
+  const occurredAtMs = parseOccurredAtMs(input);
+  if (occurredAtMs != null) {
+    if (timelineBaseEpochMs.value == null) {
+      timelineBaseEpochMs.value = occurredAtMs;
+    }
+    return Math.max(0, Math.round((occurredAtMs - timelineBaseEpochMs.value) / 1000));
+  }
+  return elapsedSeconds.value;
+}
+
 function normalizeSpeaker(raw?: string | null): string {
   const value = String(raw || "").trim();
   if (!value) {
@@ -133,30 +272,95 @@ function normalizeSpeaker(raw?: string | null): string {
   return "候选人";
 }
 
+function persistSessionSnapshot(value: InterviewSession | null): void {
+  if (!value) {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(value));
+}
+
+function loadSessionSnapshot(): InterviewSession | null {
+  try {
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw) as InterviewSession;
+  } catch {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    return null;
+  }
+}
+
+function clearSessionSnapshot(): void {
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
+function readPreferredSessionId(): string {
+  const url = new URL(window.location.href);
+  return String(url.searchParams.get("session_id") || "").trim();
+}
+
 function appendTranscript(transcript: string, speaker = "候选人", occurredAt?: string): void {
   const text = transcript.trim();
   if (!text) {
     return;
   }
+  const normalizedSpeaker = normalizeSpeaker(speaker);
+  const timelineSecond = resolveTimelineSecond(occurredAt);
+  const lastItem = transcriptView.value[transcriptView.value.length - 1];
+  if (
+    lastItem &&
+    lastItem.speaker === normalizedSpeaker &&
+    timelineSecond - lastItem.endSecond <= TRANSCRIPT_MERGE_WINDOW_SECONDS
+  ) {
+    if (!lastItem.transcript.includes(text)) {
+      const mergedText = [lastItem.transcript, text].filter(Boolean).join("\n");
+      transcriptView.value = [
+        ...transcriptView.value.slice(0, -1),
+        {
+          ...lastItem,
+          transcript: mergedText,
+          endSecond: Math.max(lastItem.endSecond, timelineSecond)
+        }
+      ];
+    }
+    return;
+  }
   transcriptView.value = [
     ...transcriptView.value,
     {
-      speaker: normalizeSpeaker(speaker),
+      speaker: normalizedSpeaker,
       transcript: text,
-      occurredAt: formatOccurredAt(occurredAt)
+      startSecond: timelineSecond,
+      endSecond: timelineSecond
     }
-  ].slice(-8);
+  ];
+}
+
+function appendCandidateTranscript(transcript: string, occurredAt?: string): void {
+  appendTranscript(transcript, "候选人", occurredAt);
+  candidateDraft.value = "";
 }
 
 function hydrateReplay(items: ReplayItem[]): void {
-  transcriptView.value = items
+  timelineBaseEpochMs.value = parseOccurredAtMs(items[0]?.occurred_at || "") ?? null;
+  transcriptView.value = [];
+  items
     .filter((item) => item.transcript)
-    .map((item) => ({
-      speaker: normalizeSpeaker(item.speaker),
-      transcript: String(item.transcript || ""),
-      occurredAt: formatOccurredAt(item.occurred_at)
-    }))
-    .slice(-8);
+    .forEach((item) => {
+      appendTranscript(String(item.transcript || ""), item.speaker, item.occurred_at);
+    });
+}
+
+async function scrollTranscriptToLatest(): Promise<void> {
+  await nextTick();
+  const container = summaryScrollRef.value;
+  if (!container) {
+    return;
+  }
+  container.scrollTop = container.scrollHeight;
 }
 
 async function connectEventBus(sessionIdValue: string): Promise<void> {
@@ -169,6 +373,37 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
     const payload = parsed.payload || {};
     if (parsed.event_type === "connected") {
       currentQuestion.value = "会话事件总线已连接";
+      return;
+    }
+    if (parsed.event_type === "agent.state") {
+      const state = String(payload.state || "").trim().toLowerCase();
+      if (state === "listening") {
+        ttsStatus.value = "面试官正在聆听";
+      } else if (state === "thinking") {
+        ttsStatus.value = "面试官正在思考";
+      } else if (state === "speaking") {
+        ttsStatus.value = "面试官正在发问";
+      }
+      return;
+    }
+    if (parsed.event_type === "question.update" || parsed.event_type === "question.final") {
+      const questionText = String(payload.text || payload.spoken_text || "");
+      if (questionText) {
+        followupQuestion.value = "";
+        currentQuestion.value = questionText;
+      }
+      return;
+    }
+    if (parsed.event_type === "candidate.partial") {
+      candidateDraft.value = String(payload.text || "");
+      return;
+    }
+    if (parsed.event_type === "candidate.final") {
+      const transcript = String(payload.text || payload.transcript || "");
+      const occurredAt = String(payload.occurred_at || "");
+      if (transcript) {
+        appendCandidateTranscript(transcript, occurredAt);
+      }
       return;
     }
     if (parsed.event_type === "session.event") {
@@ -184,8 +419,23 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
         currentQuestion.value = nextQuestion;
       }
     }
+    if (parsed.event_type === "asr.turn") {
+      const transcript = String(payload.transcript || "");
+      const occurredAt = String(payload.occurred_at || "");
+      if (transcript) {
+        appendCandidateTranscript(transcript, occurredAt);
+      }
+      return;
+    }
+    if (parsed.event_type === "llm.sentence") {
+      const sentence = String(payload.sentence || payload.text || payload.transcript || "");
+      if (sentence) {
+        currentQuestion.value = sentence;
+      }
+      return;
+    }
     if (parsed.event_type === "tts.packet") {
-      ttsStatus.value = "AI 正在播报";
+      ttsStatus.value = "面试官正在发问";
     }
   };
 
@@ -202,32 +452,46 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
 
 async function ensureTenReady(sessionIdValue: string): Promise<void> {
   const runtime = await getTenRuntimeConfig(sessionIdValue);
+  tenLaunchCommand.value = String(runtime.launch_command || "");
   if (!runtime.enabled) {
-    ttsStatus.value = "TEN 未启用，当前仅验证候选人 RTC 入会";
+    ttsStatus.value = "面试官服务未启用，当前仅验证候选人 RTC 入会";
     return;
   }
   if (runtime.launch_status !== "launched") {
-    ttsStatus.value = "正在拉起 TEN 面试官...";
+    ttsStatus.value = "正在启动面试官服务...";
     const launched = await launchTenSession(sessionIdValue);
-    ttsStatus.value =
-      launched.launch_status === "launched"
-        ? "TEN 已拉起，等待 AI 入会"
-        : `TEN 状态: ${launched.launch_status}`;
+    tenLaunchCommand.value = String(launched.launch_command || tenLaunchCommand.value || "");
+    ttsStatus.value = formatTenLaunchStatus(launched.launch_status);
+    if (launched.launch_status === "manual_ready") {
+      tenPendingHint.value = "面试官服务已切到手动启动模式；如果你已经在 WSL 中启动成功，可以直接继续，页面会在音频接通后自动恢复正常状态。";
+      currentQuestion.value = "正在等待面试官服务真正入会...";
+    }
     return;
   }
-  ttsStatus.value = "TEN 已就绪";
+  tenPendingHint.value = "";
+  ttsStatus.value = formatTenLaunchStatus(runtime.launch_status);
 }
 
 async function bootstrap(): Promise<void> {
   loading.value = true;
   errorText.value = "";
   try {
-    const created = await bootstrapDemoSession();
-    session.value = await startInterviewSession(created.id);
-    currentQuestion.value = "会话已创建，正在准备 Agora/TEN 链路";
-
-    await ensureTenReady(session.value.id);
-    await connectEventBus(session.value.id);
+    const preferredSessionId = readPreferredSessionId();
+    const cached = loadSessionSnapshot();
+    if (preferredSessionId) {
+      session.value = await getInterviewSession(preferredSessionId);
+      persistSessionSnapshot(session.value);
+      currentQuestion.value = "已按指定会话接入，正在重新接入 Agora/TEN 链路";
+    } else if (cached?.id && cached?.candidate_id) {
+      session.value = cached;
+      currentQuestion.value = "已恢复上一次会话，正在重新接入 Agora/TEN 链路";
+    } else {
+      const created = await bootstrapDemoSession();
+      persistSessionSnapshot(created);
+      session.value = await startInterviewSession(created.id);
+      persistSessionSnapshot(session.value);
+      currentQuestion.value = "会话已创建，正在准备 Agora/TEN 链路";
+    }
 
     const rtc = await joinInterviewRTC(session.value.id, session.value.candidate_id);
     if (rtc.provider !== "agora") {
@@ -236,6 +500,28 @@ async function bootstrap(): Promise<void> {
     if (!rtc.app_id || !rtc.uid) {
       throw new Error("后端未返回完整的 Agora app_id/uid");
     }
+
+    if (session.value) {
+      session.value = {
+        ...session.value,
+        rtc: {
+          ...session.value.rtc,
+          provider: rtc.provider,
+          transport: rtc.transport,
+          room_id: rtc.room_id,
+          channel_name: rtc.channel_name,
+          token: rtc.join_token,
+          app_id: rtc.app_id,
+          uid: rtc.uid,
+          expire_at: rtc.expire_at
+        },
+        rtc_room_id: rtc.room_id
+      };
+      persistSessionSnapshot(session.value);
+    }
+
+    await ensureTenReady(session.value.id);
+    await connectEventBus(session.value.id);
 
     transportStatus.value = "正在接入 Agora";
     await rtcGateway.connect({
@@ -253,6 +539,7 @@ async function bootstrap(): Promise<void> {
     hydrateReplay(replayItems);
     micStatus.value = micEnabled.value ? "候选人音频已接入" : "候选人已静音";
     cameraEnabled.value = true;
+    persistSessionSnapshot(session.value);
 
     tickerTimer = window.setInterval(() => {
       elapsedSeconds.value += 1;
@@ -292,6 +579,16 @@ async function toggleCamera(): Promise<void> {
   }
 }
 
+async function unlockAudioPlayback(): Promise<void> {
+  audioRecoveryHint.value = "";
+  try {
+    await rtcGateway.resumeRemoteAudioPlayback();
+    ttsStatus.value = "面试官音频重试中";
+  } catch (err) {
+    audioRecoveryHint.value = err instanceof Error ? err.message : "开启声音失败，请检查浏览器声音权限。";
+  }
+}
+
 function toggleSettingsHint(): void {
   showSettingsHint.value = !showSettingsHint.value;
   window.setTimeout(() => {
@@ -309,6 +606,7 @@ async function exitMeeting(): Promise<void> {
     if (sessionId.value) {
       await finishInterviewSession(sessionId.value);
     }
+    clearSessionSnapshot();
   } catch {
     // best effort
   } finally {
@@ -319,6 +617,17 @@ async function exitMeeting(): Promise<void> {
 
 onMounted(() => {
   void bootstrap();
+});
+
+watch(
+  () => transcriptView.value.length,
+  () => {
+    void scrollTranscriptToLatest();
+  }
+);
+
+watch(candidateDraft, () => {
+  void scrollTranscriptToLatest();
 });
 
 onBeforeUnmount(() => {
@@ -363,17 +672,8 @@ onBeforeUnmount(() => {
         <div class="video-stage-frame">
           <div class="candidate-video-surface">
             <div ref="candidateVideoMount" class="candidate-video-stream" :data-camera-enabled="cameraEnabled"></div>
-            <div class="candidate-video-backdrop"></div>
-            <div class="candidate-focus-card">
-              <div class="candidate-focus-avatar">候</div>
-              <div class="candidate-focus-meta">
-                <p class="candidate-focus-name">候选人</p>
-                <p class="candidate-focus-status">{{ candidateStageStatus }}</p>
-              </div>
-            </div>
-
+            <div v-if="!cameraEnabled" class="candidate-video-backdrop"></div>
             <div class="interviewer-window">
-              <div class="interviewer-window-avatar">AI</div>
               <div class="interviewer-window-label">面试官</div>
             </div>
 
@@ -391,6 +691,12 @@ onBeforeUnmount(() => {
               <p class="stage-state-title">会话建立失败</p>
               <p class="stage-state-text">{{ errorText }}</p>
             </div>
+
+            <div class="candidate-floating-controls">
+              <a href="javascript:void(0)" class="floating-link" @click="toggleMicrophone">{{ micEnabled ? '麦克风开启' : '麦克风关闭' }}</a>
+              <a href="javascript:void(0)" class="floating-link" @click="toggleCamera">{{ cameraEnabled ? '视频占位开启' : '视频占位关闭' }}</a>
+              <a href="javascript:void(0)" class="floating-link error-link" v-if="audioRecoveryHint" @click="unlockAudioPlayback">开启声音以继续</a>
+            </div>
           </div>
         </div>
       </section>
@@ -404,7 +710,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="summary-scroll">
+        <div ref="summaryScrollRef" class="summary-scroll">
           <section class="question-card">
             <div class="question-label-row">
               <span class="question-icon">?</span>
@@ -423,11 +729,16 @@ onBeforeUnmount(() => {
             <div class="transcript-list">
               <article
                 v-for="(item, idx) in transcriptView"
-                :key="`${idx}-${item.occurredAt}-${item.transcript}`"
+                :key="`${idx}-${item.startSecond}-${item.endSecond}-${item.transcript}`"
                 class="transcript-item"
               >
-                <span class="transcript-time">{{ item.occurredAt }} · {{ item.speaker }}</span>
+                <span class="transcript-time">{{ formatTimelineRange(item.startSecond, item.endSecond) }} · {{ item.speaker }}</span>
                 <p class="transcript-text">{{ item.transcript }}</p>
+              </article>
+
+              <article v-if="candidateDraft" class="transcript-item">
+                <span class="transcript-time">{{ meetingTimeText }} · 候选人</span>
+                <p class="transcript-text">{{ candidateDraft }}</p>
               </article>
 
               <article v-if="transcriptView.length === 0" class="transcript-item empty">
@@ -439,28 +750,5 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </main>
-
-    <footer class="control-bar">
-      <div class="control-status">
-        <span class="control-status-dot"></span>
-        <span>{{ footerHint }}</span>
-      </div>
-
-      <div class="control-actions">
-        <button class="control-button" :data-active="micEnabled" @click="toggleMicrophone">
-          <span class="control-button-icon">{{ micEnabled ? "🎤" : "🔇" }}</span>
-          <span class="control-button-label">{{ micEnabled ? "麦克风开启" : "麦克风关闭" }}</span>
-        </button>
-        <button class="control-button" :data-active="cameraEnabled" @click="toggleCamera">
-          <span class="control-button-icon">{{ cameraEnabled ? "📹" : "🚫" }}</span>
-          <span class="control-button-label">{{ cameraEnabled ? "视频占位开启" : "视频占位关闭" }}</span>
-        </button>
-      </div>
-
-      <div class="control-utils">
-        <button class="utility-button" @click="toggleSettingsHint">设置</button>
-        <span v-if="showSettingsHint" class="utility-hint">更多设备与偏好设置稍后接入</span>
-      </div>
-    </footer>
   </div>
 </template>

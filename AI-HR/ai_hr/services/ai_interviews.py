@@ -181,6 +181,11 @@ class AIInterviewService:
             entity = self._maybe_auto_launch_ten(entity)
         return self._to_session_dict(entity)
 
+    def get_session(self, session_id: str) -> dict:
+        """获取 AI 面试会话详情。"""
+        entity = self._session_repository.get(session_id)
+        return self._to_session_dict(entity)
+
     def start_session(self, session_id: str, payload: AIInterviewSessionStartRequest) -> dict:
         """启动 AI 面试会话。"""
         entity = self._session_repository.get(session_id)

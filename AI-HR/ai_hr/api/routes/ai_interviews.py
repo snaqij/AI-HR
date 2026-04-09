@@ -15,6 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query, status
+from pydantic import BaseModel, Field
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -66,6 +67,19 @@ router = APIRouter(
 )
 
 
+class BridgeEventPayload(BaseModel):
+    event_id: str | None = None
+    event_type: str
+    session_id: str | None = None
+    ts: int | None = None
+    source: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class BridgeBatchRequest(BaseModel):
+    events: list[BridgeEventPayload] = Field(default_factory=list)
+
+
 @router.post("/question-packs/prebuild", response_model=Envelope[AIInterviewQuestionPackPrebuildResult])
 def prebuild_ai_interview_question_pack(
     payload: AIInterviewQuestionPackPrebuildRequest,
@@ -86,6 +100,17 @@ def create_ai_interview_session(
     service = get_ai_interview_service(session)
     result = service.create_session(payload)
     return Envelope.success(AIInterviewSessionCreateResult(session=AIInterviewSessionResponse.model_validate(result)))
+
+
+@router.get("/sessions/{session_id}", response_model=Envelope[AIInterviewSessionResponse])
+def get_ai_interview_session(
+    session_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[AIInterviewSessionResponse]:
+    """Route handler."""
+    service = get_ai_interview_service(session)
+    result = service.get_session(session_id)
+    return Envelope.success(AIInterviewSessionResponse.model_validate(result))
 
 
 @router.post("/sessions/{session_id}/start", response_model=Envelope[AIInterviewSessionResponse])
@@ -139,6 +164,31 @@ def append_ai_interview_event(
     service = get_ai_interview_service(session)
     result = service.append_event(session_id, payload)
     return Envelope.success(AIInterviewSessionEventResult.model_validate(result))
+
+
+@router.post("/sessions/{session_id}/bridge/events", response_model=Envelope[dict[str, int]])
+def append_ai_interview_bridge_events(
+    session_id: str,
+    payload: BridgeBatchRequest,
+) -> Envelope[dict[str, int]]:
+    """Ingest realtime bridge events emitted by TEN sidecar without blocking the audio path."""
+    accepted = 0
+    for item in payload.events:
+        event_session_id = str(item.session_id or session_id).strip()
+        if event_session_id != session_id:
+            continue
+        DEFAULT_INTERVIEW_EVENT_BUS.publish(
+            session_id=session_id,
+            event_type=str(item.event_type or "").strip(),
+            payload={
+                **dict(item.payload or {}),
+                "event_id": item.event_id,
+                "source": item.source or "ten_agent",
+                "bridge_ts": item.ts,
+            },
+        )
+        accepted += 1
+    return Envelope.success({"accepted": accepted})
 
 
 @router.post("/sessions/{session_id}/question-set/generate", response_model=Envelope[AIInterviewQuestionGenerateResult])

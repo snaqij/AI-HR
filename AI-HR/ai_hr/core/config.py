@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_streaming_enabled: bool = True
+    llm_context_debug_enabled: bool = False
     llm_timeout_seconds: int = 30
     llm_max_retries: int = 2
     ai_resume_llm_enabled: bool = False

@@ -14,19 +14,19 @@
               "extension_group": "rtc",
               "property": {
                 "app_id": "72f8343592b64607a2e0c7b995c637c2",
-                "channel": "ai-intv-65442330-9dea-4ab2-a7ed-64a12aaf9ea2",
-                "remote_user_id": "1694225219",
+                "channel": "ai-intv-c564c9cf-7422-4b98-b898-8acd81f68346",
+                "remote_user_id": "364875447",
                 "subscribe_audio": true,
                 "publish_audio": true,
-                "token": "00672f8343592b64607a2e0c7b995c637c2IADKCKoCgqMOvGx9v2Avdi+rfESmDALYqYrxMCDLK9P6trGObNAFk9zYIgBlSdAAY6vXaQQAAQDzZ9ZpAgDzZ9ZpAwDzZ9ZpBADzZ9Zp",
-                "user_id": "1706501894",
+                "token": "00672f8343592b64607a2e0c7b995c637c2IACK8gUSBs2W7B5Jp3q4gCC5oH9fiuMHwHk0ri8QA60iIi50P4HwpNJmIgAkBvIBgvvYaQQAAQASuNdpAgASuNdpAwASuNdpBAASuNdp",
+                "user_id": "1712205284",
                 "uid": 882763965,
                 "remote_uid": 1205891896,
                 "enable_string_uid": false,
                 "publish_data": false,
                 "auto_join": true,
-                "stream_id": 1706501894,
-                "remote_stream_id": 1694225219
+                "stream_id": 1712205284,
+                "remote_stream_id": 364875447
               }
             },
             {
@@ -62,9 +62,9 @@
                 "max_followup": 2,
                 "resume_summary": "一名具有 5 年经验的后端开发工程师，精通 Java/Python，熟悉分布式系统和 Redis。曾在某电商公司参与秒杀系统的架构设计。",
                 "job_requirements": "需要具备扎实的数据结构基础，熟悉常用的中间件，能够解决高并发下的系统稳定性问题。",
-                "session_id": "d3955d8a-cc07-4bd8-97f1-578effae84b9",
-                "candidate_id": "79a6def2-64c5-4140-ba01-a4c47daf48f5",
-                "job_id": "f2441153-199d-46c1-81fe-f4642a3c3708",
+                "session_id": "a14f2322-6cd6-46d4-82a6-7ae7e91812c5",
+                "candidate_id": "7b1b25b7-5e20-44ed-8dd4-62b3df77d344",
+                "job_id": "627ce971-77d5-4c41-8867-8f66eb5ce21c",
                 "language": "zh-CN"
               }
             },
@@ -131,6 +131,9 @@
                   "dest": [
                     {
                       "extension": "asr_aliyun_nls"
+                    },
+                    {
+                      "extension": "interview_orchestrator"
                     }
                   ]
                 }
@@ -151,6 +154,16 @@
             },
             {
               "extension": "interview_orchestrator",
+              "cmd": [
+                {
+                  "name": "interrupt",
+                  "dest": [
+                    {
+                      "extension": "tts_tencent"
+                    }
+                  ]
+                }
+              ],
               "data": [
                 {
                   "name": "text_data",

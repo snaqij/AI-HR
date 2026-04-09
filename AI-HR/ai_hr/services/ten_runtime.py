@@ -106,6 +106,7 @@ class TENRuntimeManager:
     ) -> dict[str, Any]:
         runtime = deepcopy(template)
         graph = runtime.setdefault("ten", {}).setdefault("predefined_graphs", [])[0]["graph"]
+        self._normalize_graph_connections(graph)
         for node in graph.get("nodes", []):
             name = str(node.get("name") or "")
             prop = node.setdefault("property", {})
@@ -166,6 +167,44 @@ class TENRuntimeManager:
                     }
                 )
         return runtime
+
+    def _normalize_graph_connections(self, graph: dict[str, Any]) -> None:
+        connections = graph.setdefault("connections", [])
+
+        def _find_extension_connection(extension: str) -> dict[str, Any] | None:
+            for item in connections:
+                if str(item.get("extension") or "") == extension:
+                    return item
+            return None
+
+        def _ensure_cmd_dest(
+            extension: str,
+            cmd_name: str,
+            dest_extension: str,
+        ) -> None:
+            connection = _find_extension_connection(extension)
+            if connection is None:
+                connection = {"extension": extension, "cmd": []}
+                connections.append(connection)
+            cmd_list = connection.setdefault("cmd", [])
+            target_cmd = None
+            for cmd in cmd_list:
+                if str(cmd.get("name") or "") == cmd_name:
+                    target_cmd = cmd
+                    break
+            if target_cmd is None:
+                target_cmd = {"name": cmd_name, "dest": []}
+                cmd_list.append(target_cmd)
+            dests = target_cmd.setdefault("dest", [])
+            if not any(str(dest.get("extension") or "") == dest_extension for dest in dests):
+                dests.append({"extension": dest_extension})
+
+        _ensure_cmd_dest("ten_vad", "start_of_sentence", "tts_tencent")
+        _ensure_cmd_dest("ten_vad", "start_of_sentence", "interview_orchestrator")
+        _ensure_cmd_dest("ten_vad", "start_of_sentence", "asr_aliyun_nls")
+        _ensure_cmd_dest("ten_vad", "end_of_sentence", "asr_aliyun_nls")
+        _ensure_cmd_dest("ten_vad", "end_of_sentence", "interview_orchestrator")
+        _ensure_cmd_dest("interview_orchestrator", "interrupt", "tts_tencent")
 
     def _load_template(self) -> dict[str, Any]:
         template_val = self._settings.ai_interview_ten_property_template

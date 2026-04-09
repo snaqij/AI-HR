@@ -67,11 +67,10 @@ connections:
     output: pcm_frame
     input: pcm_frame
 
-  # 信号链路：声网 -> 编排器 (等待连接成功后开场)
+  # 信号链路：声网 -> 编排器 (捕获所有状态通知)
   - from: agora_rtc
     to: interview_orchestrator
     api: cmd
-    condition: "name == 'on_connected'"
 
   # 打断链路 (Barge-in)：VAD 发现用户说话 (start_of_sentence)，立即打断 TTS 和 编排器
   - from: ten_vad

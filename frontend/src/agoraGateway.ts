@@ -6,8 +6,23 @@ export interface AgoraJoinParams {
 }
 
 interface IAgoraRTCRemoteAudioTrack {
-  play(): void;
+  play(): void | Promise<void>;
   stop(): void;
+  getVolumeLevel?(): number;
+  getCurrentLevel?(): number;
+}
+
+interface AgoraCameraTrackInitConfig {
+  encoderConfig?:
+    | string
+    | {
+        width?: number;
+        height?: number;
+        frameRate?: number;
+        bitrateMin?: number;
+        bitrateMax?: number;
+      };
+  optimizationMode?: "detail" | "motion" | string;
 }
 
 interface IAgoraRTCLocalAudioTrack {
@@ -40,7 +55,7 @@ interface IAgoraRTCClient {
 interface AgoraRTCSDK {
   createClient(config: { mode: "rtc"; codec: "vp8" | "h264" }): IAgoraRTCClient;
   createMicrophoneAudioTrack(): Promise<IAgoraRTCLocalAudioTrack>;
-  createCameraVideoTrack(): Promise<IAgoraRTCLocalVideoTrack>;
+  createCameraVideoTrack(config?: AgoraCameraTrackInitConfig): Promise<IAgoraRTCLocalVideoTrack>;
 }
 
 declare global {
@@ -53,11 +68,24 @@ export interface AgoraGatewayCallbacks {
   onRemoteAudioSubscribed?: (uid: string) => void;
   onRemoteAudioUnsubscribed?: (uid: string) => void;
   onConnectionStateChanged?: (state: string, reason?: string) => void;
+  onRemoteAudioSpeakingChanged?: (speaking: boolean) => void;
+  onRemoteAudioPlaybackError?: (message: string) => void;
 }
 
 const AGORA_WEB_SDK_URL =
   (import.meta.env.VITE_AGORA_WEB_SDK_URL as string | undefined)?.trim() ||
   "https://download.agora.io/sdk/release/AgoraRTC_N.js";
+
+const DEFAULT_CAMERA_TRACK_CONFIG: AgoraCameraTrackInitConfig = {
+  encoderConfig: {
+    width: 1280,
+    height: 720,
+    frameRate: 24,
+    bitrateMin: 1200,
+    bitrateMax: 2200
+  },
+  optimizationMode: "detail"
+};
 
 function toNumericUid(value: string | number | null | undefined): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -101,6 +129,9 @@ export class AgoraRTCGateway {
   private client: IAgoraRTCClient | null = null;
   private localAudioTrack: IAgoraRTCLocalAudioTrack | null = null;
   private localVideoTrack: IAgoraRTCLocalVideoTrack | null = null;
+  private remoteAudioTrack: IAgoraRTCRemoteAudioTrack | null = null;
+  private remoteAudioLevelTimer: number | null = null;
+  private remoteSpeaking = false;
   private callbacks: AgoraGatewayCallbacks;
 
   constructor(callbacks: AgoraGatewayCallbacks = {}) {
@@ -116,7 +147,9 @@ export class AgoraRTCGateway {
         return;
       }
       await client.subscribe(user, "audio");
-      user.audioTrack?.play();
+      this.remoteAudioTrack = user.audioTrack || null;
+      await this.playRemoteAudio();
+      this.startRemoteAudioLevelMonitor();
       this.callbacks.onRemoteAudioSubscribed?.(String(user.uid));
     });
 
@@ -125,6 +158,8 @@ export class AgoraRTCGateway {
         return;
       }
       user.audioTrack?.stop();
+      this.remoteAudioTrack = null;
+      this.stopRemoteAudioLevelMonitor();
       this.callbacks.onRemoteAudioUnsubscribed?.(String(user.uid));
     });
 
@@ -135,7 +170,7 @@ export class AgoraRTCGateway {
     const uid = toNumericUid(params.uid);
     await client.join(params.appId, params.channel, params.token || null, uid);
     const localAudioTrack = await AgoraRTC.createMicrophoneAudioTrack();
-    const localVideoTrack = await AgoraRTC.createCameraVideoTrack();
+    const localVideoTrack = await AgoraRTC.createCameraVideoTrack(DEFAULT_CAMERA_TRACK_CONFIG);
     await client.publish([localAudioTrack, localVideoTrack]);
 
     this.client = client;
@@ -168,11 +203,65 @@ export class AgoraRTCGateway {
     this.localVideoTrack?.stop();
   }
 
+  async resumeRemoteAudioPlayback(): Promise<void> {
+    await this.playRemoteAudio();
+  }
+
+  private readRemoteAudioLevel(): number {
+    if (!this.remoteAudioTrack) {
+      return 0;
+    }
+    if (typeof this.remoteAudioTrack.getVolumeLevel === "function") {
+      return Number(this.remoteAudioTrack.getVolumeLevel()) || 0;
+    }
+    if (typeof this.remoteAudioTrack.getCurrentLevel === "function") {
+      return Number(this.remoteAudioTrack.getCurrentLevel()) || 0;
+    }
+    return 0;
+  }
+
+  private async playRemoteAudio(): Promise<void> {
+    if (!this.remoteAudioTrack) {
+      return;
+    }
+    try {
+      await Promise.resolve(this.remoteAudioTrack.play());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "浏览器阻止了远端音频自动播放";
+      this.callbacks.onRemoteAudioPlaybackError?.(message);
+    }
+  }
+
+  private startRemoteAudioLevelMonitor(): void {
+    this.stopRemoteAudioLevelMonitor();
+    this.remoteAudioLevelTimer = window.setInterval(() => {
+      const speaking = this.readRemoteAudioLevel() > 0.05;
+      if (speaking === this.remoteSpeaking) {
+        return;
+      }
+      this.remoteSpeaking = speaking;
+      this.callbacks.onRemoteAudioSpeakingChanged?.(speaking);
+    }, 180);
+  }
+
+  private stopRemoteAudioLevelMonitor(): void {
+    if (this.remoteAudioLevelTimer != null) {
+      window.clearInterval(this.remoteAudioLevelTimer);
+      this.remoteAudioLevelTimer = null;
+    }
+    if (this.remoteSpeaking) {
+      this.remoteSpeaking = false;
+      this.callbacks.onRemoteAudioSpeakingChanged?.(false);
+    }
+  }
+
   async disconnect(): Promise<void> {
     try {
+      this.stopRemoteAudioLevelMonitor();
       this.localAudioTrack?.close();
       this.localVideoTrack?.stop();
       this.localVideoTrack?.close();
+      this.remoteAudioTrack = null;
       this.localAudioTrack = null;
       this.localVideoTrack = null;
       if (this.client) {

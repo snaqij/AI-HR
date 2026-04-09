@@ -124,6 +124,10 @@ export async function createInterviewSession(candidateId: string, jobId: string)
   return data.session;
 }
 
+export async function getInterviewSession(sessionId: string): Promise<InterviewSession> {
+  return request<InterviewSession>(`/ai/interviews/sessions/${sessionId}`);
+}
+
 async function createDemoJob(): Promise<string> {
   const data = await request<{ id: string }>("/jobs", {
     method: "POST",
