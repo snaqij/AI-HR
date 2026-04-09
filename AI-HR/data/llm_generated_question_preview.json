@@ -1,0 +1,133 @@
+{
+  "resume_file": "llm_question_set_prompt_preview.txt",
+  "job_requirements": "Java ??????????????????? Spring Boot?MySQL?Redis?MQ????????????????????????????????????",
+  "question_count": 14,
+  "questions": [
+    {
+      "question": "你好，请简单介绍一下你自己，重点说说你的技术学习路径和项目经历。",
+      "dimension": "沟通表达与自我认知",
+      "expected_signal": "候选人能清晰、有条理地介绍自己的背景，突出与技术栈和项目相关的学习与实践经历。",
+      "followup_condition": "",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你提到熟练掌握Java8新特性。在项目里，你具体在哪些场景下应用过Lambda表达式和Stream API？能结合一个你印象深刻的例子说说它带来的好处，以及你当时有没有遇到什么坑？",
+      "dimension": "Java核心能力与应用经验",
+      "expected_signal": "考察对Java8特性的实际应用理解，而非纯理论。能结合具体场景说明其优势（如代码简洁、并行处理），并能反思实践中遇到的问题（如性能、可读性）。",
+      "followup_condition": "如果候选人回答流于表面，追问：\"你刚才提到用Stream处理集合，如果数据量很大，你会考虑用并行流吗？决定用或不用的考量因素有哪些？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你简历里写了“深入理解CAS原理及LongAdder等高性能计数器实现”。在高并发场景下，为什么LongAdder通常比AtomicLong性能更好？它的实现思想是怎么解决热点竞争问题的？",
+      "dimension": "高并发编程深度",
+      "expected_signal": "考察对并发工具底层原理的理解深度，能否从“伪共享避免”、“分段累加”等角度解释LongAdder的设计思想。",
+      "followup_condition": "如果候选人原理讲得清楚，追问：\"在什么业务场景下，你会优先考虑使用LongAdder而不是AtomicLong？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你技能里列了Redis。假设在你的项目中，用Redis缓存了用户的会话信息或热点商品数据。如果Redis服务突然宕机，所有请求直接打到数据库，可能导致雪崩。你当时是如何设计或考虑避免这种风险的？",
+      "dimension": "中间件应用与系统可靠性",
+      "expected_signal": "考察对缓存失效灾难的认知和应对策略，如缓存高可用方案（主从、集群）、缓存降级策略、或熔断机制。",
+      "followup_condition": "如果候选人提到熔断或降级，追问：\"具体怎么判断该触发降级？降级后返回什么数据？如何恢复？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你用过Seata，这是一个分布式事务框架。在你参与的项目中，是哪个业务场景必须引入分布式事务？当时选型Seata是出于什么考虑？在集成和使用Seata的过程中，你遇到最大的挑战是什么，是怎么解决的？",
+      "dimension": "分布式系统与问题解决",
+      "expected_signal": "考察对分布式事务应用场景的真实理解，对技术选型的思考，以及实际落地中排查和解决问题的能力。",
+      "followup_condition": "如果候选人场景描述清晰，追问：\"Seata的AT模式对数据库有什么要求？如果有的服务操作的是不支持全局锁的数据库（如MongoDB），该怎么办？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你提到有处理内存溢出问题的实践经验。能不能描述一次你实际遇到或模拟分析的OOM（OutOfMemoryError）场景？你是通过什么工具和方法定位到问题根源的？最终是怎么解决的？",
+      "dimension": "JVM调优与故障排查",
+      "expected_signal": "考察真实的JVM问题排查经验，包括工具使用（如jstack, jmap, MAT）、分析思路和解决方案。",
+      "followup_condition": "如果候选人提到堆溢出，追问：\"用MAT分析堆转储文件时，你主要关注哪些报告或视图来找到疑似泄漏的对象？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "假设你设计一个“秒杀”系统的下单接口，预期QPS很高。从接收到请求到完成下单，你会从哪些层面来保证系统的高并发和高可用？可以结合你用过的技术（如Redis、MQ、线程池）来谈。",
+      "dimension": "系统设计与性能优化",
+      "expected_signal": "考察对高并发典型场景的系统性设计思维，能否分层（接入层、服务层、数据层）阐述优化点，并合理运用技术栈。",
+      "followup_condition": "如果候选人提到MQ削峰，追问：\"消息消费失败怎么办？如何保证最终下单成功且不超卖？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "岗位要求提到“Spring Boot”。在你们基于Spring Boot的项目中，你是如何管理不同环境的配置的（比如开发、测试、生产）？有没有用过或了解过Spring Cloud Config这类配置中心？你觉得什么情况下有必要引入配置中心？",
+      "dimension": "框架应用与工程化思维",
+      "expected_signal": "考察对Spring Boot配置管理的实践经验，以及对配置中心价值的理解，判断其工程化意识。",
+      "followup_condition": "如果候选人了解配置中心，追问：\"配置中心推送新配置后，如何让应用在不重启的情况下生效？（考察对@RefreshScope的理解）\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你熟悉MySQL。如果线上发现有一条复杂的SELECT语句执行非常慢，你的一般排查思路是什么？你首先会用什么命令或工具？",
+      "dimension": "数据库性能分析与优化",
+      "expected_signal": "考察数据库慢查询的标准化排查思路，从监控发现到执行计划分析的能力。",
+      "followup_condition": "如果候选人提到EXPLAIN，追问：\"EXPLAIN结果里，你遇到过‘Using filesort’或‘Using temporary’吗？它们通常意味着什么，如何优化？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "你用过RocketMQ。消息队列的一个重要功能是解耦和异步。在你们项目中，哪个业务流程通过RocketMQ实现了解耦？如果消息发送失败了，你们是怎么处理的？如何保证消息不被丢失？",
+      "dimension": "消息中间件应用与可靠性",
+      "expected_signal": "考察对消息队列核心价值的理解，以及在实际项目中如何保证消息可靠性的实践经验（生产者确认、Broker持久化、消费者确认）。",
+      "followup_condition": "如果候选人回答全面，追问：\"如果消费者处理消息成功，但返回ACK时网络失败，导致消息被重复消费，你们有什么防护措施吗？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "现在我想深入了解一下你简历里提到的[请在此处插入候选人简历中具体项目名称，例如“电商后台系统”]项目。请介绍一下这个项目的背景、你在其中的角色、以及你负责的核心功能模块。",
+      "dimension": "项目经历与贡献度",
+      "expected_signal": "考察候选人对项目的整体把握能力，以及个人贡献的清晰度。为后续深挖技术细节做铺垫。",
+      "followup_condition": "根据候选人回答，选取其负责的一个核心功能进行深挖。例如：\"你刚才提到负责用户积分模块，能详细说一下积分增减的场景和规则吗？数据一致性是如何保证的？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "在你负责的[某个具体模块]中，你提到了使用了[某项具体技术，如Redis缓存查询结果]。当时为什么决定在这里引入缓存？缓存 key 是如何设计的？缓存的数据一致性是怎么处理的，比如数据库更新后，缓存如何失效或更新？",
+      "dimension": "技术决策与实现细节",
+      "expected_signal": "深入考察在项目中做技术决策的思考过程，以及对技术细节（如缓存策略）的掌握程度，验证项目经历的真实性。",
+      "followup_condition": "根据回答深入追问一致性方案，如：\"你提到先更新数据库再删缓存，如果删除缓存失败怎么办？有没有考虑过更复杂的方案如延迟双删？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "从你的项目描述看，这应该是一个团队项目。在开发过程中，你们是如何进行协作的（比如代码管理、接口联调）？有没有遇到过因为接口约定不清晰或者他人代码问题导致的阻塞，你是怎么应对和解决的？",
+      "dimension": "协作能力与问题解决",
+      "expected_signal": "考察团队协作经验、沟通能力和主动解决问题的意识。",
+      "followup_condition": "如果候选人提到接口问题，追问：\"你们使用什么工具或格式来定义和共享API文档？你觉得一个好的API文档应该包含哪些要素？\"",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    },
+    {
+      "question": "我们岗位主要做[可根据实际JD补充，如“高并发的金融交易后台”或“企业级SaaS平台”]。结合你之前的学习和项目经验，你觉得你哪些方面的能力或经验与我们这个岗位是比较匹配的？你希望在这个岗位上获得哪些新的成长？",
+      "dimension": "岗位匹配度与职业规划",
+      "expected_signal": "考察候选人对自身能力的认知、对岗位的理解以及长期的学习发展意愿。",
+      "followup_condition": "",
+      "stage": "S3",
+      "max_followups": 2,
+      "success_signals": []
+    }
+  ]
+}

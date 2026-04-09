@@ -1,0 +1,162 @@
+{
+  "question_count": 14,
+  "stage_distribution": {
+    "S3": 14
+  },
+  "questions": [
+    {
+      "index": 1,
+      "length": 39,
+      "stage": "S3",
+      "dimension": "沟通表达与项目概述",
+      "question": "请先做个简单的自我介绍，并重点说说你在这个算法平台项目中承担的角色和主要贡献。",
+      "expected_signal": "能清晰、有条理地介绍自己，并准确概括项目中的核心职责和技术亮点。",
+      "success_signals": [],
+      "followup_condition": "",
+      "max_followups": 2
+    },
+    {
+      "index": 2,
+      "length": 60,
+      "stage": "S3",
+      "dimension": "核心技术栈（分布式事务）",
+      "question": "你在简历里提到用Seata AT模式处理分布式事务。能具体说说在一个跨服务的数据写入场景中，它是如何保证最终一致性的吗？",
+      "expected_signal": "理解AT模式的基本原理（两阶段提交、全局锁、undo_log），并能描述一个完整的业务操作流程。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答清晰，可追问：1. Seata的AT模式和TCC模式主要区别是什么？根据什么来选择？2. 如果第二阶段提交时某个分支服务网络异常，Seata会怎么处理？",
+      "max_followups": 2
+    },
+    {
+      "index": 3,
+      "length": 55,
+      "stage": "S3",
+      "dimension": "核心技术栈（缓存）",
+      "question": "你提到用Redis多级缓存结合布隆过滤器防穿透。布隆过滤器在这里具体是怎么用的？它的误判率问题你们怎么考虑的？",
+      "expected_signal": "理解布隆过滤器的原理（位数组、哈希函数）及其在缓存场景下的应用方式，并对误判率有基本认知。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答出基本原理，可追问：除了防穿透，布隆过滤器能用来防缓存击穿或雪崩吗？为什么？",
+      "max_followups": 2
+    },
+    {
+      "index": 4,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "中间件/消息队列",
+      "question": "项目中用RabbitMQ做异步消息推送。如果一条重要的审批通知消息发送失败，或者消费者处理失败，你们有什么机制来保证?",
+      "expected_signal": "了解消息可靠投递的常见保障机制，能从生产端、Broker端、消费端多个环节阐述。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答了基础机制，可追问：你们用的线程池隔离和回调控制，具体是为了解决什么问题？",
+      "max_followups": 2
+    },
+    {
+      "index": 5,
+      "length": 57,
+      "stage": "S3",
+      "dimension": "系统性能与故障排查",
+      "question": "你简历里写到对JVM内存结构和GC原理有深入了解。如果线上一个服务频繁发生Full GC，你会从哪些方面入手排查？",
+      "expected_signal": "有系统性的排查思路，能联想到内存泄漏、大对象、GC参数配置等多种可能性。",
+      "success_signals": [],
+      "followup_condition": "如果候选人给出了排查步骤，可追问：你提到有处理内存溢出的经验，当时具体是什么原因，怎么解决的？",
+      "max_followups": 2
+    },
+    {
+      "index": 6,
+      "length": 53,
+      "stage": "S3",
+      "dimension": "数据库设计与应用",
+      "question": "你负责的流程审批模块涉及自定义节点和权限。在数据库表设计上，你是如何实现流程模板的可灵活配置和高效查询的？",
+      "expected_signal": "具备将业务逻辑转化为合理数据模型的能力，能考虑到扩展性和查询效率。",
+      "success_signals": [],
+      "followup_condition": "如果候选人描述了表结构，可追问：如果审批流程需要支持复杂的条件分支（比如金额大于X走A节点，否则走B节点），你的设计如何支持？",
+      "max_followups": 2
+    },
+    {
+      "index": 7,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "高并发编程",
+      "question": "你提到深入理解CAS和LongAdder。为什么在高并发计数场景下，LongAdder通常比AtomicLong性能?",
+      "expected_signal": "理解“热点数据”竞争的原理，以及LongAdder通过分散竞争来提升吞吐量的设计思想。",
+      "success_signals": [],
+      "followup_condition": "",
+      "max_followups": 2
+    },
+    {
+      "index": 8,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "主流框架（Spring Boot）",
+      "question": "Spring Boot的自动装配原理你了解过。能说一下@SpringBootApplication这个注解背后，大概?",
+      "expected_signal": "了解自动装配的核心流程（@EnableAutoConfiguration, spring.factories, 条件注解）。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答出关键步骤，可追问：如果项目里同时引入了Redis和Lettuce的依赖，但我不想自动配置连接池，有什么办法？",
+      "max_followups": 2
+    },
+    {
+      "index": 9,
+      "length": 51,
+      "stage": "S3",
+      "dimension": "数据库性能优化",
+      "question": "你简历里提到有SQL调优经验。假设你遇到一条执行很慢的SELECT语句，你一般的排查和优化步骤是什么？",
+      "expected_signal": "掌握基本的SQL优化排查方法论，能使用工具并分析执行计划。",
+      "success_signals": [],
+      "followup_condition": "如果候选人提到了执行计划，可追问：在Extra里看到“Using filesort”通常意味着什么？可能是什么原因引起的？",
+      "max_followups": 2
+    },
+    {
+      "index": 10,
+      "length": 36,
+      "stage": "S3",
+      "dimension": "项目深度与解决问题能力",
+      "question": "在这个算法平台项目里，你遇到的比较大的技术挑战是什么？最后是怎么解决的？",
+      "expected_signal": "能描述一个具体的技术难点，并清晰阐述分析、决策和解决问题的过程。",
+      "success_signals": [],
+      "followup_condition": "根据回答内容，可追问一个技术细节或方案选型的理由。",
+      "max_followups": 2
+    },
+    {
+      "index": 11,
+      "length": 58,
+      "stage": "S3",
+      "dimension": "项目细节与设计思考",
+      "question": "你负责的“可靠消息通知机制”中，提到“回调控制与线程池隔离”。能展开说说为什么需要线程池隔离，以及带来了什么好处吗？",
+      "expected_signal": "理解资源隔离的重要性，能说明其对系统稳定性和可管理性的提升。",
+      "success_signals": [],
+      "followup_condition": "",
+      "max_followups": 2
+    },
+    {
+      "index": 12,
+      "length": 40,
+      "stage": "S3",
+      "dimension": "实习/项目协作与时间管理",
+      "question": "你目前是在校生，在这个项目中的开发节奏是怎样的？如何协调课程、项目以及团队协作？",
+      "expected_signal": "展现良好的时间管理能力和团队协作意识，沟通顺畅。",
+      "success_signals": [],
+      "followup_condition": "",
+      "max_followups": 2
+    },
+    {
+      "index": 13,
+      "length": 60,
+      "stage": "S3",
+      "dimension": "职业规划与岗位匹配",
+      "question": "看你的技能和项目经历，和我们的岗位要求匹配度很高。你个人对接下来要从事的后端开发工作，有什么具体的期待或想深入的方向吗？",
+      "expected_signal": "对自身技术发展有思考，其期待与公司岗位提供的成长空间有契合点。",
+      "success_signals": [],
+      "followup_condition": "",
+      "max_followups": 2
+    },
+    {
+      "index": 14,
+      "length": 35,
+      "stage": "S3",
+      "dimension": "候选人主动性",
+      "question": "我这边问题问得差不多了，你对我们公司或者这个岗位，还有什么想了解的吗？",
+      "expected_signal": "能提出有针对性、经过思考的问题，表现出对机会的真诚兴趣。",
+      "success_signals": [],
+      "followup_condition": "",
+      "max_followups": 2
+    }
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "question_count": 14,
+  "stage_distribution": {
+    "S2": 1,
+    "S3": 8,
+    "S4": 2,
+    "S5": 1,
+    "S6": 1,
+    "S7": 1
+  },
+  "questions": [
+    {
+      "index": 1,
+      "length": 37,
+      "stage": "S2",
+      "dimension": "沟通表达与经历概述",
+      "question": "请先做个简单的自我介绍，并重点说一下你在这个算法平台项目中承担的核心职责。"
+    },
+    {
+      "index": 2,
+      "length": 76,
+      "stage": "S3",
+      "dimension": "中间件/数据库/缓存（Redis原理）",
+      "question": "你提到熟悉Redis的多线程网络模型。能说说Redis 6.0之后的多线程模型，具体是多线程处理哪些部分吗？和你熟悉的Java线程池工作流程有什么异同？"
+    },
+    {
+      "index": 3,
+      "length": 77,
+      "stage": "S3",
+      "dimension": "项目技术栈深挖（工作流引擎）",
+      "question": "你项目里用到了Flowable做流程审批。如果有一个审批节点需要动态指定审批人（比如根据项目金额不同，审批人级别不同），在Flowable里通常怎么实现？"
+    },
+    {
+      "index": 4,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "岗位匹配与系统思维",
+      "question": "我们岗位对高并发和系统稳定性有较高要求。结合你的项目经验，你觉得要设计一个高可用的后端服务，最需要关注的是哪几个方面？"
+    },
+    {
+      "index": 5,
+      "length": 63,
+      "stage": "S3",
+      "dimension": "核心技术栈（可靠性设计）",
+      "question": "你提到结合了本地消息表和补偿机制来保障数据可靠落库。为什么在用了Seata之后，还需要引入本地消息表？它们各自解决了什么问题？"
+    },
+    {
+      "index": 6,
+      "length": 57,
+      "stage": "S3",
+      "dimension": "中间件/数据库/缓存（Redis）",
+      "question": "你构建了Redis多级缓存体系来防止穿透、击穿和雪崩。能分别解释一下这三种问题，并说明你项目中具体是如何应对的吗？"
+    },
+    {
+      "index": 7,
+      "length": 64,
+      "stage": "S3",
+      "dimension": "核心技术栈（分布式事务）",
+      "question": "你在简历里提到用Seata AT模式处理分布式事务。能具体说说在一个跨服务的数据写入场景中，Seata是如何保证最终一致性的吗？"
+    },
+    {
+      "index": 8,
+      "length": 68,
+      "stage": "S3",
+      "dimension": "岗位JD关键要求补齐（数据库）",
+      "question": "岗位要求对MySQL事务和MVCC有深入了解。在RR隔离级别下，基于MVCC的“可重复读”是如何实现的？它怎么解决“不可重复读”问题的？"
+    },
+    {
+      "index": 9,
+      "length": 99,
+      "stage": "S3",
+      "dimension": "岗位JD关键要求补齐（高并发编程）",
+      "question": "你熟悉CountDownLatch和ReentrantLock。在一个需要等待多个远程服务调用结果都返回后才能继续执行的场景，为什么选择CountDownLatch而不是CyclicBarrier？"
+    },
+    {
+      "index": 10,
+      "length": 27,
+      "stage": "S4",
+      "dimension": "project_tradeoff",
+      "question": "那个项目里有哪个方案是反复权衡过的？最后为什么这么定？"
+    },
+    {
+      "index": 11,
+      "length": 31,
+      "stage": "S4",
+      "dimension": "project_deep_dive",
+      "question": "你用 Java 最深的那个项目里，最难的点是什么？你怎么做的？"
+    },
+    {
+      "index": 12,
+      "length": 50,
+      "stage": "S5",
+      "dimension": "实习经历与个人成长",
+      "question": "看你的实习时间是从去年11月到今年3月，大概四个月。在这段实习中，你觉得自己最大的成长和收获是什么？"
+    },
+    {
+      "index": 13,
+      "length": 74,
+      "stage": "S6",
+      "dimension": "系统设计/性能优化/故障排查（JVM）",
+      "question": "你简历里提到对JVM GC原理有了解，并有处理内存溢出的经验。如果线上一个Spring Boot服务频繁发生Full GC，你会按照什么步骤来排查？"
+    },
+    {
+      "index": 14,
+      "length": 108,
+      "stage": "S7",
+      "dimension": "company_qa",
+      "question": "技术部分聊完后，结合这个岗位“Java ??????????????????? Spring Boot?MySQL?Redis?MQ?????????????????????????????”，你最想了解我们哪一块？"
+    }
+  ]
+}

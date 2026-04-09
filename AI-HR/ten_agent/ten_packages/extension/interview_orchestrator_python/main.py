@@ -58,6 +58,8 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.current_turn_start_ms = 0
         self.current_turn_segment_start_ms = 0
         self.current_turn_accumulated_ms = 0
+        self.last_asr_activity_ms = 0
+        self.pending_finalize_wait_logged = False
         self.turn_triggered = False  # 新增：回合锁定标志
         self.last_triggered_text = "" # 新增：记录本回合触发时的文本
         
@@ -112,6 +114,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         if self.pending_finalize_task and not self.pending_finalize_task.done():
             self.pending_finalize_task.cancel()
         self.pending_finalize_task = None
+        self.pending_finalize_wait_logged = False
 
     def _invalidate_active_response(self) -> None:
         self.arbiter.invalidate_generation()
@@ -122,6 +125,36 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.current_turn_start_ms = 0
         self.current_turn_segment_start_ms = 0
         self.current_turn_accumulated_ms = 0
+        self.last_asr_activity_ms = 0
+        self.pending_finalize_wait_logged = False
+
+    def _has_active_response_pipeline(self) -> bool:
+        if self.pending_payload:
+            return True
+        if self.pending_finalize_task and not self.pending_finalize_task.done():
+            return True
+        if self.llm_task and not self.llm_task.done():
+            return True
+        if self.arbiter.active_generation_id:
+            return True
+        return False
+
+    def _is_reengagement_transcript(self, transcript: str) -> bool:
+        text = str(transcript or "").strip().lower()
+        if not text:
+            return False
+        reengagement_markers = (
+            "你在吗",
+            "我们继续面试",
+            "继续面试",
+            "你咋不说话",
+            "怎么不说话",
+            "再给我",
+            "hello hello",
+            "hello",
+            "喂",
+        )
+        return any(marker in text for marker in reengagement_markers)
 
     def _sanitize_tts_text(self, text: str) -> str:
         cleaned = str(text or "").strip()
@@ -222,6 +255,11 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 merged_transcript = f"{prior_transcript} {transcript}".strip()
             else:
                 merged_transcript = prior_transcript
+            print(
+                f"[orchestrator] merged pending final transcript chars={len(merged_transcript)} "
+                f"turn_accumulated_ms={self.current_turn_accumulated_ms}",
+                flush=True,
+            )
         self._cancel_pending_finalize(clear_payload=False)
         self.pending_payload = {
             "transcript": merged_transcript,
@@ -232,6 +270,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
             "turn_start_ms": self.current_turn_start_ms,
             "turn_accumulated_ms": self.current_turn_accumulated_ms,
         }
+        self.last_asr_activity_ms = self._now_ms()
         token = self.pending_finalize_token
         self.pending_finalize_task = asyncio.create_task(
             self._finalize_after_delay(ten_env, delay_ms=delay_ms, token=token)
@@ -244,13 +283,38 @@ class InterviewOrchestratorExtension(AsyncExtension):
             while True:
                 if token != self.pending_finalize_token:
                     return
-                if self.is_user_speaking or not self.pending_payload:
+                now_ms = self._now_ms()
+                if not self.pending_payload:
                     return
+                if self.is_user_speaking:
+                    stage = (self.state or {}).get("interview_stage", "S1")
+                    policy = self._get_realtime_policy(stage)
+                    idle_since_asr_ms = (
+                        now_ms - self.last_asr_activity_ms if self.last_asr_activity_ms else 0
+                    )
+                    stale_speaking_guard_ms = max(policy.hard_done_ms, 1800)
+                    if idle_since_asr_ms >= stale_speaking_guard_ms:
+                        print(
+                            f"[orchestrator] stale speaking state detected; clearing user-speaking lock "
+                            f"idle_since_asr_ms={idle_since_asr_ms}",
+                            flush=True,
+                        )
+                        self.is_user_speaking = False
+                        self.current_turn_segment_start_ms = 0
+                        self.pending_finalize_wait_logged = False
+                        continue
+                    if not self.pending_finalize_wait_logged:
+                        print("[orchestrator] pending finalize waiting because user still speaking", flush=True)
+                        self.pending_finalize_wait_logged = True
+                    await asyncio.sleep(0.2)
+                    continue
+                if self.pending_finalize_wait_logged:
+                    print("[orchestrator] pending finalize resumed after speech ended", flush=True)
+                    self.pending_finalize_wait_logged = False
 
                 payload = dict(self.pending_payload)
                 stage = (self.state or {}).get("interview_stage", "S1")
                 policy = self._get_realtime_policy(stage)
-                now_ms = self._now_ms()
                 speaking_elapsed_ms = int(payload.get("turn_accumulated_ms") or 0)
                 silence_ms = 0
                 asr_physical_stop_ts = float(payload.get("asr_physical_stop_ts") or 0.0)
@@ -275,6 +339,11 @@ class InterviewOrchestratorExtension(AsyncExtension):
                     flush=True,
                 )
                 if decision.should_finalize:
+                    if decision.reason == "max_silence_force_finalize":
+                        print(
+                            f"[orchestrator] force finalizing buffered turn after long silence chars={len(str(payload.get('transcript') or ''))}",
+                            flush=True,
+                        )
                     self.pending_payload = None
                     await self._handle_interaction(ten_env, **payload)
                     self._reset_turn_capture()
@@ -881,6 +950,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         transcript = (transcript or "").strip()
         if not transcript:
             return
+        self.last_asr_activity_ms = self._now_ms()
 
         asr_final_ts, _ = data.get_property_float("asr_final_ts")
         asr_sentence_start_ts, _ = data.get_property_float("asr_sentence_start_ts")
@@ -951,11 +1021,19 @@ class InterviewOrchestratorExtension(AsyncExtension):
             if self.last_triggered_text and (
                 self.last_triggered_text in transcript or transcript[:5] == self.last_triggered_text[:5]
             ):
-                print(
-                    f"[orchestrator] skipping Final trigger; already handled by speculative: {self.last_triggered_text}",
-                    flush=True,
-                )
-                return
+                if self._is_reengagement_transcript(transcript):
+                    print(f"[orchestrator] allowing reengagement transcript through dedupe: {transcript}", flush=True)
+                elif self._has_active_response_pipeline():
+                    print(
+                        f"[orchestrator] skipping Final trigger; already handled by speculative: {self.last_triggered_text}",
+                        flush=True,
+                    )
+                    return
+                else:
+                    print(
+                        f"[orchestrator] duplicate-like final allowed because pipeline is idle: {transcript}",
+                        flush=True,
+                    )
 
         print(f"[orchestrator] final user input buffered: {transcript}", flush=True)
         self.turn_triggered = True

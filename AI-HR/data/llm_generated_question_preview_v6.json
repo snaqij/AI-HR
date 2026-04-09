@@ -1,0 +1,111 @@
+{
+  "question_count": 14,
+  "stage_distribution": {
+    "S2": 1,
+    "S3": 8,
+    "S4": 2,
+    "S5": 1,
+    "S6": 1,
+    "S7": 1
+  },
+  "questions": [
+    {
+      "index": 1,
+      "length": 47,
+      "stage": "S2",
+      "dimension": "沟通表达与经历概述",
+      "question": "请简单介绍一下你自己，并重点说说你最近这个‘算法软件与应用平台’项目里，你主要负责了哪些模块？"
+    },
+    {
+      "index": 2,
+      "length": 60,
+      "stage": "S3",
+      "dimension": "核心技术栈（缓存）",
+      "question": "你提到基于Redis构建了多级缓存体系来防止穿透、击穿和雪崩。能分别说说你是如何用布隆过滤器和互斥锁来解决这些问题的吗？"
+    },
+    {
+      "index": 3,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "技术深度与原理理解",
+      "question": "你简历里写了对LongAdder等高并发计数器有研究。在什么场景下你会选择用LongAdder而不是AtomicLo?"
+    },
+    {
+      "index": 4,
+      "length": 60,
+      "stage": "S3",
+      "dimension": "核心技术栈（分布式/中间件）",
+      "question": "你在简历里提到用Seata AT模式处理分布式事务。能具体说说在一个跨服务的事务中，Seata是如何保证数据一致性的吗？"
+    },
+    {
+      "index": 5,
+      "length": 44,
+      "stage": "S3",
+      "dimension": "核心技术栈（数据库）",
+      "question": "你提到对MySQL的MVCC有深入了解。在可重复读隔离级别下，MVCC是如何避免幻读的？"
+    },
+    {
+      "index": 6,
+      "length": 52,
+      "stage": "S3",
+      "dimension": "项目技术深挖（业务中间件）",
+      "question": "你负责的流程审批模块用到了Flowable。在自定义审核流程时，你是如何处理动态权限节点和流程可视化的？"
+    },
+    {
+      "index": 7,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "核心技术栈（并发编程）",
+      "question": "你简历里写了熟悉线程池源码和调优。如果有一个CPU密集型的批处理任务，你会如何配置ThreadPoolExecuto?"
+    },
+    {
+      "index": 8,
+      "length": 34,
+      "stage": "S3",
+      "dimension": "解决问题与复盘能力",
+      "question": "在这个平台项目中，你遇到的比较大的技术挑战是什么？最后是怎么解决的？"
+    },
+    {
+      "index": 9,
+      "length": 55,
+      "stage": "S3",
+      "dimension": "项目细节与设计思路",
+      "question": "你提到“结合本地消息表与补偿机制保障核心数据可靠落库”。这个补偿机制是你们自己实现的吗？触发补偿的场景有哪些？"
+    },
+    {
+      "index": 10,
+      "length": 27,
+      "stage": "S4",
+      "dimension": "project_tradeoff",
+      "question": "那个项目里有哪个方案是反复权衡过的？最后为什么这么定？"
+    },
+    {
+      "index": 11,
+      "length": 31,
+      "stage": "S4",
+      "dimension": "project_deep_dive",
+      "question": "你用 Java 最深的那个项目里，最难的点是什么？你怎么做的？"
+    },
+    {
+      "index": 12,
+      "length": 27,
+      "stage": "S5",
+      "dimension": "experience_validation",
+      "question": "如果看实习或协作经历，你真正独立负责到交付的是哪一块？"
+    },
+    {
+      "index": 13,
+      "length": 52,
+      "stage": "S6",
+      "dimension": "系统性能与故障排查",
+      "question": "你提到对JVM内存结构和GC原理有深入了解。如果线上服务发生Full GC频繁，你会从哪些方面入手排查？"
+    },
+    {
+      "index": 14,
+      "length": 40,
+      "stage": "S7",
+      "dimension": "职业规划与团队匹配",
+      "question": "你未来的职业规划是怎样的？希望在我们这样的团队里承担什么样的角色或获得哪些成长？"
+    }
+  ]
+}

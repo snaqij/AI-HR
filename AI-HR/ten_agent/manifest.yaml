@@ -1,0 +1,128 @@
+# [manifest.yaml] 核心编排图 - 低时延实时对话链路
+
+name: ai_hr_agent_graph
+type: graph
+
+nodes:
+  # 1. 实时音视频入口 (声网 RTC)
+  - name: agora_rtc
+    package: agora_rtc
+    extension: agora_rtc
+
+  # 2. 服务端停顿检测 (VAD) —— 低时延的关键
+  - name: ten_vad
+    package: ten_vad
+    extension: ten_vad
+
+  # 3. 阿里云语音识别 (ASR)
+  - name: asr_aliyun_nls
+    package: aliyun_nls_asr_python
+    extension: aliyun_nls_asr_python
+
+  # 4. 业务逻辑编排 (LLM) —— 调用现有面试编排逻辑
+  - name: interview_orchestrator
+    package: interview_orchestrator_python
+    extension: interview_orchestrator_python
+
+  # 5. 腾讯云语音合成 (TTS) —— 包装了现有 Provider，支持流式和打断
+  - name: tts_tencent
+    package: tencent_tts_python
+    extension: tencent_tts_python
+
+# 数据流向定义 (Connections)
+connections:
+  # 音频并联链路：声网音频同时发给 VAD 和 ASR (降低时延)
+  - from: agora_rtc
+    to: ten_vad
+    api: audio_frame
+    output: pcm_frame
+    input: pcm_frame
+  - from: agora_rtc
+    to: asr_aliyun_nls
+    api: audio_frame
+    output: pcm_frame
+    input: pcm_frame
+
+  # 控制链路：VAD 告诉 ASR 什么时候开始/结束一段话
+  - from: ten_vad
+    to: asr_aliyun_nls
+    api: cmd
+
+  # 文本链路：ASR -> LLM -> TTS
+  - from: asr_aliyun_nls
+    to: interview_orchestrator
+    api: data
+    output: text_data
+    input: text_data
+  - from: interview_orchestrator
+    to: tts_tencent
+    api: data
+    output: text_data
+    input: text_data
+
+  # 播放链路：TTS -> 声网
+  - from: tts_tencent
+    to: agora_rtc
+    api: audio_frame
+    output: pcm_frame
+    input: pcm_frame
+
+  # 信号链路：声网 -> 编排器 (等待连接成功后开场)
+  - from: agora_rtc
+    to: interview_orchestrator
+    api: cmd
+    condition: "name == 'on_connected'"
+
+  # 打断链路 (Barge-in)：VAD 发现用户说话 (start_of_sentence)，立即打断 TTS 和 编排器
+  - from: ten_vad
+    to: tts_tencent
+    api: cmd
+    condition: "name == 'start_of_sentence'"
+  
+  - from: ten_vad
+    to: interview_orchestrator
+    api: cmd
+    condition: "name == 'start_of_sentence' or name == 'end_of_sentence'"
+
+  - from: ten_vad
+    to: asr_aliyun_nls
+    api: cmd
+    condition: "name == 'start_of_sentence'"
+
+# 全局属性集中管理
+properties:
+  # 声网配置
+  agora_rtc:
+    app_id: "72f8343592b64607a2e0c7b995c637c2"
+    channel_name: "test_room"
+    remote_user_id: "241044173"
+    publish_audio: true
+    subscribe_audio: true
+
+  # VAD 核心判定配置
+  ten_vad:
+    silence_duration_ms: 1500  # 判定一段话结束的静音时长
+    prefix_padding_ms: 800     # 判定插话所需的持续语音时长 (过滤键盘噪音)
+    vad_threshold: 0.9         # 0.9 灵敏度 (越高越迟钝)，有效过滤环境噪音
+    dump: false
+
+  # ASR 阿里云配置
+  asr_aliyun_nls:
+    appkey: "qkufZ4MjY4ev9JQb"
+    access_key_id: "LTAI5tEivqMhxmuZfTHoGvjt"
+    access_key_secret: "3mfMYWLm4uTq8HYZGMiUrqtZ7HAumc"
+
+  # TTS 腾讯云配置
+  tts_tencent:
+    secret_id: "AKIDLaeQ0OdglpiPuCJTRFoCPQHzT0OeibHl"
+    secret_key: "g9RWP6blmutjNQI0b0DF7xyyoWDqMiy3"
+    region: "ap-beijing"
+    app_id: "1413662430"
+    voice_type: 101001
+
+  # 面试大脑配置
+  interview_orchestrator:
+    task_key: "interview_followup"
+    max_followup: 2
+    resume_summary: "一名具有 5 年经验的后端开发工程师，精通 Java/Python，熟悉分布式系统和 Redis。曾在某电商公司参与秒杀系统的架构设计。"
+    job_requirements: "需要具备扎实的数据结构基础，熟悉常用的中间件，能够解决高并发下的系统稳定性问题。"

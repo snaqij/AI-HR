@@ -1,0 +1,110 @@
+{
+  "question_count": 14,
+  "stage_distribution": {
+    "S2": 1,
+    "S3": 9,
+    "S4": 2,
+    "S6": 1,
+    "S7": 1
+  },
+  "questions": [
+    {
+      "index": 1,
+      "length": 25,
+      "stage": "S2",
+      "dimension": "self_intro",
+      "question": "?????????????????????????"
+    },
+    {
+      "index": 2,
+      "length": 60,
+      "stage": "S3",
+      "dimension": "系统思维与岗位匹配",
+      "question": "我们岗位要求处理高并发场景和复杂系统设计。结合你的项目经验，你觉得要设计一个高可用的后端系统，最需要关注的是哪几个方面？"
+    },
+    {
+      "index": 3,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "中间件与数据库（缓存）",
+      "question": "你在项目中用Redis构建了多级缓存。能说说你们具体是怎么设计这个“多级”结构的吗？比如本地缓存和Redis是如何配?"
+    },
+    {
+      "index": 4,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "核心技术栈（JVM与性能）",
+      "question": "你提到深入理解JVM内存结构和GC原理，并有处理内存溢出的经验。如果线上一个Java服务频繁发生Full GC，你会?"
+    },
+    {
+      "index": 5,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "岗位JD关键要求（并发与性能优化）",
+      "question": "你熟悉线程池源码和调优。如果线上一个线程池任务堆积严重，但CPU使用率并不高，你觉得可能是什么原因？该怎么排查和优化？"
+    },
+    {
+      "index": 6,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "核心技术栈（分布式事务）",
+      "question": "你在简历里提到用Seata AT模式处理分布式事务。能具体说说在一个跨服务的数据写入场景中，Seata是如何保证最终?"
+    },
+    {
+      "index": 7,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "岗位JD关键要求（数据库原理）",
+      "question": "你简历里写了对MySQL的MVCC有深入了解。能结合一个更新语句，说说Read View是如何判断某行记录对当前事务?"
+    },
+    {
+      "index": 8,
+      "length": 51,
+      "stage": "S3",
+      "dimension": "项目深挖（业务流程）",
+      "question": "你负责的流程审批模块用了Flowable。当审批流程需要动态调整节点或权限时，你们是如何设计和实现的？"
+    },
+    {
+      "index": 9,
+      "length": 54,
+      "stage": "S3",
+      "dimension": "系统设计与可靠性",
+      "question": "你提到基于MQ实现了可靠消息通知。为了保证消息不丢失，你们在生产者、Broker和消费者侧分别做了哪些保障？"
+    },
+    {
+      "index": 10,
+      "length": 31,
+      "stage": "S4",
+      "dimension": "project_deep_dive",
+      "question": "?? Java ???????????????????????"
+    },
+    {
+      "index": 11,
+      "length": 27,
+      "stage": "S4",
+      "dimension": "project_tradeoff",
+      "question": "???????????????????????????"
+    },
+    {
+      "index": 12,
+      "length": 26,
+      "stage": "S6",
+      "dimension": "capability_probe",
+      "question": "??????????????????????????"
+    },
+    {
+      "index": 13,
+      "length": 58,
+      "stage": "S7",
+      "dimension": "company_qa",
+      "question": "???????????????Java ??????????????????? Spring Boot?MySQL?"
+    },
+    {
+      "index": 14,
+      "length": 35,
+      "stage": "S3",
+      "dimension": "解决问题与复盘能力",
+      "question": "在这个算法平台项目中，你遇到的最大的技术挑战是什么？最后是怎么解决的？"
+    }
+  ]
+}

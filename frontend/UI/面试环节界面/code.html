@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+
+<html class="light" lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&amp;family=Inter:wght@300;400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "surface-variant": "#dde1ff",
+              "on-surface": "#131a36",
+              "surface-container-low": "#f3f2ff",
+              "surface-bright": "#fbf8ff",
+              "primary-fixed": "#dbe1ff",
+              "primary-fixed-dim": "#b4c5ff",
+              "on-primary-fixed": "#00174b",
+              "surface-container-lowest": "#ffffff",
+              "surface-dim": "#d3d8fd",
+              "on-primary": "#ffffff",
+              "tertiary-fixed": "#ffdbd0",
+              "on-primary-container": "#cbd6ff",
+              "on-secondary": "#ffffff",
+              "inverse-on-surface": "#f0efff",
+              "on-error": "#ffffff",
+              "outline-variant": "#c3c6d7",
+              "tertiary-container": "#aa3500",
+              "on-primary-fixed-variant": "#003ea8",
+              "on-tertiary-container": "#ffccbc",
+              "surface-container-high": "#e4e7ff",
+              "error": "#ba1a1a",
+              "surface": "#fbf8ff",
+              "secondary-fixed-dim": "#76d6d5",
+              "on-secondary-container": "#006e6e",
+              "secondary": "#006a6a",
+              "primary-container": "#0052d9",
+              "on-secondary-fixed-variant": "#004f4f",
+              "background": "#fbf8ff",
+              "on-tertiary": "#ffffff",
+              "surface-container-highest": "#dde1ff",
+              "outline": "#737686",
+              "error-container": "#ffdad6",
+              "on-secondary-fixed": "#002020",
+              "secondary-container": "#90efef",
+              "on-error-container": "#93000a",
+              "on-tertiary-fixed-variant": "#832700",
+              "tertiary-fixed-dim": "#ffb59c",
+              "tertiary": "#822600",
+              "secondary-fixed": "#93f2f2",
+              "on-background": "#131a36",
+              "on-tertiary-fixed": "#390c00",
+              "inverse-primary": "#b4c5ff",
+              "surface-container": "#ececff",
+              "inverse-surface": "#292f4c",
+              "surface-tint": "#0353da",
+              "primary": "#003da6",
+              "on-surface-variant": "#434654"
+            },
+            fontFamily: {
+              "headline": ["Manrope"],
+              "body": ["Inter"],
+              "label": ["Inter"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        body {
+            background-color: #fbf8ff;
+            color: #131a36;
+            overflow: hidden;
+        }
+        .video-stage-shadow {
+            box-shadow: 0 20px 50px rgba(19, 26, 54, 0.08);
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+        }
+        /* Custom scrollbar for minimalist look */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #e2e8f0;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #cbd5e1;
+        }
+    </style>
+</head>
+<body class="font-body selection:bg-primary-fixed selection:text-on-primary-fixed">
+<!-- TopNavBar: Fixed Height 64px -->
+<header class="flex justify-between items-center w-full px-8 h-16 bg-white border-b border-slate-100 fixed top-0 left-0 z-50 transition-colors">
+<div class="flex items-center gap-3">
+<span class="text-lg font-bold text-slate-900 font-headline">职位面试中</span>
+<div class="h-4 w-[1px] bg-slate-200"></div>
+<span class="text-sm font-medium tracking-tight text-slate-500">高级产品设计师</span>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2 text-slate-500 font-medium text-sm">
+<span class="material-symbols-outlined text-base" data-icon="timer">timer</span>
+<span>08:24</span>
+</div>
+<div class="flex items-center gap-1 text-secondary">
+<span class="material-symbols-outlined" data-icon="signal_cellular_alt">signal_cellular_alt</span>
+<span class="text-[10px] font-bold uppercase tracking-tighter">网络优秀</span>
+</div>
+</div>
+<div>
+<button class="bg-error text-on-error px-5 py-2 rounded-xl text-sm font-semibold hover:opacity-90 transition-all active:scale-95 duration-150">
+                退出面试
+            </button>
+</div>
+</header>
+<!-- Main Content Container -->
+<main class="pt-16 pb-20 flex h-screen w-full overflow-hidden">
+<!-- Video Stage Area (Main focus) -->
+<section class="flex-1 h-full p-6 relative flex items-center justify-center bg-surface">
+<div class="w-full h-full relative rounded-2xl overflow-hidden video-stage-shadow bg-slate-900">
+<!-- Candidate Full Screen Video -->
+<img alt="Candidate Video" class="w-full h-full object-cover" data-alt="Professional candidate looking directly into camera for interview" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDcQcvjQE8pQIdSXxqbslbquHC_mTO-JDZ9fiQcR_39laKenkDvhTjz_rvb6tcG1blb7Z38XHKjuPZgrlJNYnzC3m79DHkr0-8l8FJWMRT4P8HeYaDnghGibi7Ei-lqs8uSiGz-0Ytpjmui34yeF-uiGQ0Ls1Kx6PDpVWXEV1GwOjUEm3oJ45hcHx8-iZdOGvyczYKAKZVAQKIOXDju_G64yIeXhqBxAVCjL-AGQDEXZ2mZ3dHvWzjudHG42UBSht4afoRbhqfe_DI"/>
+<!-- Interviewer Floating Window (Top Left) -->
+<div class="absolute top-6 left-6 w-48 h-32 rounded-xl overflow-hidden glass-panel border border-white/20 shadow-lg">
+<img alt="Interviewer Video" class="w-full h-full object-cover" data-alt="Experienced professional interviewer with a friendly expression" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAgAHLDCOqPWkeNfE5hJhCc2Yfq1rQcCv7EwkUKevYmDdipe4Lyr7zL-Z76S18JS1Fxb1PcK3PuRWJ9VmJKxCRyKBFzluxdxNwqZlIgxVAWLrGfVtnoKiTM_JKKZIpMyHscA4Uumlx-TKjyVG2PDfTxh2ZQ_3IcJaKDFVNt7eThLEtJQqVIc0fLGoi5DB0oWnmdePbawfs8aLnIHSzk1PGMBs7S-e4m9ERSqkX958ucJt-kD-iEoX76PtuGq92wnDfXVOJDKSV_Ehk"/>
+<div class="absolute bottom-2 left-2 px-2 py-0.5 bg-black/40 backdrop-blur-md rounded text-[10px] text-white font-medium uppercase tracking-widest">
+                        面试官
+                    </div>
+</div>
+<!-- Live Status Overlay (Bottom Center) -->
+<div class="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-3 px-6 py-3 glass-panel rounded-full shadow-xl border border-white/30">
+<div class="relative flex h-3 w-3">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-3 w-3 bg-secondary"></span>
+</div>
+<span class="text-on-surface font-medium text-sm tracking-wide">面试官正在聆听</span>
+</div>
+</div>
+</section>
+<!-- Meeting Summary Sidebar (25% Width or fixed) -->
+<aside class="w-[380px] h-full flex flex-col bg-white border-l border-slate-100">
+<!-- Header -->
+<div class="p-6 pb-2">
+<h2 class="font-manrope font-bold text-slate-800 text-lg">会议纪要</h2>
+<div class="flex items-center gap-1 mt-1 text-blue-600">
+<span class="material-symbols-outlined text-xs" data-icon="sync">sync</span>
+<span class="text-xs font-medium">实时同步中</span>
+</div>
+</div>
+<!-- Scrollable Content -->
+<div class="flex-1 overflow-y-auto px-6 space-y-6 pt-4 pb-12">
+<!-- Current Question Card -->
+<div class="border-l-4 border-blue-600 bg-blue-50/30 p-5 rounded-r-xl">
+<div class="flex items-center gap-2 mb-3">
+<span class="material-symbols-outlined text-blue-600 text-lg" data-icon="help_outline">help_outline</span>
+<span class="text-xs font-bold text-blue-600 tracking-wider uppercase">当前问题</span>
+</div>
+<p class="text-slate-800 font-medium leading-relaxed">请谈谈你在上一个项目中如何平衡用户体验与商业目标之间的冲突？</p>
+</div>
+<!-- Real-time Transcript Stream -->
+<div class="space-y-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-slate-400 text-lg" data-icon="forum">forum</span>
+<span class="text-xs font-bold text-slate-500 tracking-wider uppercase">实时记录</span>
+</div>
+<div class="space-y-4">
+<div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+<span class="text-[10px] text-slate-400 block mb-1">08:22 · 我</span>
+<p class="text-sm text-slate-700">在这个项目中，我们首先通过用户调研发现，过多的广告弹窗严重影响了核心转化率，虽然短期收益增加了...</p>
+</div>
+<div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+<span class="text-[10px] text-slate-400 block mb-1">08:20 · 面试官</span>
+<p class="text-sm text-slate-700">刚才你提到了团队协作，能针对具体的利益相关方管理再展开讲讲吗？</p>
+</div>
+<div class="p-4 bg-slate-50 rounded-lg border border-slate-100">
+<span class="text-[10px] text-slate-400 block mb-1">08:18 · 我</span>
+<p class="text-sm text-slate-700">我理解的产品设计不仅仅是美学上的追求，更是一种解决问题的思维模型...</p>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- Bottom Control Bar: Fixed Bottom -->
+<footer class="fixed bottom-0 left-0 w-full z-50 h-20 flex justify-between items-center px-8 bg-white border-t border-slate-100 shadow-lg">
+<!-- Status -->
+<div class="flex items-center gap-3 text-slate-500 font-inter text-xs tracking-wide">
+<span class="material-symbols-outlined text-[8px] text-secondary" data-icon="fiber_manual_record" style="font-variation-settings: 'FILL' 1;">fiber_manual_record</span>
+<span>正在自动记录面试内容，请保持自然作答</span>
+</div>
+<!-- Controls -->
+<div class="absolute left-1/2 -translate-x-1/2 flex items-center gap-8">
+<button class="group flex flex-col items-center gap-1">
+<div class="w-12 h-12 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 transition-colors text-slate-700">
+<span class="material-symbols-outlined text-xl" data-icon="mic">mic</span>
+</div>
+<span class="text-[10px] font-medium text-slate-500">解除静音</span>
+</button>
+<button class="group flex flex-col items-center gap-1">
+<div class="w-12 h-12 flex items-center justify-center rounded-full bg-slate-100 hover:bg-slate-200 transition-colors text-slate-700">
+<span class="material-symbols-outlined text-xl" data-icon="videocam">videocam</span>
+</div>
+<span class="text-[10px] font-medium text-slate-500">停止视频</span>
+</button>
+</div>
+<!-- Right Side Utils -->
+<div class="flex items-center gap-4">
+<button class="text-slate-400 hover:text-slate-600 transition-colors">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+</div>
+</footer>
+</body></html>

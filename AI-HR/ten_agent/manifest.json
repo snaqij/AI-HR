@@ -1,0 +1,36 @@
+{
+  "type": "app",
+  "name": "ai_hr_agent",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "type": "system",
+      "name": "ten_runtime",
+      "version": "0.11"
+    },
+    {
+      "type": "system",
+      "name": "ten_runtime_python",
+      "version": "0.11"
+    },
+    {
+      "path": "ten_packages/extension/agora_rtc"
+    },
+    {
+      "path": "ten_packages/extension/ten_vad_python"
+    },
+    {
+      "path": "ten_packages/extension/aliyun_nls_asr_python"
+    },
+    {
+      "path": "ten_packages/extension/tencent_tts_python"
+    },
+    {
+      "path": "ten_packages/extension/interview_orchestrator_python"
+    }
+  ],
+  "scripts": {
+    "start": "python3 scripts/start.py",
+    "bootstrap": "python3 scripts/bootstrap.py"
+  }
+}

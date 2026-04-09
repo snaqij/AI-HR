@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "type": "system",
+      "name": "ten_runtime",
+      "version": "0.11.62",
+      "hash": "5970c9e6fdd8ade6044e10dafa8daaafdc3a77136038c0cdde28f0734abf2884",
+      "supports": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    },
+    {
+      "type": "system",
+      "name": "ten_runtime_python",
+      "version": "0.11.62",
+      "hash": "3d67baae8b638167230a557d2fb79c3b4c6d78ea1999a045683d4f76474f8179",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime"
+        },
+        {
+          "type": "addon_loader",
+          "name": "python_addon_loader"
+        }
+      ],
+      "supports": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    },
+    {
+      "type": "extension",
+      "name": "agora_rtc",
+      "version": "0.25.0-rc2",
+      "hash": "190b5bdb7f23ca4c48470d3b22398f3fe5cc7c06dba1c9ea77ec31bb7534a18e",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime"
+        },
+        {
+          "type": "system",
+          "name": "agora_rtc_sdk"
+        }
+      ],
+      "supports": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ],
+      "path": "ten_packages/extension/agora_rtc"
+    },
+    {
+      "type": "extension",
+      "name": "ten_vad_python",
+      "version": "0.2.0",
+      "hash": "34a919e019a0749d735e2ca51de925744e191e01a38a404ce41f7e332662267d",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime_python"
+        }
+      ],
+      "path": "ten_packages/extension/ten_vad_python"
+    },
+    {
+      "type": "extension",
+      "name": "aliyun_nls_asr_python",
+      "version": "0.1.0",
+      "hash": "8c10b8210042eca29c88ba92c757a87e1909ce5b45db5e87ad4b01e6e14f3c2b",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime_python"
+        }
+      ],
+      "path": "ten_packages/extension/aliyun_nls_asr_python"
+    },
+    {
+      "type": "extension",
+      "name": "tencent_tts_python",
+      "version": "0.1.0",
+      "hash": "aff31e2d6d3b7b0827443850e85e8fb2fdb0def6137e940dacfad2f73377d762",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime_python"
+        }
+      ],
+      "path": "ten_packages/extension/tencent_tts_python"
+    },
+    {
+      "type": "extension",
+      "name": "interview_orchestrator_python",
+      "version": "0.1.0",
+      "hash": "7dc35d57fa8d58e03c62cc62c139793eacd589aebf296f0b9cfddd7764e07ee5",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime_python"
+        }
+      ],
+      "path": "ten_packages/extension/interview_orchestrator_python"
+    },
+    {
+      "type": "system",
+      "name": "agora_rtc_sdk",
+      "version": "4.4.32-165",
+      "hash": "b9a670e3975838ee0329070cc69f7a75d920eddd04bd40279a9487a7190d86bd",
+      "supports": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    },
+    {
+      "type": "addon_loader",
+      "name": "python_addon_loader",
+      "version": "0.11.62",
+      "hash": "378db15568f2f19471c7c8e0d63464a51f6331fce494c473ece72bcaf3be3ed2",
+      "dependencies": [
+        {
+          "type": "system",
+          "name": "ten_runtime"
+        },
+        {
+          "type": "system",
+          "name": "ten_runtime_python"
+        }
+      ],
+      "supports": [
+        {
+          "os": "linux",
+          "arch": "x64"
+        }
+      ]
+    }
+  ]
+}

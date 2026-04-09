@@ -1,0 +1,185 @@
+{
+  "question_count": 14,
+  "stage_distribution": {
+    "S2": 1,
+    "S3": 9,
+    "S4": 2,
+    "S6": 1,
+    "S7": 1
+  },
+  "questions": [
+    {
+      "index": 1,
+      "length": 25,
+      "stage": "S2",
+      "dimension": "self_intro",
+      "question": "?????????????????????????",
+      "expected_signal": "??????????????",
+      "success_signals": [
+        "????",
+        "????",
+        "????"
+      ],
+      "followup_condition": "??????????????????",
+      "max_followups": 1
+    },
+    {
+      "index": 2,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "系统设计/性能优化/故障排查（JVM）",
+      "question": "你简历里写到了解JVM内存结构和GC原理，并有处理内存溢出的经验。如果线上一个Java服务频繁发生Full GC，你?",
+      "expected_signal": "有系统的JVM问题排查思路，能联想到监控工具、堆内存分析、GC日志和代码审查。",
+      "success_signals": [],
+      "followup_condition": "如果候选人思路清晰，追问：你提到有处理内存溢出的实践经验，当时具体是什么现象，你是怎么定位并解决的？",
+      "max_followups": 2
+    },
+    {
+      "index": 3,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "岗位关键要求补齐（高并发设计）",
+      "question": "岗位要求有高并发系统开发经验。假设你负责的这个平台有一个“热门算法下载”功能，瞬间并发很高，你会从后端哪些层面来设计?",
+      "expected_signal": "能结合已用技术（缓存、MQ、线程池）和常见高并发方案（限流、降级、异步化）进行系统性思考。",
+      "success_signals": [],
+      "followup_condition": "如果候选人提到了缓存，追问：这个缓存的数据一致性你是怎么考虑的？是定时更新还是触发更新？",
+      "max_followups": 2
+    },
+    {
+      "index": 4,
+      "length": 60,
+      "stage": "S3",
+      "dimension": "核心技术栈（分布式事务）",
+      "question": "你在简历里提到用Seata AT模式处理分布式事务。能具体说说在一个跨服务的事务中，Seata是如何保证数据一致性的吗？",
+      "expected_signal": "理解Seata AT模式的基本原理（两阶段提交、全局锁、undo_log），能说明其如何协调多个微服务的本地事务。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答清晰，追问：1. 除了AT模式，你还了解Seata的其他模式吗？它们适用什么场景？ 2. 结合你的项目，当时为什么选择AT模式？有没有考虑过其他方案？",
+      "max_followups": 2
+    },
+    {
+      "index": 5,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "中间件/数据库/缓存（Redis）",
+      "question": "你构建了Redis多级缓存体系来防止缓存穿透、击穿和雪崩。能分别解释一下这三种问题，并说说你具体是怎么用布隆过滤器和?",
+      "expected_signal": "清晰区分三种缓存问题的定义、成因，并能说明布隆过滤器防穿透、互斥锁防击穿、以及合理过期时间或熔断防雪崩的思路。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答正确，追问：布隆过滤器有误判率，这在你的业务场景中是可以接受的吗？为什么？",
+      "max_followups": 2
+    },
+    {
+      "index": 6,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "中间件/数据库/缓存（MySQL）",
+      "question": "你提到对MySQL的索引、事务、MVCC有深入了解。如果有一个查询`SELECT * FROM user WHERE?",
+      "expected_signal": "理解联合索引的最左前缀匹配原则，能分析不同列顺序对查询条件利用索引的影响。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答正确，追问：如果city字段的区分度非常低（比如大部分都是‘Beijing’），这会影响你对索引选择的判断吗？",
+      "max_followups": 2
+    },
+    {
+      "index": 7,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "项目深挖（架构设计）",
+      "question": "你提到“结合本地消息表与补偿机制保障核心数据可靠落库”。这里的本地消息表方案，是为了解决什么问题？它和Seata A?",
+      "expected_signal": "理解本地消息表作为最终一致性补偿方案的价值，并能说明其在分布式事务体系中的补充作用。",
+      "success_signals": [],
+      "followup_condition": "如果候选人理解到位，追问：这个设计是你主导提出的，还是在团队讨论中确定的？你在这个设计中的主要贡献是什么？",
+      "max_followups": 2
+    },
+    {
+      "index": 8,
+      "length": 47,
+      "stage": "S3",
+      "dimension": "核心技术栈（消息队列）",
+      "question": "你提到基于MQ实现了异步消息推送。在项目中，你们是如何保证消息一定被成功消费，避免消息丢失的？",
+      "expected_signal": "了解消息队列的可靠性保障机制，如生产者确认、消息持久化、消费者手动ACK等。",
+      "success_signals": [],
+      "followup_condition": "如果候选人提到具体技术点，追问：1. 如果消费者处理消息失败，进入了重试，这可能会带来什么问题？（如重复消费）你们是怎么解决的？ 2. 你提到的线程池隔离，具体是怎么设计和应用的？",
+      "max_followups": 2
+    },
+    {
+      "index": 9,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "系统设计/性能优化/故障排查（并发）",
+      "question": "你熟悉线程池的工作流程和源码。如果有一个CPU密集型的任务，你会如何配置线程池的核心参数（corePoolSize,?",
+      "expected_signal": "理解线程池参数的意义，并能根据任务类型（CPU密集型）给出合理的配置建议。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答正确，追问：如果任务队列也满了，你设置的拒绝策略会是什么？为什么选这个？",
+      "max_followups": 2
+    },
+    {
+      "index": 10,
+      "length": 31,
+      "stage": "S4",
+      "dimension": "project_deep_dive",
+      "question": "?? Java ???????????????????????",
+      "expected_signal": "??????????????",
+      "success_signals": [
+        "????",
+        "????",
+        "????"
+      ],
+      "followup_condition": "?????????????????",
+      "max_followups": 2
+    },
+    {
+      "index": 11,
+      "length": 27,
+      "stage": "S4",
+      "dimension": "project_tradeoff",
+      "question": "???????????????????????????",
+      "expected_signal": "??????????????",
+      "success_signals": [
+        "????",
+        "????",
+        "????"
+      ],
+      "followup_condition": "?????????????????",
+      "max_followups": 2
+    },
+    {
+      "index": 12,
+      "length": 26,
+      "stage": "S6",
+      "dimension": "capability_probe",
+      "question": "??????????????????????????",
+      "expected_signal": "??????????????",
+      "success_signals": [
+        "????",
+        "????",
+        "????"
+      ],
+      "followup_condition": "????????????????",
+      "max_followups": 2
+    },
+    {
+      "index": 13,
+      "length": 58,
+      "stage": "S7",
+      "dimension": "company_qa",
+      "question": "???????????????Java ??????????????????? Spring Boot?MySQL?",
+      "expected_signal": "?????????????",
+      "success_signals": [
+        "??????",
+        "??????"
+      ],
+      "followup_condition": "??????????????????",
+      "max_followups": 1
+    },
+    {
+      "index": 14,
+      "length": 59,
+      "stage": "S3",
+      "dimension": "岗位关键要求补齐（Spring框架原理）",
+      "question": "你提到理解Spring IoC和AOP。能说一下Spring Bean的完整生命周期吗？从定义到销毁，关键节点有哪些？",
+      "expected_signal": "掌握Spring Bean生命周期的核心阶段，如实例化、属性填充、初始化、销毁等。",
+      "success_signals": [],
+      "followup_condition": "如果候选人回答详细，追问：你简历里提到“三级缓存解决循环依赖”，能简单说说这三级缓存分别存的是什么，解决循环依赖的关键步骤吗？",
+      "max_followups": 2
+    }
+  ]
+}

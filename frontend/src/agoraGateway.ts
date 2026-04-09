@@ -15,6 +15,13 @@ interface IAgoraRTCLocalAudioTrack {
   close(): void;
 }
 
+interface IAgoraRTCLocalVideoTrack {
+  play(element: string | HTMLElement): void;
+  stop(): void;
+  setEnabled(enabled: boolean): Promise<void>;
+  close(): void;
+}
+
 interface IAgoraRTCRemoteUser {
   uid: string | number;
   audioTrack?: IAgoraRTCRemoteAudioTrack;
@@ -26,13 +33,14 @@ interface IAgoraRTCClient {
   on(event: "connection-state-change", listener: (curState: string, revState: string, reason?: string) => void): void;
   join(appId: string, channel: string, token: string | null, uid: number | null): Promise<number>;
   leave(): Promise<void>;
-  publish(tracks: IAgoraRTCLocalAudioTrack[]): Promise<void>;
+  publish(tracks: Array<IAgoraRTCLocalAudioTrack | IAgoraRTCLocalVideoTrack>): Promise<void>;
   subscribe(user: IAgoraRTCRemoteUser, mediaType: "audio" | "video"): Promise<void>;
 }
 
 interface AgoraRTCSDK {
   createClient(config: { mode: "rtc"; codec: "vp8" | "h264" }): IAgoraRTCClient;
   createMicrophoneAudioTrack(): Promise<IAgoraRTCLocalAudioTrack>;
+  createCameraVideoTrack(): Promise<IAgoraRTCLocalVideoTrack>;
 }
 
 declare global {
@@ -92,6 +100,7 @@ async function ensureAgoraSdkLoaded(): Promise<AgoraRTCSDK> {
 export class AgoraRTCGateway {
   private client: IAgoraRTCClient | null = null;
   private localAudioTrack: IAgoraRTCLocalAudioTrack | null = null;
+  private localVideoTrack: IAgoraRTCLocalVideoTrack | null = null;
   private callbacks: AgoraGatewayCallbacks;
 
   constructor(callbacks: AgoraGatewayCallbacks = {}) {
@@ -126,10 +135,12 @@ export class AgoraRTCGateway {
     const uid = toNumericUid(params.uid);
     await client.join(params.appId, params.channel, params.token || null, uid);
     const localAudioTrack = await AgoraRTC.createMicrophoneAudioTrack();
-    await client.publish([localAudioTrack]);
+    const localVideoTrack = await AgoraRTC.createCameraVideoTrack();
+    await client.publish([localAudioTrack, localVideoTrack]);
 
     this.client = client;
     this.localAudioTrack = localAudioTrack;
+    this.localVideoTrack = localVideoTrack;
   }
 
   async setMicrophoneEnabled(enabled: boolean): Promise<void> {
@@ -139,10 +150,31 @@ export class AgoraRTCGateway {
     await this.localAudioTrack.setEnabled(enabled);
   }
 
+  async setCameraEnabled(enabled: boolean): Promise<void> {
+    if (!this.localVideoTrack) {
+      return;
+    }
+    await this.localVideoTrack.setEnabled(enabled);
+  }
+
+  playLocalVideo(element: HTMLElement): void {
+    if (!this.localVideoTrack) {
+      return;
+    }
+    this.localVideoTrack.play(element);
+  }
+
+  stopLocalVideo(): void {
+    this.localVideoTrack?.stop();
+  }
+
   async disconnect(): Promise<void> {
     try {
       this.localAudioTrack?.close();
+      this.localVideoTrack?.stop();
+      this.localVideoTrack?.close();
       this.localAudioTrack = null;
+      this.localVideoTrack = null;
       if (this.client) {
         await this.client.leave();
       }

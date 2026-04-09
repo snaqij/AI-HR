@@ -1,0 +1,204 @@
+{
+  "ten": {
+    "predefined_graphs": [
+      {
+        "name": "ai_hr_interview",
+        "auto_start": true,
+        "singleton": false,
+        "graph": {
+          "nodes": [
+            {
+              "type": "extension",
+              "name": "agora_rtc",
+              "addon": "agora_rtc",
+              "extension_group": "rtc",
+              "property": {
+                "app_id": "72f8343592b64607a2e0c7b995c637c2",
+                "channel": "ai-intv-65442330-9dea-4ab2-a7ed-64a12aaf9ea2",
+                "remote_user_id": "1694225219",
+                "subscribe_audio": true,
+                "publish_audio": true,
+                "token": "00672f8343592b64607a2e0c7b995c637c2IADKCKoCgqMOvGx9v2Avdi+rfESmDALYqYrxMCDLK9P6trGObNAFk9zYIgBlSdAAY6vXaQQAAQDzZ9ZpAgDzZ9ZpAwDzZ9ZpBADzZ9Zp",
+                "user_id": "1706501894",
+                "uid": 882763965,
+                "remote_uid": 1205891896,
+                "enable_string_uid": false,
+                "publish_data": false,
+                "auto_join": true,
+                "stream_id": 1706501894,
+                "remote_stream_id": 1694225219
+              }
+            },
+            {
+              "type": "extension",
+              "name": "ten_vad",
+              "addon": "ten_vad_python",
+              "extension_group": "vad",
+              "property": {
+                "silence_duration_ms": 500,
+                "prefix_padding_ms": 1000,
+                "vad_threshold": 0.9,
+                "dump": false
+              }
+            },
+            {
+              "type": "extension",
+              "name": "asr_aliyun_nls",
+              "addon": "aliyun_nls_asr_python",
+              "extension_group": "asr",
+              "property": {
+                "appkey": "qkufZ4MjY4ev9JQb",
+                "access_key_id": "LTAI5tEivqMhxmuZfTHoGvjt",
+                "access_key_secret": "3mfMYWLm4uTq8HYZGMiUrqtZ7HAumc"
+              }
+            },
+            {
+              "type": "extension",
+              "name": "interview_orchestrator",
+              "addon": "interview_orchestrator_python",
+              "extension_group": "orchestrator",
+              "property": {
+                "task_key": "interview_followup",
+                "max_followup": 2,
+                "resume_summary": "一名具有 5 年经验的后端开发工程师，精通 Java/Python，熟悉分布式系统和 Redis。曾在某电商公司参与秒杀系统的架构设计。",
+                "job_requirements": "需要具备扎实的数据结构基础，熟悉常用的中间件，能够解决高并发下的系统稳定性问题。",
+                "session_id": "d3955d8a-cc07-4bd8-97f1-578effae84b9",
+                "candidate_id": "79a6def2-64c5-4140-ba01-a4c47daf48f5",
+                "job_id": "f2441153-199d-46c1-81fe-f4642a3c3708",
+                "language": "zh-CN"
+              }
+            },
+            {
+              "type": "extension",
+              "name": "tts_tencent",
+              "addon": "tencent_tts_python",
+              "extension_group": "tts",
+              "property": {
+                "secret_id": "AKIDLaeQ0OdglpiPuCJTRFoCPQHzT0OeibHl",
+                "secret_key": "g9RWP6blmutjNQI0b0DF7xyyoWDqMiy3",
+                "region": "ap-beijing",
+                "app_id": "1413662430",
+                "voice_type": 101001
+              }
+            }
+          ],
+          "connections": [
+            {
+              "extension": "agora_rtc",
+              "audio_frame": [
+                {
+                  "name": "pcm_frame",
+                  "dest": [
+                    {
+                      "extension": "ten_vad"
+                    },
+                    {
+                      "extension": "asr_aliyun_nls"
+                    }
+                  ]
+                }
+              ],
+              "cmd": [
+                {
+                  "name": "on_connected",
+                  "dest": [
+                    {
+                      "extension": "interview_orchestrator"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "extension": "ten_vad",
+              "cmd": [
+                {
+                  "name": "start_of_sentence",
+                  "dest": [
+                    {
+                      "extension": "tts_tencent"
+                    },
+                    {
+                      "extension": "interview_orchestrator"
+                    },
+                    {
+                      "extension": "asr_aliyun_nls"
+                    }
+                  ]
+                },
+                {
+                  "name": "end_of_sentence",
+                  "dest": [
+                    {
+                      "extension": "asr_aliyun_nls"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "extension": "asr_aliyun_nls",
+              "data": [
+                {
+                  "name": "text_data",
+                  "dest": [
+                    {
+                      "extension": "interview_orchestrator"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "extension": "interview_orchestrator",
+              "data": [
+                {
+                  "name": "text_data",
+                  "dest": [
+                    {
+                      "extension": "tts_tencent"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "extension": "tts_tencent",
+              "audio_frame": [
+                {
+                  "name": "pcm_frame",
+                  "dest": [
+                    {
+                      "extension": "agora_rtc"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "log": {
+      "handlers": [
+        {
+          "matchers": [
+            {
+              "level": "info"
+            }
+          ],
+          "formatter": {
+            "type": "plain",
+            "colored": true
+          },
+          "emitter": {
+            "type": "console",
+            "config": {
+              "stream": "stdout"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

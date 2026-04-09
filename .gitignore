@@ -4548,3 +4548,18 @@
 /frontend/node_modules/webrtc-adapter/LICENSE.md
 /frontend/node_modules/webrtc-adapter/package.json
 /frontend/node_modules/webrtc-adapter/README.md
+/AI-HR/ten_agent/.ten_sessions/
+!/AI-HR/ten_agent/.ten_sessions/649bbea8-15ba-467a-9e38-f0c7a8687617.property.json
+!/AI-HR/ten_agent/ten_packages/system/
+!/AI-HR/ten_agent/ten_packages/system/agora_rtc_sdk/
+AI-HR/ten_agent/ten_packages/system
+# SDK
+**/agora_rtc_sdk/
+
+# 二进制/数据文件
+*.dat
+
+# node / python / build
+node_modules/
+dist/
+build/!/AI-HR/ten_agent/ten_packages/
