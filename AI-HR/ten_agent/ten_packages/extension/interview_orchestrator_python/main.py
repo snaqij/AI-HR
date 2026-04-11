@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import contextlib
 import json
 import logging
@@ -18,8 +18,34 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from ai_hr.core.config import get_settings
+from ai_hr.copy.interview_zh import (
+    AUDIO_ISSUE_PHRASES,
+    AUDIO_RETRY_MESSAGE,
+    DEFAULT_CANDIDATE_NAME,
+    EXPERT_BRIDGES,
+    EXPERT_FILLERS,
+    HANDSHAKE_KEYWORDS,
+    HANDSHAKE_TEMPLATE,
+    INTERVIEW_BRIDGES,
+    LLM_EMPTY_FALLBACK_REPLY,
+    REENGAGEMENT_MARKERS,
+    SKIP_PHRASES,
+    TTS_BLACKLIST,
+    TTS_META_PREFIXES,
+)
+from ai_hr.domain.constants import (
+    AgentState,
+    InterviewEventType,
+    InterviewStage,
+    PromptTaskKey,
+    RuntimeCommand,
+    RuntimeDataChannel,
+)
 from ai_hr.services.interview_runtime.question_flow import InterviewQuestionFlowEngine
+from ai_hr.services.interview_runtime.question_schema import normalize_question_pack
+from ai_hr.services.interview_runtime.question_seed_builder import build_stage_seed_questions
 from ai_hr.services.interview_runtime.realtime_policy import get_stage_realtime_policy
+from ai_hr.services.interview_runtime.runtime_engine import InterviewRuntimeEngine
 from ai_hr.services.interview_runtime.stage_progress import StageProgressEngine
 from ai_hr.services.llm.client import InvokeContext, LLMClient
 from ai_hr.services.llm.guardrails import GuardrailService
@@ -184,7 +210,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
     def __init__(self, name: str):
         super().__init__(name)
         self.trace_id = ""
-        self.task_key = "interview_followup"
+        self.task_key = PromptTaskKey.INTERVIEW_FOLLOWUP
         self.max_followup = 2
         self.resume_summary = ""
         self.job_requirements = ""
@@ -202,6 +228,10 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.arbiter = ConversationArbiter()
         self.turn_completion_judge = TurnCompletionJudge()
         self.stage_progress_engine = StageProgressEngine()
+        self.runtime_engine = InterviewRuntimeEngine(
+            question_flow_engine=self.flow_engine,
+            stage_progress_engine=self.stage_progress_engine,
+        ) if self.flow_engine is not None else None
         self.playback_sequence = 0
         self.current_turn_start_ms = 0
         self.current_turn_segment_start_ms = 0
@@ -213,6 +243,11 @@ class InterviewOrchestratorExtension(AsyncExtension):
         
         self.candidate_name = "候选人"
         self.company_info = ""
+        self.company_info_source = ""
+        self.company_info_version = ""
+        self.question_pack_source = ""
+        self.question_pack_version = ""
+        self.candidate_name = DEFAULT_CANDIDATE_NAME
         self.BRIDGES = [
             "明白了，那我们继续聊聊。",
             "好的，关于这块，我想再听听你的看法。",
@@ -235,6 +270,9 @@ class InterviewOrchestratorExtension(AsyncExtension):
             "关于这一点，",
             "原来是这样。"
         ]
+        self.BRIDGES = list(INTERVIEW_BRIDGES)
+        self.EXPERT_BRIDGES = list(EXPERT_BRIDGES)
+        self.EXPERT_FILLERS = list(EXPERT_FILLERS)
         self.last_filler = ""
         self.system_prompt = INTERVIEW_SYSTEM_PROMPT
         self.event_bridge: RealtimeEventBridge | None = None
@@ -246,6 +284,85 @@ class InterviewOrchestratorExtension(AsyncExtension):
     def _build_company_intro(self) -> str:
         return build_interview_company_intro(self.company_info)
 
+    @staticmethod
+    def _summarize_question_pack_ids(question_pack: dict) -> str:
+        questions = question_pack.get("questions", []) if isinstance(question_pack, dict) else []
+        pack_ids: list[str] = []
+        if isinstance(questions, list):
+            for item in questions[:16]:
+                if not isinstance(item, dict):
+                    continue
+                identifier = str(item.get("idx") or item.get("question_id") or item.get("id") or "").strip()
+                if identifier:
+                    pack_ids.append(identifier)
+        return ",".join(pack_ids)
+
+    def _load_runtime_question_pack(self, config: dict) -> tuple[dict, str, str]:
+        raw_pack = config.get("question_pack")
+        if isinstance(raw_pack, str):
+            raw_text = raw_pack.strip()
+            if raw_text:
+                with contextlib.suppress(json.JSONDecodeError):
+                    raw_pack = json.loads(raw_text)
+        if isinstance(raw_pack, list):
+            raw_pack = {"questions": raw_pack}
+        if not isinstance(raw_pack, dict):
+            self._log(
+                logging.WARNING,
+                "orchestrator.runtime_question_pack_missing",
+                raw_pack_type=type(raw_pack).__name__,
+                configured_source=str(config.get("question_pack_source") or ""),
+                configured_version=str(config.get("question_pack_version") or ""),
+            )
+            return {"questions": []}, "", ""
+
+        normalized_pack = normalize_question_pack(raw_pack)
+        if not normalized_pack.get("questions"):
+            self._log(
+                logging.WARNING,
+                "orchestrator.runtime_question_pack_empty",
+                configured_source=str(config.get("question_pack_source") or ""),
+                configured_version=str(config.get("question_pack_version") or ""),
+            )
+            return {"questions": []}, "", ""
+
+        source = str(
+            config.get("question_pack_source")
+            or normalized_pack.get("source")
+            or "runtime"
+        ).strip()
+        version = str(
+            config.get("question_pack_version")
+            or normalized_pack.get("version")
+            or ""
+        ).strip()
+        return normalized_pack, source, version
+
+    def _load_local_question_pack(self) -> tuple[dict, str, str]:
+        data_dir = os.path.join(project_root, "data")
+        q_file = os.path.join(data_dir, "interview_questions.json")
+        if not os.path.exists(q_file):
+            return {"questions": []}, "", ""
+
+        with open(q_file, "r", encoding="utf-8") as f:
+            loaded_questions = json.load(f)
+        normalized_pack = normalize_question_pack({"questions": loaded_questions})
+        if not normalized_pack.get("questions"):
+            return {"questions": []}, "", ""
+        return normalized_pack, "local_file", ""
+
+    def _build_seed_question_pack(self) -> tuple[dict, str, str]:
+        normalized_pack = normalize_question_pack(
+            {
+                "questions": build_stage_seed_questions(
+                    job_requirements=self.job_requirements,
+                    skills=[],
+                    language="zh-CN",
+                )
+            }
+        )
+        return normalized_pack, "seed_fallback", ""
+
     def _set_stage(self, stage_code: str, *, reason: str = "") -> None:
         self.state = self.flow_engine.transition_stage(
             state=self.state,
@@ -253,11 +370,123 @@ class InterviewOrchestratorExtension(AsyncExtension):
             transition_reason=reason,
         )
 
+    def _detect_candidate_move_on(self, transcript: str) -> bool:
+        move_on_phrases = [
+            "继续吧",
+            "不清楚",
+            "没考虑过",
+            "换个话题",
+            "先过",
+            "跳过",
+            "继续",
+        ]
+        return any(phrase in transcript for phrase in move_on_phrases)
+
+    def _is_company_question(self, transcript: str) -> bool:
+        text = str(transcript or "").strip().lower()
+        if not text:
+            return False
+        keywords = (
+            "公司",
+            "业务",
+            "做什么",
+            "主营",
+            "介绍一下公司",
+            "你们是做什么",
+            "你们公司",
+            "岗位职责",
+            "团队",
+            "技术栈",
+            "福利",
+            "薪资",
+            "工作时间",
+            "加班",
+            "公司叫什么",
+        )
+        return any(keyword in text for keyword in keywords)
+
+    async def _emit_company_qa_defer_reply(self, ten_env: AsyncTenEnv) -> None:
+        reply = "公司和岗位相关信息我会在面试最后统一介绍，我们先继续当前面试流程。"
+        await self._send_to_tts(ten_env, reply, is_final=False)
+        await self._send_to_tts(ten_env, "", is_final=True)
+
+    async def _emit_scripted_question(
+        self,
+        ten_env: AsyncTenEnv,
+        *,
+        question: dict[str, object] | None,
+        trace_id: str = "",
+    ) -> None:
+        target_question = question if isinstance(question, dict) else {}
+        text = str(target_question.get("question") or "").strip()
+        if not text:
+            return
+
+        self.state["current_question_id"] = str(
+            target_question.get("question_id")
+            or target_question.get("id")
+            or self.state.get("current_question_id")
+            or ""
+        ).strip()
+        self.state["current_question_status"] = "scripted_asked"
+        self.state["current_question_asked"] = True
+        self.state["current_output_mode"] = "scripted_question"
+        self.state["question_completion_reason"] = ""
+        self.state["transition_reason"] = "scripted_question_emitted"
+
+        self._log(
+            logging.INFO,
+            "orchestrator.scripted_question_emitted",
+            question_id=self.state.get("current_question_id"),
+            question_text=text,
+            active_question_index=self.state.get("active_question_index"),
+        )
+        await self._send_to_tts(ten_env, text, is_final=False, trace_id=trace_id)
+        await self._send_to_tts(ten_env, "", is_final=True, trace_id=trace_id)
+
+    def _build_next_question_preview(
+        self,
+        *,
+        decision,
+        current_question: dict | None,
+    ) -> str:
+        if (
+            decision
+            and getattr(decision, "output_mode", "") == "scripted_question"
+            and isinstance(getattr(decision, "target_question", None), dict)
+        ):
+            preview_question = decision.target_question or {}
+        elif decision and decision.must_transition:
+            preview_question = current_question or {}
+        else:
+            preview_question = self.flow_engine.current_question(
+                state={
+                    "active_question_index": self.state["active_question_index"] + 1,
+                    "interview_stage": (self.state or {}).get("interview_stage", InterviewStage.OPENING),
+                    "question_statuses": (self.state or {}).get("question_statuses", []),
+                    "question_stage_sequence": (self.state or {}).get("question_stage_sequence", []),
+                },
+                question_pack=self.question_pack,
+            ) or {}
+        return str(preview_question.get("question") or "请继续围绕岗位核心能力深入作答。")
+
+    def _get_active_question_context(self) -> dict:
+        question = self.flow_engine.current_question(
+            state=self.state,
+            question_pack=self.question_pack,
+        ) or {}
+        return {
+            "question": question,
+            "question_id": str(question.get("question_id") or question.get("id") or ""),
+            "topic_name": str(question.get("topic_name") or ""),
+            "topic_aliases": question.get("topic_aliases") if isinstance(question.get("topic_aliases"), list) else [],
+        }
+
     def _now_ms(self) -> int:
         return int(time.perf_counter() * 1000)
 
     def _get_realtime_policy(self, stage_code: str | None = None):
-        active_stage = stage_code or (self.state or {}).get("interview_stage", "S1")
+        active_stage = stage_code or (self.state or {}).get("interview_stage", InterviewStage.OPENING)
         return get_stage_realtime_policy(active_stage)
 
     def _cancel_pending_finalize(self, *, clear_payload: bool = True) -> None:
@@ -296,6 +525,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         text = str(transcript or "").strip().lower()
         if not text:
             return False
+        return any(marker in text for marker in REENGAGEMENT_MARKERS)
         reengagement_markers = (
             "你在听吗",
             "我们继续面试",
@@ -332,6 +562,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         stage: str = "",
         trace_id: str = "",
         question_id: str = "",
+        topic_name: str = "",
     ) -> None:
         self.session_context.append_turn(
             turn_id=self._new_turn_id(),
@@ -341,6 +572,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
             stage=stage,
             trace_id=trace_id,
             question_id=question_id,
+            topic_name=topic_name,
         )
 
     def _start_pending_question(
@@ -350,6 +582,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         stage: str,
         trace_id: str = "",
         question_id: str = "",
+        topic_name: str = "",
     ) -> None:
         self.session_context.start_pending_question(
             turn_id=self._new_turn_id(),
@@ -358,6 +591,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
             stage=stage,
             trace_id=trace_id,
             question_id=question_id,
+            topic_name=topic_name,
         )
 
     def _finalize_candidate_answer(self, *, answer_text: str) -> None:
@@ -454,7 +688,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         asr_physical_stop_ts: float,
         orch_receive_ts: float,
     ) -> None:
-        stage = self.state.get("interview_stage", "S1")
+        stage = self.state.get("interview_stage", InterviewStage.OPENING)
         delay_ms = self._remaining_finalize_delay_ms(
             stage=stage,
             asr_final_ts=asr_final_ts,
@@ -500,7 +734,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 if not self.pending_payload:
                     return
                 if self.is_user_speaking:
-                    stage = (self.state or {}).get("interview_stage", "S1")
+                    stage = (self.state or {}).get("interview_stage", InterviewStage.OPENING)
                     policy = self._get_realtime_policy(stage)
                     idle_since_asr_ms = (
                         now_ms - self.last_asr_activity_ms if self.last_asr_activity_ms else 0
@@ -526,7 +760,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
                     self.pending_finalize_wait_logged = False
 
                 payload = dict(self.pending_payload)
-                stage = (self.state or {}).get("interview_stage", "S1")
+                stage = (self.state or {}).get("interview_stage", InterviewStage.OPENING)
                 policy = self._get_realtime_policy(stage)
                 speaking_elapsed_ms = int(payload.get("turn_accumulated_ms") or 0)
                 silence_ms = 0
@@ -579,12 +813,16 @@ class InterviewOrchestratorExtension(AsyncExtension):
 
         self.llm_client = LLMClient(router=router, guardrail_service=guardrail)
         self.flow_engine = InterviewQuestionFlowEngine()
+        self.runtime_engine = InterviewRuntimeEngine(
+            question_flow_engine=self.flow_engine,
+            stage_progress_engine=self.stage_progress_engine,
+        )
         self.question_pack = {"questions": []}
 
         config_json, _ = await ten_env.get_property_to_json("")
         config = json.loads(config_json) if config_json else {}
 
-        self.task_key = config.get("task_key", "interview_followup")
+        self.task_key = config.get("task_key", PromptTaskKey.INTERVIEW_FOLLOWUP)
         self.max_followup = int(config.get("max_followup", 2)) or 2
         
         # 核心状态初始化
@@ -607,98 +845,172 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.event_bridge.start()
         self.session_context = SessionContext(session_id=self.session_id, max_turns=8)
         
-        # 捕获简历和职位要求上下文
-        self.resume_summary = config.get("resume_summary", "一名资深后端开发工程师")
+        # 捕获职位要求
         self.job_requirements = config.get("job_requirements", "精通分布式系统和高可用架构")
         
+        # 智能提取候选人姓名与简历内容逻辑
+        def extract_name(text: str) -> str:
+            if not text:
+                return "同学"
+            # 1. 尝试匹配常见姓名格式关键字
+            patterns = [
+                r"姓名[:：]\s*([^\s\d]{2,10})",
+                r"Candidate[:：]\s*([^\s\d]{2,10})",
+                r"Name[:：]\s*([^\s\d]{2,10})",
+            ]
+            for p in patterns:
+                m = re.search(p, text)
+                if m:
+                    res = m.group(1).strip()
+                    if res: return res
+            
+            # 2. 如果没找到关键字，取前几行中第一个看起来像名字的（非空且不含“简历”或太长的行）
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            for line in lines[:5]:
+                # 排除明显的标题行
+                if any(x in line for x in ("简历", "Resume", "手机", "电话", "邮箱", "@")):
+                    continue
+                # 简单正则：2-4个中文字符
+                if re.match(r"^[\u4e00-\u9fa5]{2,4}$", line):
+                    return line
+            return "同学"
+
+        def abbreviate_name(name: str) -> str:
+            cleaned = name.strip()
+            if not cleaned or cleaned == "同学":
+                return "同学"
+            # 如果是两三位中文名，取后两位
+            if re.match(r"^[\u4e00-\u9fa5]{2,4}$", cleaned):
+                if len(cleaned) <= 2:
+                    return cleaned
+                return cleaned[-2:]
+            # 英文名取前 10 位
+            return cleaned[:10]
+
+        # 优先从 config 获取简历全文
+        raw_resume = config.get("resume_summary", "").strip()
+        
+        # 如果 config 为空，尝试从本地文件回退（仅限调试）
+        if not raw_resume:
+            resume_file_path = os.path.join(project_root, "data", "测试文本简历.txt")
+            if os.path.exists(resume_file_path):
+                try:
+                    with open(resume_file_path, "r", encoding="utf-8") as f:
+                        raw_resume = f.read().strip()
+                except Exception as e:
+                    logger.warning(f"Failed to read fallback resume file: {e}")
+
+        # 最终确认简历内容
+        self.resume_summary = raw_resume or "一名资深开发工程师"
+        
+        # 提取并缩写姓名
+        full_name = extract_name(self.resume_summary)
+        self.candidate_name = abbreviate_name(full_name)
+        
+        self._log(
+            logging.INFO, 
+            "orchestrator.candidate_context_resolved", 
+            candidate_name=self.candidate_name,
+            full_name=full_name,
+            resume_chars=len(self.resume_summary)
+        )
+
         self.trace_id = "ten_trace_" + uuid.uuid4().hex[:8]
 
         # 尝试加载预生成的面试题库
-        data_dir = os.path.join(project_root, "data")
-        q_file = os.path.join(data_dir, "interview_questions.json")
-        if os.path.exists(q_file):
-             try:
-                 with open(q_file, "r", encoding="utf-8") as f:
-                     self.question_pack["questions"] = json.load(f)
-                 self._log(
-                     logging.INFO,
-                     "orchestrator.prebuilt_questions_loaded",
-                     question_count=len(self.question_pack["questions"]),
-                 )
-             except Exception as e:
-                 logger.exception(
-                     json.dumps(
-                         {
-                             "event": "orchestrator.prebuilt_questions_load_failed",
-                             "error": str(e),
-                         },
-                         ensure_ascii=False,
-                     )
-                 )
-
-        if not self.question_pack["questions"]:
-            self.question_pack["questions"] = [
-                {"stage": "P2", "question": "你可以先做一个 1 到 2 分钟的自我介绍。"},
-                {"stage": "P3", "question": "你最近参与的核心项目里，最有挑战的技术问题是什么？"},
-                {"stage": "P4", "question": "如果系统访问量突然增长 10 倍，你认为最先出现瓶颈的会是哪一层？"},
-            ]
-
-        self.state = self.flow_engine.init_state(question_pack=self.question_pack)
-        # 优先从本地文件加载完整简历内容并提取姓名
-        resume_file_path = os.path.join(project_root, "data", "测试文本简历.txt")
-        if os.path.exists(resume_file_path):
+        runtime_pack, runtime_source, runtime_version = self._load_runtime_question_pack(config)
+        if runtime_pack.get("questions"):
+            self.question_pack = runtime_pack
+            self.question_pack_source = runtime_source or "runtime"
+            self.question_pack_version = runtime_version
+        else:
             try:
-                with open(resume_file_path, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-                    self.resume_summary = content
-                    # 提取第一行作为姓名，并取后两位
-                    first_line = content.split('\n')[0].strip()
-                    if first_line and len(first_line) >= 2:
-                        self.candidate_name = first_line[-2:]
-                self._log(logging.INFO, "orchestrator.candidate_name_extracted", candidate_name=self.candidate_name)
-            except Exception as e:
+                local_pack, local_source, local_version = self._load_local_question_pack()
+            except Exception as exc:
                 logger.exception(
                     json.dumps(
                         {
-                            "event": "orchestrator.resume_load_failed",
-                            "error": str(e),
+                            "event": "orchestrator.local_question_pack_load_failed",
+                            "error": str(exc),
                         },
                         ensure_ascii=False,
                     )
                 )
+                local_pack, local_source, local_version = {"questions": []}, "", ""
 
-        # 加载公司信息
-        company_info_path = os.path.join(project_root, "data", "company_info.txt")
-        if os.path.exists(company_info_path):
-             try:
-                 with open(company_info_path, "r", encoding="utf-8") as f:
-                     self.company_info = f.read().strip()
-                 self._log(logging.INFO, "orchestrator.company_info_loaded", company_info_chars=len(self.company_info))
-             except Exception as e:
-                 logger.exception(
-                     json.dumps(
-                         {
-                             "event": "orchestrator.company_info_load_failed",
-                             "error": str(e),
-                         },
-                         ensure_ascii=False,
-                     )
-                 )
-
-        # 预构建 system prompt，以便利用 LLM caching 的固定前缀
-        self.system_prompt_built = (
-            f"{self.system_prompt}\n\n"
-            f"### 面试背景固化信息 (Cache Target) ###\n"
-            f"候选人简历内容：\n{self.resume_summary}\n\n"
-            f"岗位要求：\n{self.job_requirements}\n"
-        )
+            if local_pack.get("questions"):
+                self.question_pack = local_pack
+                self.question_pack_source = local_source
+                self.question_pack_version = local_version
+                self._log(
+                    logging.WARNING,
+                    "orchestrator.question_pack_fallback_local",
+                    question_pack_source=self.question_pack_source or "local_file",
+                    question_pack_version=self.question_pack_version or "",
+                    question_count=len(self.question_pack.get("questions", [])),
+                    question_ids=self._summarize_question_pack_ids(self.question_pack),
+                )
+            else:
+                seed_pack, seed_source, seed_version = self._build_seed_question_pack()
+                self.question_pack = seed_pack
+                self.question_pack_source = seed_source
+                self.question_pack_version = seed_version
+                self._log(
+                    logging.WARNING,
+                    "orchestrator.question_pack_fallback_seed",
+                    warning="runtime_question_pack_missing_or_empty",
+                    question_pack_source=self.question_pack_source or "seed_fallback",
+                    question_pack_version=self.question_pack_version or "",
+                    question_count=len(self.question_pack.get("questions", [])),
+                    question_ids=self._summarize_question_pack_ids(self.question_pack),
+                )
 
         self._log(
             logging.INFO,
-            "orchestrator.init_completed",
-            task_key=self.task_key,
-            trace_id=self.trace_id,
+            "orchestrator.question_pack_ready",
+            question_pack_source=self.question_pack_source or "unknown",
+            question_pack_version=self.question_pack_version or "",
+            question_count=len(self.question_pack.get("questions", [])),
+            question_ids=self._summarize_question_pack_ids(self.question_pack),
         )
+
+        self.state = self.flow_engine.init_state(question_pack=self.question_pack)
+        self.stage_progress_engine = StageProgressEngine()
+        self.prompt_builder = InterviewPromptBuilder()
+        self.arbiter = ConversationArbiter()
+        self.turn_completion_judge = TurnCompletionJudge()
+
+        # 预加载公司与系统级 Prompts
+        self.company_info = str(
+            config.get("company_info")
+            or config.get("company_profile")
+            or config.get("company_intro")
+            or ""
+        ).strip()
+        self.company_info_source = str(config.get("company_info_source") or "").strip()
+        self.company_info_version = str(config.get("company_info_version") or "").strip()
+        self._log(
+            logging.INFO,
+            "orchestrator.company_info_ready",
+            company_info_loaded=bool(self.company_info),
+            company_info_source=self.company_info_source or "unknown",
+            company_info_version=self.company_info_version or "",
+            company_info_chars=len(self.company_info),
+        )
+        self.system_prompt_built = INTERVIEW_SYSTEM_PROMPT
+
+        # 运行时变量重置
+        self.last_filler = ""
+        self.pending_payload = None
+        self.turn_triggered = False
+        self.last_asr_activity_ms = 0
+        self.current_turn_segment_start_ms = 0
+        self.current_turn_accumulated_ms = 0
+        self.current_turn_start_ms = 0
+        self.pending_finalize_task = None
+        self.pending_finalize_token = 0
+        self.pending_finalize_wait_logged = False
+        self.llm_task = None
 
     async def _handle_interaction(
         self,
@@ -716,44 +1028,13 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 self.current_turn_accumulated_ms = max(0, int(turn_accumulated_ms))
             if turn_start_ms is not None:
                 self.current_turn_start_ms = max(0, int(turn_start_ms))
-            # 获取当前阶段和原始索引
-            stage = self.state.get("interview_stage", "S1")
+
+            stage = self.state.get("interview_stage", InterviewStage.OPENING)
             original_index = self.state.get("active_question_index", 0)
-            
-            # 获取当前题目
             current_q = self.flow_engine.current_question(
                 state=self.state,
                 question_pack=self.question_pack,
             ) or {}
-
-            # 同步题目中的阶段标签，但在开场环节（S1-S3）不能被技术题覆盖
-            if current_q and current_q.get("stage"):
-                q_stage = current_q.get("stage")
-                # 只有系统已经进入 S4 及以后，才同步题库 stage
-                if stage not in ["S1", "S2", "S3", "S7", "S8"]:
-                    stage = q_stage
-                    self._set_stage(stage, reason="sync_with_question_pack")
-
-            evaluation = self.flow_engine.evaluate_answer(
-                transcript=transcript,
-                confidence=0.95,
-            )
-            stage_progress_snapshot = None
-            if stage in ["S2", "S3"]:
-                self.state, stage_progress_snapshot = self.stage_progress_engine.update(
-                    state=self.state,
-                    stage=stage,
-                    transcript=transcript,
-                )
-                if stage_progress_snapshot is not None:
-                    self._log(
-                        logging.INFO,
-                        "orchestrator.stage_progress_updated",
-                        progress_stage=stage,
-                        completed=stage_progress_snapshot.completed,
-                        collected_signals=stage_progress_snapshot.collected_signals,
-                        missing_signals=stage_progress_snapshot.missing_signals,
-                    )
 
             self._log(
                 logging.INFO,
@@ -763,82 +1044,143 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 original_index=original_index,
             )
 
-            # 状态机流转与固定桥接逻辑（S1-S3, S7-S8）
-            
-            # S1（问候握手） -> S2（正式开场与自我介绍提示）
-            if stage == "S1":
-                 if not self.state["context_flags"]["connectivity_confirmed"]:
-                      # 这里已经通过上面的噪声过滤，说明是正常的有效输入
-                      self.state["context_flags"]["connectivity_confirmed"] = True
-                      self._set_stage("S2", reason="connectivity_confirmed")
-                      
-                      formal_welcome = "好的，那我们正式开始。你可以先做一个 1 到 2 分钟的自我介绍。"
-                      self._log(logging.INFO, "orchestrator.handshake_confirmed", transcript=transcript[:200])
-                      await self._send_to_tts(ten_env, formal_welcome, is_final=False)
-                      await self._send_to_tts(ten_env, "", is_final=True)
-                      return
-                 
-                 self._set_stage("S2", reason="opening_completed")
+            if stage == InterviewStage.OPENING:
+                if not self.state["context_flags"]["connectivity_confirmed"]:
+                    self.state["context_flags"]["connectivity_confirmed"] = True
+                    self._set_stage(InterviewStage.SELF_INTRO, reason="connectivity_confirmed")
+                    formal_welcome = "好的，那我们正式开始。你可以先做一个 1 到 2 分钟的自我介绍。"
+                    self._log(logging.INFO, "orchestrator.handshake_confirmed", transcript=transcript[:200])
+                    await self._send_to_tts(ten_env, formal_welcome, is_final=False)
+                    await self._send_to_tts(ten_env, "", is_final=True)
+                    return
+                self._set_stage(InterviewStage.SELF_INTRO, reason="opening_completed")
+                stage = self.state.get("interview_stage", InterviewStage.SELF_INTRO)
 
-            # S2/S3 的阶段推进依赖 LLM 的 [SATISFIED] 或信号收集结果，避免噪声误触发
+            if stage == InterviewStage.COMPANY_QA:
+                if not self.state["context_flags"]["company_info_shared"]:
+                    self.state["context_flags"]["company_info_shared"] = True
+                    reply_msg = self._build_company_intro()
+                    await self._send_to_tts(ten_env, reply_msg, is_final=False)
+                    await self._send_to_tts(ten_env, "", is_final=True)
+                    return
+                if any(p in transcript for p in ["没问题", "没有了", "大概了解", "谢谢", "再见"]):
+                    self._set_stage(InterviewStage.CLOSING, reason="candidate_has_no_more_questions")
+                    stage = self.state.get("interview_stage", InterviewStage.CLOSING)
 
-            # S7 公司介绍与候选人追问环节
-            if stage == "S7":
-                 if not self.state["context_flags"]["company_info_shared"]:
-                      self.state["context_flags"]["company_info_shared"] = True
-                      reply_msg = self._build_company_intro()
-                      await self._send_to_tts(ten_env, reply_msg, is_final=False)
-                      await self._send_to_tts(ten_env, "", is_final=True)
-                      return
-                 
-                 # 如果候选人已经没有更多问题，直接进入结束阶段。
-                 if any(p in transcript for p in ["没问题", "没有了", "大概了解", "谢谢", "再见"]):
-                      self._set_stage("S8", reason="candidate_has_no_more_questions")
-                      # 下面会进入结束逻辑
+            if stage == InterviewStage.CLOSING:
+                if not self.state["context_flags"]["closing_started"]:
+                    self.state["context_flags"]["closing_started"] = True
+                    closing_msg = "那今天先聊到这里，后续安排 HR 会再和你同步。回头见。"
+                    await self._send_to_tts(ten_env, closing_msg, is_final=False)
+                    await self._send_to_tts(ten_env, "", is_final=True)
+                return
 
-            if stage == "S8":
-                 if not self.state["context_flags"]["closing_started"]:
-                      self.state["context_flags"]["closing_started"] = True
-                      closing_msg = "那今天先聊到这里，后续安排 HR 会再和你同步。回头见。"
-                      await self._send_to_tts(ten_env, closing_msg, is_final=False)
-                      await self._send_to_tts(ten_env, "", is_final=True)
-                 return
-            # --- LLM business flow (S2-S6) ---
-            next_q = self.flow_engine.current_question(
-                state={"active_question_index": self.state["active_question_index"] + 1},
-                question_pack=self.question_pack,
-            )
-            next_q_text = next_q.get("question", "请继续围绕岗位核心能力深入作答。") if next_q else "请继续围绕岗位核心能力深入作答。"
-
-            is_last_followup = False
-            success_signals = ""
-            if stage not in ["S1", "S7", "S8"]:
-                followup_limit = self.flow_engine.get_followup_limit(
-                    stage_code=stage,
-                    question=current_q,
-                    default=self.max_followup,
+            if stage != InterviewStage.COMPANY_QA and self._is_company_question(transcript):
+                self._log(
+                    logging.INFO,
+                    "orchestrator.company_question_deferred",
+                    transcript=transcript[:200],
                 )
-                is_last_followup = self.state["followup_count_current"] >= followup_limit - 1
-                raw_success_signals = current_q.get("success_signals") or current_q.get("expected_signal") or []
-                if isinstance(raw_success_signals, str):
-                    success_signals = raw_success_signals
-                else:
-                    success_signals = ", ".join(str(item) for item in raw_success_signals)
+                await self._emit_company_qa_defer_reply(ten_env)
+                return
+
+            candidate_requested_move_on = self._detect_candidate_move_on(transcript)
+            decision = self.runtime_engine.process_candidate_turn(
+                state=self.state,
+                question_pack=self.question_pack,
+                transcript=transcript,
+                confidence=0.95,
+                candidate_requested_move_on=candidate_requested_move_on,
+            )
+            stage_progress_snapshot = decision.stage_progress_snapshot
+            self.state = dict(decision.updated_state)
+
+            if stage_progress_snapshot is not None:
+                self._log(
+                    logging.INFO,
+                    "orchestrator.stage_progress_updated",
+                    progress_stage=stage,
+                    completed=stage_progress_snapshot.completed,
+                    collected_signals=stage_progress_snapshot.collected_signals,
+                    missing_signals=stage_progress_snapshot.missing_signals,
+                )
+
+            self._log(
+                logging.INFO,
+                "orchestrator.runtime_decision_applied",
+                next_action=decision.next_action,
+                must_transition=decision.must_transition,
+                output_mode=getattr(decision, "output_mode", ""),
+                flow_reason=decision.flow_reason,
+                next_stage=decision.next_stage,
+                target_question_id=str((decision.target_question or {}).get("question_id") or ""),
+                followup_budget_remaining=getattr(decision, "followup_budget_remaining", 0),
+            )
+
+            stage = self.state.get("interview_stage", stage)
+            current_q = decision.current_question or current_q
+            if isinstance(getattr(decision, "target_question", None), dict):
+                current_q = decision.target_question or current_q
+            elif decision.must_transition:
+                current_q = self.flow_engine.current_question(
+                    state=self.state,
+                    question_pack=self.question_pack,
+                ) or current_q
+
+            if getattr(decision, "output_mode", "") == "scripted_question":
+                await self._emit_scripted_question(
+                    ten_env,
+                    question=current_q,
+                    trace_id=self.trace_id,
+                )
+                return
+
+            self.session_context.sync_runtime_state(
+                focus_experience=str(self.state.get("focus_experience") or ""),
+                focus_module=str(self.state.get("focus_module") or ""),
+                active_topic_name=str(self.state.get("active_topic_name") or current_q.get("topic_name") or ""),
+                active_topic_rounds=int(self.state.get("active_topic_rounds") or 0),
+                topic_aliases=current_q.get("topic_aliases") if isinstance(current_q.get("topic_aliases"), list) else [],
+            )
+
+            next_q_text = self._build_next_question_preview(
+                decision=decision,
+                current_question=current_q,
+            )
+            raw_success_signals = current_q.get("success_signals") or current_q.get("expected_signal") or []
+            if isinstance(raw_success_signals, str):
+                success_signals = raw_success_signals
+            else:
+                success_signals = ", ".join(str(item) for item in raw_success_signals)
+
+            transition_hint = "[MUST_TRANSITION]: close the current topic and move to the next question." if decision.must_transition else ""
+            next_question_prompt = f"Next question preview: {next_q_text}\n{transition_hint}"
 
             build_result = self.prompt_builder.build(
                 PromptBuildInput(
                     stage=stage,
+                    output_mode=str(getattr(decision, "output_mode", "llm_followup") or "llm_followup"),
                     candidate_name=self.candidate_name,
                     transcript=transcript,
                     current_question=str(current_q.get("question") or ""),
-                    next_question=next_q_text,
-                    success_signals=success_signals if "success_signals" in locals() else "",
-                    is_last_followup=is_last_followup if "is_last_followup" in locals() else False,
+                    target_question_id=str(current_q.get("question_id") or current_q.get("id") or ""),
+                    next_question=next_question_prompt,
+                    success_signals=success_signals,
+                    is_last_followup=bool(decision.must_transition),
+                    followup_budget_remaining=int(getattr(decision, "followup_budget_remaining", 0) or 0),
                     company_info=self.company_info,
                     stage_goal=str(self.state.get("stage_goal") or ""),
                     missing_evidence=self.state.get("missing_evidence"),
                     difficulty_level=str(self.state.get("difficulty_level") or "normal"),
                     transition_reason=str(self.state.get("transition_reason") or ""),
+                    question_type=str(self.state.get("active_question_type") or current_q.get("question_type") or ""),
+                    focus_experience=str(self.state.get("focus_experience") or ""),
+                    focus_module=str(self.state.get("focus_module") or ""),
+                    active_topic_name=str(self.state.get("active_topic_name") or ""),
+                    active_topic_rounds=int(self.state.get("active_topic_rounds") or 0),
+                    must_transition=bool(decision.must_transition),
+                    candidate_requested_move_on=bool(candidate_requested_move_on),
+                    flow_reason=str(decision.flow_reason or self.state.get("transition_reason") or ""),
                     system_prompt_prefix=self.system_prompt_built,
                     session_context=self.session_context,
                 )
@@ -867,109 +1209,57 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 active_question_index=self.state.get("active_question_index"),
                 pending_question=build_result.pending_question,
             )
-            
-            # 在技术深挖环节注入简短 filler，降低停顿感
-            if stage in ["S4", "S5", "S6"]:
+
+            if stage in [InterviewStage.PROJECT_DEEP_DIVE, InterviewStage.JD_MATCH, InterviewStage.GENERAL_PROBE]:
                 import random
                 available_fillers = [f for f in self.EXPERT_FILLERS if f != self.last_filler]
                 filler = random.choice(available_fillers)
                 self.last_filler = filler
                 self._log(logging.INFO, "orchestrator.filler_sent", filler_stage=stage, filler=filler)
                 await self._send_to_tts(ten_env, filler, is_final=False)
-            
+
             llm_start_ts = time.perf_counter()
-            self.llm_task = asyncio.create_task(self._llm_streaming_worker(ten_env, context, asr_final_ts, asr_sentence_start_ts, asr_physical_stop_ts, orch_receive_ts, llm_start_ts, transcript))
+            self.llm_task = asyncio.create_task(
+                self._llm_streaming_worker(
+                    ten_env,
+                    context,
+                    asr_final_ts,
+                    asr_sentence_start_ts,
+                    asr_physical_stop_ts,
+                    orch_receive_ts,
+                    llm_start_ts,
+                    transcript,
+                )
+            )
             full_reply_text = await self.llm_task
 
-            # 安全防御：检查 LLM 返回值是否有效
             if full_reply_text is None:
                 self._log(logging.WARNING, "orchestrator.llm_task_returned_none")
                 return
 
-            # 状态推进与后续追问逻辑
-            was_satisfied = "[SATISFIED]" in full_reply_text
-
             was_fallback = "[FALLBACK]" in full_reply_text
-
-            stage_signals_completed = bool(stage_progress_snapshot and stage_progress_snapshot.completed)
-
-            
-
             if was_fallback:
-                 self._log(logging.WARNING, "orchestrator.llm_triggered_fallback", fallback_stage=stage)
-                 was_satisfied = False
-
-                 evaluation["need_followup"] = True
-
-
-            self.state = self.flow_engine.apply_turn_result(
-
-                state=self.state,
-
-                evaluation=evaluation,
-
-                current_q_max_followups=current_q.get("max_followups", 2),
-
-                force_complete=was_satisfied
-
-            )
-
-
-            if was_satisfied or stage_signals_completed:
-
-                if stage == "S2":
-
-                    self._set_stage(
-
-                        "S3",
-
-                        reason="self_intro_signals_completed" if stage_signals_completed else "self_intro_satisfied",
-
-                    )
-
-                elif stage == "S3":
-
-                    self._set_stage(
-
-                        "S4",
-
-                        reason="stack_signals_completed" if stage_signals_completed else "stack_verification_satisfied",
-
-                    )
-
-            elif stage in ["S2", "S3"] and stage_progress_snapshot is not None:
-
-                self.state["missing_evidence"] = list(stage_progress_snapshot.missing_signals)
-
-                self.state["transition_reason"] = stage_progress_snapshot.reason
-
+                self._log(logging.WARNING, "orchestrator.llm_triggered_fallback", fallback_stage=stage)
+                self.state["difficulty_level"] = "fallback"
+            elif self.state.get("difficulty_level") == "fallback":
+                self.state["difficulty_level"] = "normal"
 
             refreshed_q = self.flow_engine.current_question(state=self.state, question_pack=self.question_pack)
             self.state = self.flow_engine.sync_stage_metadata(
                 state=self.state,
-                stage_code=self.state.get("interview_stage", "S1"),
+                stage_code=self.state.get("interview_stage", InterviewStage.OPENING),
                 question=refreshed_q,
                 transition_reason=str(self.state.get("transition_reason") or ""),
             )
-            if was_satisfied or stage_signals_completed or self.state["followup_count_current"] == 0:
+
+            if decision.must_transition:
                 self._log(
                     logging.INFO,
                     "orchestrator.topic_terminated",
-                    was_satisfied=was_satisfied,
-                    stage_signals_completed=stage_signals_completed,
+                    next_action=decision.next_action,
+                    flow_reason=decision.flow_reason,
                 )
-                
-                next_q = self.flow_engine.current_question(state=self.state, question_pack=self.question_pack)
-                next_stage = self.state.get("interview_stage")
 
-                # 如果还在技术深挖环节（S4/S5/S6），这里预留平滑过渡逻辑。
-                if next_q and next_stage in ["S4", "S5", "S6"]:
-                    # 为了保持过渡自然，交给下一轮 LLM 自动处理，这里不做 fast path。
-                    pass
-
-            # 题库消耗完毕后切换到公司介绍与追问阶段
-            if self.state["active_question_index"] >= len(self.question_pack["questions"]) and stage not in ["S7", "S8"]:
-                 self._set_stage("S7", reason="question_pack_exhausted")
         except asyncio.CancelledError:
             self._log(logging.INFO, "orchestrator.interaction_cancelled")
         except Exception as exc:
@@ -992,7 +1282,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
     async def on_cmd(self, ten_env: AsyncTenEnv, cmd: Cmd) -> None:
         cmd_name = cmd.get_name()
 
-        if cmd_name == "start_of_sentence":
+        if cmd_name == RuntimeCommand.START_OF_SENTENCE:
             self.is_user_speaking = True
             now_ms = self._now_ms()
             if not self.current_turn_start_ms:
@@ -1006,11 +1296,11 @@ class InterviewOrchestratorExtension(AsyncExtension):
             self._cancel_pending_finalize(clear_payload=False)
             self._invalidate_active_response()
             self.turn_triggered = False
-            self._emit_agent_state("listening")
+            self._emit_agent_state(AgentState.LISTENING)
             self._log(logging.INFO, "orchestrator.user_speaking_started")
-            await ten_env.send_cmd(Cmd.create("interrupt"))
+            await ten_env.send_cmd(Cmd.create(RuntimeCommand.INTERRUPT))
 
-        elif cmd_name == "end_of_sentence":
+        elif cmd_name == RuntimeCommand.END_OF_SENTENCE:
             self.is_user_speaking = False
             now_ms = self._now_ms()
             if self.current_turn_segment_start_ms:
@@ -1021,16 +1311,16 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 now_ms=now_ms,
                 commit_guard_ms=policy.commit_guard_ms,
             )
-            self._emit_agent_state("thinking")
+            self._emit_agent_state(AgentState.THINKING)
             self._log(logging.INFO, "orchestrator.user_speaking_stopped")
 
-        elif cmd_name == "on_connected":
-            if self.state.get("interview_stage", "S1") == "S1" and not self.state["context_flags"].get("greeted", False):
+        elif cmd_name == RuntimeCommand.ON_CONNECTED:
+            if self.state and self.state.get("interview_stage", InterviewStage.OPENING) == InterviewStage.OPENING and not self.state["context_flags"].get("greeted", False):
                 self._log(logging.INFO, "orchestrator.handshake_started")
-                handshake_msg = f"{self.candidate_name}，你好。喂，听得到我说话吗？"
+                handshake_msg = HANDSHAKE_TEMPLATE.format(candidate_name=self.candidate_name)
                 await self._send_to_tts(ten_env, handshake_msg, is_final=False)
                 await self._send_to_tts(ten_env, "", is_final=True)
-                self._set_stage("S1", reason="connectivity_handshake_sent")
+                self._set_stage(InterviewStage.OPENING, reason="connectivity_handshake_sent")
                 self.state["context_flags"]["greeted"] = True
             else:
                 self._log(
@@ -1038,13 +1328,45 @@ class InterviewOrchestratorExtension(AsyncExtension):
                     "orchestrator.reconnection_detected",
                     current_stage=self.state.get("interview_stage"),
                 )
+        elif cmd_name == RuntimeCommand.ON_CONNECTION_ERROR:
+            error_code, _ = cmd.get_property_int("error")
+            error_msg, _ = cmd.get_property_string("msg")
+            self._emit_agent_state(AgentState.ERROR)
+            self._log(
+                logging.ERROR,
+                "orchestrator.rtc_connection_error",
+                error_code=error_code,
+                error_msg=error_msg or "",
+            )
+        elif cmd_name == RuntimeCommand.ON_CONNECTION_FAILURE:
+            reason_type, _ = cmd.get_property_int("reason_type")
+            channel, _ = cmd.get_property_string("channel")
+            user_id, _ = cmd.get_property_string("user_id")
+            self._emit_agent_state(AgentState.ERROR)
+            self._log(
+                logging.ERROR,
+                "orchestrator.rtc_connection_failure",
+                reason_type=reason_type,
+                channel=channel or "",
+                user_id=user_id or "",
+            )
+        elif cmd_name == RuntimeCommand.ON_TOKEN_EXPIRED:
+            channel, _ = cmd.get_property_string("channel")
+            user_id, _ = cmd.get_property_string("user_id")
+            self._emit_agent_state(AgentState.ERROR)
+            self._log(
+                logging.ERROR,
+                "orchestrator.rtc_token_expired",
+                channel=channel or "",
+                user_id=user_id or "",
+            )
 
         await ten_env.return_result(CmdResult.create(StatusCode.OK, cmd))
 
     async def on_data(self, ten_env: AsyncTenEnv, data: Data) -> None:
         transcript, _ = data.get_property_string("text")
         is_final, _ = data.get_property_bool("is_final")
-        stage = self.state.get("interview_stage", "S1")
+        stage = self.state.get("interview_stage", InterviewStage.OPENING)
 
         transcript = (transcript or "").strip()
         if not transcript:
@@ -1055,7 +1377,8 @@ class InterviewOrchestratorExtension(AsyncExtension):
         asr_sentence_start_ts, _ = data.get_property_float("asr_sentence_start_ts")
         asr_physical_stop_ts, _ = data.get_property_float("asr_physical_stop_ts")
 
-        skip_phrases = {
+        skip_phrases = SKIP_PHRASES
+        legacy_skip_phrases = {
             "啊",
             "嗯",
             "额",
@@ -1069,7 +1392,8 @@ class InterviewOrchestratorExtension(AsyncExtension):
             "那样",
             "这么说",
         }
-        handshake_keywords = {
+        handshake_keywords = HANDSHAKE_KEYWORDS
+        legacy_handshake_keywords = {
             "在的",
             "听到",
             "你好",
@@ -1083,7 +1407,8 @@ class InterviewOrchestratorExtension(AsyncExtension):
             "对",
             "明白",
         }
-        audio_issue_phrases = {
+        audio_issue_phrases = AUDIO_ISSUE_PHRASES
+        legacy_audio_issue_phrases = {
             "听不到",
             "没声音",
             "听不清",
@@ -1104,11 +1429,11 @@ class InterviewOrchestratorExtension(AsyncExtension):
         if clean_text in skip_phrases or len(clean_text) < 2:
             self._log(logging.INFO, "orchestrator.final_ignored_noise", transcript=transcript[:200])
             return
-        if len(clean_text) <= 2 and stage in {"S1", "S2"} and clean_text not in handshake_keywords:
+        if len(clean_text) <= 2 and stage in {InterviewStage.OPENING, InterviewStage.SELF_INTRO} and clean_text not in handshake_keywords:
             self._log(logging.INFO, "orchestrator.final_ignored_short", transcript=transcript[:200], short_stage=stage)
             return
 
-        if stage == "S1" and any(phrase in transcript for phrase in audio_issue_phrases):
+        if stage == InterviewStage.OPENING and any(phrase in transcript for phrase in audio_issue_phrases):
             self._log(logging.WARNING, "orchestrator.handshake_audio_issue", transcript=transcript[:200])
             self._cancel_pending_finalize()
             self._invalidate_active_response()
@@ -1142,7 +1467,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.last_triggered_text = transcript
         self._finalize_candidate_answer(answer_text=transcript)
         self._emit_candidate_final(transcript)
-        self._emit_agent_state("thinking")
+        self._emit_agent_state(AgentState.THINKING)
         orch_receive_ts = time.perf_counter()
         self._schedule_finalize(
             ten_env,
@@ -1247,7 +1572,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 )
 
             if not emitted:
-                error_msg = "收到，我们继续下一题。"
+                error_msg = LLM_EMPTY_FALLBACK_REPLY
                 await self._send_to_tts(ten_env, error_msg, is_final=False, generation_id=generation_id)
                 full_reply_content.append(error_msg)
 
@@ -1294,9 +1619,9 @@ class InterviewOrchestratorExtension(AsyncExtension):
 
         if text:
             self._emit_question_update(text=text, trace_id=trace_id)
-            self._emit_agent_state("speaking")
+            self._emit_agent_state(AgentState.SPEAKING)
 
-        tts_data = Data.create("text_data")
+        tts_data = Data.create(RuntimeDataChannel.TEXT_DATA)
         tts_data.set_property_string("text", text)
         tts_data.set_property_bool("is_final", is_final)
         if asr_physical_stop_ts > 0:
@@ -1319,16 +1644,16 @@ class InterviewOrchestratorExtension(AsyncExtension):
         if self.event_bridge is not None:
             await self.event_bridge.stop()
         with contextlib.suppress(Exception):
-            await ten_env.send_cmd(Cmd.create("interrupt"))
+            await ten_env.send_cmd(Cmd.create(RuntimeCommand.INTERRUPT))
         self._log(logging.INFO, "orchestrator.stopped")
 
     def _emit_agent_state(self, state: str) -> None:
         if self.event_bridge is None:
             return
         self.event_bridge.emit(
-            event_type="agent.state",
+            event_type=InterviewEventType.AGENT_STATE,
             critical=False,
-            payload={"state": str(state or "").strip() or "idle"},
+            payload={"state": str(state or "").strip() or AgentState.IDLE},
         )
 
     def _emit_candidate_final(self, transcript: str) -> None:
@@ -1336,7 +1661,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         if not text or self.event_bridge is None:
             return
         self.event_bridge.emit(
-            event_type="candidate.final",
+            event_type=InterviewEventType.CANDIDATE_FINAL,
             critical=True,
             payload={"text": text},
         )
@@ -1358,6 +1683,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         if not clean_text or self.event_bridge is None:
             return
         trace = str(trace_id or "").strip() or "default"
+        question_ctx = self._get_active_question_context()
         if trace != self.current_question_trace_id:
             self.current_question_trace_id = trace
             self.current_question_buffer = ""
@@ -1365,12 +1691,14 @@ class InterviewOrchestratorExtension(AsyncExtension):
         if not self.current_question_buffer:
             return
         self.event_bridge.emit(
-            event_type="question.update",
+            event_type=InterviewEventType.QUESTION_UPDATE,
             critical=True,
             payload={
                 "text": self.current_question_buffer,
                 "spoken_text": self.current_question_buffer,
                 "trace_id": trace,
+                "question_id": str(question_ctx.get("question_id") or ""),
+                "topic_name": str(question_ctx.get("topic_name") or ""),
             },
         )
 
@@ -1379,18 +1707,23 @@ class InterviewOrchestratorExtension(AsyncExtension):
             return
         trace = str(trace_id or "").strip() or self.current_question_trace_id or "default"
         stage = str((self.state or {}).get("interview_stage") or "")
+        question_ctx = self._get_active_question_context()
         self._start_pending_question(
             question_text=self.current_question_buffer,
             stage=stage,
             trace_id=trace,
+            question_id=str(question_ctx.get("question_id") or ""),
+            topic_name=str(question_ctx.get("topic_name") or ""),
         )
         self.event_bridge.emit(
-            event_type="question.final",
+            event_type=InterviewEventType.QUESTION_FINAL,
             critical=True,
             payload={
                 "text": self.current_question_buffer,
                 "spoken_text": self.current_question_buffer,
                 "trace_id": trace,
+                "question_id": str(question_ctx.get("question_id") or ""),
+                "topic_name": str(question_ctx.get("topic_name") or ""),
             },
         )
         self.current_question_trace_id = ""

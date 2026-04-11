@@ -24,6 +24,11 @@ class StagePolicy:
     fallback_allowed: bool
     requires_question_pack: bool
     allow_llm_transition_signal: bool
+    completion_mode: str = "question_driven"
+    hard_max_turns: int = 0
+    allow_deep_dive: bool = False
+    topic_round_limit: int = 0
+    must_exit_on_followup_limit: bool = True
     next_stage: str | None = None
 
 
@@ -51,6 +56,11 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=False,
         requires_question_pack=False,
         allow_llm_transition_signal=False,
+        completion_mode="signal_driven",
+        hard_max_turns=1,
+        allow_deep_dive=False,
+        topic_round_limit=0,
+        must_exit_on_followup_limit=True,
         next_stage="S2",
     ),
     "S2": StagePolicy(
@@ -59,10 +69,15 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         label="自我介绍",
         description="收集候选人最近经历、核心项目、角色定位和当前方向。",
         goal="让候选人完成简洁、聚焦的自我介绍，拿到最近经历与核心项目线索。",
-        max_followups=1,
+        max_followups=2,
         fallback_allowed=False,
-        requires_question_pack=False,
+        requires_question_pack=True,
         allow_llm_transition_signal=True,
+        completion_mode="hybrid",
+        hard_max_turns=4,
+        allow_deep_dive=False,
+        topic_round_limit=2,
+        must_exit_on_followup_limit=True,
         next_stage="S3",
     ),
     "S3": StagePolicy(
@@ -75,6 +90,11 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=True,
         requires_question_pack=False,
         allow_llm_transition_signal=True,
+        completion_mode="hybrid",
+        hard_max_turns=3,
+        allow_deep_dive=False,
+        topic_round_limit=2,
+        must_exit_on_followup_limit=True,
         next_stage="S4",
     ),
     "S4": StagePolicy(
@@ -87,6 +107,11 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=True,
         requires_question_pack=True,
         allow_llm_transition_signal=True,
+        completion_mode="question_driven",
+        hard_max_turns=4,
+        allow_deep_dive=True,
+        topic_round_limit=3,
+        must_exit_on_followup_limit=True,
         next_stage="S5",
     ),
     "S5": StagePolicy(
@@ -99,6 +124,11 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=True,
         requires_question_pack=True,
         allow_llm_transition_signal=True,
+        completion_mode="question_driven",
+        hard_max_turns=4,
+        allow_deep_dive=True,
+        topic_round_limit=3,
+        must_exit_on_followup_limit=True,
         next_stage="S6",
     ),
     "S6": StagePolicy(
@@ -111,6 +141,11 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=True,
         requires_question_pack=True,
         allow_llm_transition_signal=True,
+        completion_mode="question_driven",
+        hard_max_turns=4,
+        allow_deep_dive=True,
+        topic_round_limit=3,
+        must_exit_on_followup_limit=True,
         next_stage="S7",
     ),
     "S7": StagePolicy(
@@ -123,6 +158,11 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=False,
         requires_question_pack=False,
         allow_llm_transition_signal=False,
+        completion_mode="signal_driven",
+        hard_max_turns=2,
+        allow_deep_dive=False,
+        topic_round_limit=0,
+        must_exit_on_followup_limit=True,
         next_stage="S8",
     ),
     "S8": StagePolicy(
@@ -135,13 +175,18 @@ STAGE_POLICIES: dict[str, StagePolicy] = {
         fallback_allowed=False,
         requires_question_pack=False,
         allow_llm_transition_signal=False,
+        completion_mode="signal_driven",
+        hard_max_turns=1,
+        allow_deep_dive=False,
+        topic_round_limit=0,
+        must_exit_on_followup_limit=True,
         next_stage=None,
     ),
 }
 
-EARLY_STAGE_CODES = frozenset({"S1", "S2", "S3"})
+EARLY_STAGE_CODES = frozenset({"S1", "S2"})
 LATE_STAGE_CODES = frozenset({"S7", "S8"})
-QUESTION_DRIVEN_STAGE_CODES = frozenset({"S4", "S5", "S6"})
+QUESTION_DRIVEN_STAGE_CODES = frozenset({"S3", "S4", "S5", "S6"})
 DEFAULT_STAGE_CODE = "S1"
 
 
@@ -172,6 +217,24 @@ def get_next_stage(stage_code: str | None) -> str | None:
     """Return the configured next stage."""
 
     return get_stage_policy(stage_code).next_stage
+
+
+def get_stage_hard_turn_limit(stage_code: str | None) -> int:
+    """Return the hard cap of turns allowed within the stage."""
+
+    return max(0, int(get_stage_policy(stage_code).hard_max_turns))
+
+
+def get_stage_topic_round_limit(stage_code: str | None) -> int:
+    """Return the max number of follow-up rounds for a single topic."""
+
+    return max(0, int(get_stage_policy(stage_code).topic_round_limit))
+
+
+def is_stage_deep_dive_allowed(stage_code: str | None) -> bool:
+    """Whether the stage is allowed to drill into implementation details."""
+
+    return bool(get_stage_policy(stage_code).allow_deep_dive)
 
 
 def resolve_followup_limit(
@@ -260,4 +323,6 @@ def build_stage_state_patch(
         "missing_evidence": derive_missing_evidence(question=question),
         "transition_reason": str(transition_reason or prior.get("transition_reason") or ""),
         "stage_max_followups": resolve_followup_limit(stage_code=policy.code, question=question),
+        "active_question_type": str((question or {}).get("question_type") or prior.get("active_question_type") or ""),
+        "active_topic_name": str((question or {}).get("topic_name") or prior.get("active_topic_name") or ""),
     }

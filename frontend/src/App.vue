@@ -4,6 +4,7 @@ import { AgoraRTCGateway } from "./agoraGateway";
 import {
   bootstrapDemoSession,
   buildInterviewEventsWsUrl,
+  createInterviewSession,
   finishInterviewSession,
   getInterviewSession,
   getTenRuntimeConfig,
@@ -299,7 +300,46 @@ function clearSessionSnapshot(): void {
 
 function readPreferredSessionId(): string {
   const url = new URL(window.location.href);
-  return String(url.searchParams.get("session_id") || "").trim();
+  // 1. Try query param ?session_id=...
+  const fromQuery = String(url.searchParams.get("session_id") || "").trim();
+  if (fromQuery) return fromQuery;
+
+  // 2. Try path param /ai-interview/session/[id]
+  const pathParts = url.pathname.split("/");
+  const sessionIdx = pathParts.indexOf("session");
+  if (sessionIdx !== -1 && pathParts[sessionIdx + 1]) {
+    return pathParts[sessionIdx + 1].trim();
+  }
+
+  return "";
+}
+
+function readCandidateId(): string {
+  const url = new URL(window.location.href);
+  return String(url.searchParams.get("candidate_id") || "").trim();
+}
+
+function readJobId(): string {
+  const url = new URL(window.location.href);
+  return String(url.searchParams.get("job_id") || "").trim();
+}
+
+function readLeftFlag(): boolean {
+  const url = new URL(window.location.href);
+  const raw = String(url.searchParams.get("left") || "").trim().toLowerCase();
+  return raw === "1" || raw === "true";
+}
+
+function replaceUrlWithoutSessionState(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("session_id");
+  url.searchParams.delete("left");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function isReusableSessionStatus(status?: string | null): boolean {
+  const normalized = String(status || "").trim().toLowerCase();
+  return normalized === "created" || normalized === "in_progress";
 }
 
 function appendTranscript(transcript: string, speaker = "候选人", occurredAt?: string): void {
@@ -476,16 +516,48 @@ async function bootstrap(): Promise<void> {
   loading.value = true;
   errorText.value = "";
   try {
+    if (readLeftFlag()) {
+      clearSessionSnapshot();
+      replaceUrlWithoutSessionState();
+    }
+
     const preferredSessionId = readPreferredSessionId();
+    const candidateIdFromUrl = readCandidateId();
+    const jobIdFromUrl = readJobId();
     const cached = loadSessionSnapshot();
     if (preferredSessionId) {
-      session.value = await getInterviewSession(preferredSessionId);
+      const fetched = await getInterviewSession(preferredSessionId);
+      if (isReusableSessionStatus(fetched.status)) {
+        session.value = fetched;
+        persistSessionSnapshot(session.value);
+        currentQuestion.value = "已按指定会话接入，正在重新接入 Agora/TEN 链路";
+        // If we successfully loaded from URL, we should ensure we don't accidentally fallback to cache
+      } else {
+        clearSessionSnapshot();
+        replaceUrlWithoutSessionState();
+      }
+    }
+
+    if (!session.value && cached?.id && cached?.candidate_id) {
+      const fetched = await getInterviewSession(cached.id);
+      if (isReusableSessionStatus(fetched.status)) {
+        session.value = fetched;
+        persistSessionSnapshot(session.value);
+        currentQuestion.value = "已恢复上一次会话，正在重新接入 Agora/TEN 链路";
+      } else {
+        clearSessionSnapshot();
+      }
+    }
+
+    if (!session.value && candidateIdFromUrl && jobIdFromUrl) {
+      const created = await createInterviewSession(candidateIdFromUrl, jobIdFromUrl);
+      persistSessionSnapshot(created);
+      session.value = await startInterviewSession(created.id);
       persistSessionSnapshot(session.value);
-      currentQuestion.value = "已按指定会话接入，正在重新接入 Agora/TEN 链路";
-    } else if (cached?.id && cached?.candidate_id) {
-      session.value = cached;
-      currentQuestion.value = "已恢复上一次会话，正在重新接入 Agora/TEN 链路";
-    } else {
+      currentQuestion.value = "已按候选人与岗位信息创建新会话，正在准备 Agora/TEN 链路";
+    }
+
+    if (!session.value) {
       const created = await bootstrapDemoSession();
       persistSessionSnapshot(created);
       session.value = await startInterviewSession(created.id);

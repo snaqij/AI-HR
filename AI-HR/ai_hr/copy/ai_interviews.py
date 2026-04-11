@@ -1,0 +1,12 @@
+"""Reusable service-layer copy for AI interview flows."""
+
+RECENT_CONTEXT_EMPTY = "无历史上下文"
+FOLLOWUP_DEFAULT_QUESTION = "请结合当前问题补充细节。"
+FOLLOWUP_DEFAULT_SIGNAL = "挖掘候选人陈述的项目细节、核心难点或技术决策背景。"
+FOLLOWUP_SPEAKER_CANDIDATE = "候选人"
+FOLLOWUP_SPEAKER_AI = "AI"
+REPORT_EMPTY_SUMMARY = "候选人有效回答较少，建议人工复核。"
+DEFAULT_TTS_VOICE = "default"
+LOW_CONFIDENCE_FLAG = "low_confidence"
+INSUFFICIENT_EVIDENCE_FLAG = "insufficient_evidence"
+LLM_PREFETCH_FROM_PARTIAL_FLAG = "llm_prefetch_from_partial"

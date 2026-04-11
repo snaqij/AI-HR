@@ -121,6 +121,7 @@ class TENRuntimeManager:
                 prop.update(
                     {
                         "app_id": rtc.get("app_id") or self._settings.agora_app_id or "",
+                        "app_certificate": self._settings.agora_app_certificate or "",
                         "channel": rtc.get("channel_name") or rtc.get("room_id") or "",
                         "token": token,
                         "stream_id": int(bot_id_val),
@@ -156,6 +157,7 @@ class TENRuntimeManager:
                     }
                 )
             elif name == "interview_orchestrator":
+                question_pack = payload.get("question_pack")
                 prop.update(
                     {
                         "session_id": session_id,
@@ -164,7 +166,36 @@ class TENRuntimeManager:
                         "language": language,
                         "task_key": "interview_followup",
                         "max_followup": int(payload.get("ten_max_followup") or 2),
+                        "company_info": str(
+                            payload.get("company_info")
+                            or payload.get("company_profile")
+                            or payload.get("company_intro")
+                            or ""
+                        ).strip(),
+                        "company_info_source": str(payload.get("company_info_source") or "").strip(),
+                        "company_info_version": str(payload.get("company_info_version") or "").strip(),
+                        "question_pack": question_pack if isinstance(question_pack, dict) else {},
+                        "question_pack_source": str(payload.get("question_pack_source") or "").strip(),
+                        "question_pack_version": str(payload.get("question_pack_version") or "").strip(),
                     }
+                )
+                pack_questions = question_pack.get("questions", []) if isinstance(question_pack, dict) else []
+                pack_ids: list[str] = []
+                if isinstance(pack_questions, list):
+                    for item in pack_questions[:16]:
+                        if not isinstance(item, dict):
+                            continue
+                        identifier = str(item.get("idx") or item.get("question_id") or item.get("id") or "").strip()
+                        if identifier:
+                            pack_ids.append(identifier)
+                logger.info(
+                    "ten_runtime.interview_orchestrator_payload_ready session_id=%s question_pack_source=%s question_pack_version=%s question_count=%s question_ids=%s company_info_source=%s",
+                    session_id,
+                    str(payload.get("question_pack_source") or "").strip(),
+                    str(payload.get("question_pack_version") or "").strip(),
+                    len(pack_questions) if isinstance(pack_questions, list) else 0,
+                    ",".join(pack_ids),
+                    str(payload.get("company_info_source") or "").strip(),
                 )
         return runtime
 
@@ -205,6 +236,10 @@ class TENRuntimeManager:
         _ensure_cmd_dest("ten_vad", "end_of_sentence", "asr_aliyun_nls")
         _ensure_cmd_dest("ten_vad", "end_of_sentence", "interview_orchestrator")
         _ensure_cmd_dest("interview_orchestrator", "interrupt", "tts_tencent")
+        _ensure_cmd_dest("agora_rtc", "on_connected", "interview_orchestrator")
+        _ensure_cmd_dest("agora_rtc", "on_connection_error", "interview_orchestrator")
+        _ensure_cmd_dest("agora_rtc", "on_connection_failure", "interview_orchestrator")
+        _ensure_cmd_dest("agora_rtc", "on_token_expired", "interview_orchestrator")
 
     def _load_template(self) -> dict[str, Any]:
         template_val = self._settings.ai_interview_ten_property_template

@@ -2,6 +2,7 @@
 
 import time
 import types
+from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -9,11 +10,20 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from ai_hr.core.config import get_settings
+from ai_hr.domain.constants import InterviewStage
+from ai_hr.schemas.ai_interviews import AIInterviewSessionStartRequest
 
 from ai_hr.db.base import Base
 from ai_hr.db.session import get_db_session
 from ai_hr.main import app
-from ai_hr.services.ai_interviews import get_ai_interview_service
+from ai_hr.repositories.ai_interviews import AIInterviewSessionRepository
+from ai_hr.repositories.ai_runtime import AIRuntimeRepository
+from ai_hr.repositories.candidates import CandidateRepository
+from ai_hr.repositories.events import EventRepository
+from ai_hr.repositories.interviews import InterviewRepository
+from ai_hr.repositories.jobs import JobRepository
+from ai_hr.services.ai_interviews import AIInterviewService, get_ai_interview_service
+from ai_hr.services.interview_runtime.memory_store import MemoryInterviewRuntimeStore
 
 
 engine = create_engine(
@@ -145,6 +155,56 @@ def test_start_and_finish_ai_interview_session() -> None:
     finished = finish_resp.json()["data"]
     assert finished["status"] == "completed"
     assert finished["ended_at"] is not None
+
+
+def test_create_session_should_not_prepare_ten_property_before_start() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+    session_provider = app.dependency_overrides.get(get_db_session, override_get_db_session)
+    session_gen = session_provider()
+    db = next(session_gen)
+    try:
+        service = AIInterviewService(
+            session_repository=AIInterviewSessionRepository(db),
+            runtime_repository=AIRuntimeRepository(db),
+            candidate_repository=CandidateRepository(db),
+            job_repository=JobRepository(db),
+            interview_repository=InterviewRepository(db),
+            event_repository=EventRepository(db),
+            rtc_gateway=MagicMock(),
+            asr_provider=MagicMock(),
+            tts_provider=MagicMock(),
+            llm_client=MagicMock(),
+            orchestrator=MagicMock(),
+            runtime_store=MemoryInterviewRuntimeStore(),
+            ten_runtime_manager=MagicMock(),
+        )
+        service._build_rtc_payload = lambda rtc_info: {
+            "rtc_vendor": "mock",
+            "rtc_channel_name": "test-room",
+            "rtc_app_id": "test-app",
+            "rtc_uid": "1001",
+        }
+        service._rtc_gateway.create_room.return_value = types.SimpleNamespace(
+            room_id="ai-intv-test",
+            join_token="join-token",
+        )
+        created = service.create_session(
+            payload=types.SimpleNamespace(
+                candidate_id=candidate_id,
+                job_id=job_id,
+                channel="api",
+                language="zh-CN",
+                note=None,
+                payload={},
+            )
+        )
+    finally:
+        session_gen.close()
+
+    session_payload = created
+    assert session_payload["ten"]["launch_status"] in {"pending_start", "disabled"}
+    assert session_payload["ten"]["property_file"] in {None, ""}
 
 
 def test_invalid_state_transition_should_fail() -> None:
@@ -294,6 +354,170 @@ def test_prebuild_question_pack_should_be_reusable_on_session_start() -> None:
     payload = start_resp.json()["data"]["payload"]
     assert payload.get("prebuilt_pack_hit") is True
     assert int(payload.get("question_pack_version") or 0) >= 1
+
+
+def test_start_session_should_refresh_latest_question_pack_and_reset_runtime_state() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+
+    session_provider = app.dependency_overrides.get(get_db_session, override_get_db_session)
+    session_gen = session_provider()
+    db = next(session_gen)
+    try:
+        service = AIInterviewService(
+            session_repository=AIInterviewSessionRepository(db),
+            runtime_repository=AIRuntimeRepository(db),
+            candidate_repository=CandidateRepository(db),
+            job_repository=JobRepository(db),
+            interview_repository=InterviewRepository(db),
+            event_repository=EventRepository(db),
+            rtc_gateway=MagicMock(),
+            asr_provider=MagicMock(),
+            tts_provider=MagicMock(),
+            llm_client=MagicMock(),
+            orchestrator=MagicMock(),
+            runtime_store=MemoryInterviewRuntimeStore(),
+            ten_runtime_manager=MagicMock(),
+        )
+        service._prepare_ten_runtime = lambda entity: {}
+        service._maybe_auto_launch_ten = lambda entity: entity
+        entity = service._session_repository.create(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            channel="api",
+            language="zh-CN",
+            rtc_room_id="test-room",
+            join_token="test-token",
+            payload={"interview_stage": InterviewStage.OPENING},
+        )
+        session_id = entity.id
+        service._session_repository.create_question_set(
+            session_id=session_id,
+            version=1,
+            source="test_old",
+            questions=[
+                {"idx": 1, "stage": "S2", "question": "old-intro"},
+                {"idx": 14, "stage": "S3", "question": "old-focus-module"},
+            ],
+        )
+        service._runtime_store.save_question_pack(
+            session_id=session_id,
+            version=1,
+            question_pack={
+                "session_id": session_id,
+                "version": 1,
+                "source": "test_old",
+                "question_count": 2,
+                "questions": [
+                    {"idx": 1, "stage": "S2", "question": "old-intro"},
+                    {"idx": 14, "stage": "S3", "question": "old-focus-module"},
+                ],
+            },
+            ttl_seconds=3600,
+        )
+        service._runtime_store.init_session_state(
+            session_id=session_id,
+            state={
+                "interview_stage": "S4",
+                "active_question_index": 9,
+                "current_question_id": "old-q14",
+                "question_statuses": ["completed", "completed"],
+            },
+            ttl_seconds=3600,
+        )
+        service._session_repository.create_question_set(
+            session_id=session_id,
+            version=2,
+            source="test_new",
+            questions=[
+                {"idx": 1, "stage": "S2", "question": "new-intro"},
+                {"idx": 2, "stage": "S3", "question": "new-s3-q1"},
+                {"idx": 3, "stage": "S3", "question": "new-s3-q2"},
+            ],
+        )
+        started = service.start_session(session_id, AIInterviewSessionStartRequest())
+    finally:
+        session_gen.close()
+
+    payload = started["payload"]
+    assert int(payload.get("question_pack_version") or 0) == 2
+    assert payload.get("question_pack_source") == "test_new"
+    assert isinstance(payload.get("question_pack"), dict)
+    assert [item.get("question") for item in payload["question_pack"].get("questions", [])] == [
+        "new-intro",
+        "new-s3-q1",
+        "new-s3-q2",
+    ]
+
+    session_gen = session_provider()
+    db = next(session_gen)
+    try:
+        pack = service._runtime_store.get_question_pack(session_id=session_id)
+        state = service._runtime_store.get_session_state(session_id=session_id)
+    finally:
+        session_gen.close()
+
+    assert pack is not None
+    assert int(pack.get("version") or 0) == 2
+    assert pack.get("source") == "test_new"
+    assert [item.get("question") for item in pack.get("questions", [])] == [
+        "new-intro",
+        "new-s3-q1",
+        "new-s3-q2",
+    ]
+    assert state is not None
+    assert state.get("interview_stage") == "S1"
+    assert int(state.get("active_question_index") or 0) == 0
+    assert str(state.get("current_question_id") or "") == ""
+
+
+def test_start_session_should_auto_generate_question_pack_when_missing() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+
+    session_provider = app.dependency_overrides.get(get_db_session, override_get_db_session)
+    session_gen = session_provider()
+    db = next(session_gen)
+    try:
+        service = AIInterviewService(
+            session_repository=AIInterviewSessionRepository(db),
+            runtime_repository=AIRuntimeRepository(db),
+            candidate_repository=CandidateRepository(db),
+            job_repository=JobRepository(db),
+            interview_repository=InterviewRepository(db),
+            event_repository=EventRepository(db),
+            rtc_gateway=MagicMock(),
+            asr_provider=MagicMock(),
+            tts_provider=MagicMock(),
+            llm_client=MagicMock(),
+            orchestrator=MagicMock(),
+            runtime_store=MemoryInterviewRuntimeStore(),
+            ten_runtime_manager=MagicMock(),
+        )
+        service._prepare_ten_runtime = lambda entity: {}
+        service._maybe_auto_launch_ten = lambda entity: entity
+        entity = service._session_repository.create(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            channel="api",
+            language="zh-CN",
+            rtc_room_id="test-room-2",
+            join_token="test-token-2",
+            payload={"interview_stage": InterviewStage.OPENING},
+        )
+        started = service.start_session(entity.id, AIInterviewSessionStartRequest())
+        pack = service._runtime_store.get_question_pack(session_id=entity.id)
+        state = service._runtime_store.get_session_state(session_id=entity.id)
+    finally:
+        session_gen.close()
+
+    assert int(started["payload"].get("question_count") or 0) > 0
+    assert isinstance(started["payload"].get("question_pack"), dict)
+    assert pack is not None
+    assert int(pack.get("question_count") or 0) > 0
+    assert isinstance(pack.get("questions"), list) and len(pack["questions"]) > 0
+    assert state is not None
+    assert state.get("interview_stage") == "S1"
 
 
 def test_integration_flow_create_start_finish_and_report() -> None:
@@ -543,6 +767,7 @@ def test_rtc_join_and_reconnect_should_succeed() -> None:
     job_id = _create_job()
     candidate_id = _create_candidate()
     session_id = _create_ai_session(job_id, candidate_id)
+    assert client.post(f"/api/v1/ai/interviews/sessions/{session_id}/start", json={}).status_code == 200
 
     join_resp = client.post(
         f"/api/v1/ai/interviews/sessions/{session_id}/rtc/join",
@@ -569,6 +794,7 @@ def test_ten_runtime_config_endpoint_should_reflect_session_state() -> None:
     job_id = _create_job()
     candidate_id = _create_candidate()
     session_id = _create_ai_session(job_id, candidate_id)
+    assert client.post(f"/api/v1/ai/interviews/sessions/{session_id}/start", json={}).status_code == 200
 
     runtime_resp = client.get(f"/api/v1/ai/interviews/sessions/{session_id}/ten/runtime-config")
     assert runtime_resp.status_code == 200
@@ -576,6 +802,36 @@ def test_ten_runtime_config_endpoint_should_reflect_session_state() -> None:
     assert runtime_payload["session_id"] == session_id
     assert runtime_payload["room_id"].startswith("ai-intv-")
     assert runtime_payload["provider"] in {"mock", "livekit", "agora"}
+
+
+def test_finished_session_should_reject_realtime_entrypoints() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+    session_id = _create_ai_session(job_id, candidate_id)
+
+    assert client.post(f"/api/v1/ai/interviews/sessions/{session_id}/start", json={}).status_code == 200
+    assert (
+        client.post(
+            f"/api/v1/ai/interviews/sessions/{session_id}/finish",
+            json={"result_status": "completed", "operator": "hr_user"},
+        ).status_code
+        == 200
+    )
+
+    join_resp = client.post(
+        f"/api/v1/ai/interviews/sessions/{session_id}/rtc/join",
+        json={"candidate_id": candidate_id, "client_id": "web-finished"},
+    )
+    assert join_resp.status_code == 400
+    assert join_resp.json()["error"]["code"] == "domain_error"
+
+    runtime_resp = client.get(f"/api/v1/ai/interviews/sessions/{session_id}/ten/runtime-config")
+    assert runtime_resp.status_code == 400
+    assert runtime_resp.json()["error"]["code"] == "domain_error"
+
+    launch_resp = client.post(f"/api/v1/ai/interviews/sessions/{session_id}/ten/launch")
+    assert launch_resp.status_code == 400
+    assert launch_resp.json()["error"]["code"] == "domain_error"
 
 
 def test_rtc_asr_and_tts_stream_should_work() -> None:

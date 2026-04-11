@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ai_hr.domain.constants import RiskTag
+
 from ..scoring import score_candidate_profile
 
 
@@ -13,7 +15,7 @@ def fallback_resume_parse(resume_text: str) -> dict:
         "education_level": None,
         "projects": [],
         "confidence": 0.35,
-        "risk_tags": ["llm_unavailable"],
+        "risk_tags": [RiskTag.LLM_UNAVAILABLE],
         "raw_text": resume_text,
     }
 
@@ -29,6 +31,5 @@ def fallback_candidate_score(*, resume_text: str | None, profile: dict, job_requ
         "total_score": result.total_score,
         "dimension_scores": result.dimensions,
         "explanation": result.explanation,
-        "risk_tags": result.risk_tags + ["llm_unavailable"],
+        "risk_tags": result.risk_tags + [RiskTag.LLM_UNAVAILABLE],
     }
-

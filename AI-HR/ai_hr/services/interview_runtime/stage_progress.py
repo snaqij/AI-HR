@@ -16,6 +16,7 @@ class StageProgressSnapshot:
     missing_signals: list[str]
     confidence: float
     reason: str
+    min_bar_passed: bool = False
 
 
 class StageProgressEngine:
@@ -138,10 +139,13 @@ class StageProgressEngine:
     def _snapshot_s2(self, *, stage_state: dict) -> StageProgressSnapshot:
         collected = [key for key, value in stage_state.items() if value]
         missing = [key for key in self._S2_SIGNAL_HINTS if not stage_state.get(key)]
-        strong_core = stage_state.get("project_anchor") and stage_state.get("role_or_responsibility")
-        completed = len(collected) >= 3 and strong_core
+        strong_core = bool(stage_state.get("project_anchor") and stage_state.get("role_or_responsibility"))
+        min_bar_passed = strong_core and bool(
+            stage_state.get("recent_experience") or stage_state.get("tech_direction")
+        )
+        completed = min_bar_passed or (len(collected) >= 4 and strong_core)
         confidence = min(1.0, len(collected) / 4.0)
-        reason = "s2_signals_completed" if completed else "s2_missing_intro_evidence"
+        reason = "s2_profile_ready" if min_bar_passed else "s2_missing_intro_evidence"
         return StageProgressSnapshot(
             stage="S2",
             completed=completed,
@@ -149,6 +153,7 @@ class StageProgressEngine:
             missing_signals=missing,
             confidence=confidence,
             reason=reason,
+            min_bar_passed=min_bar_passed,
         )
 
     def _update_s3(self, *, stage_state: dict, transcript: str) -> dict:
@@ -185,7 +190,7 @@ class StageProgressEngine:
         usage_evidence = int(stage_state.get("usage_evidence_count") or 0)
 
         collected: list[str] = []
-        if len(core_hits) >= 2:
+        if len(core_hits) >= 1:
             collected.append("core_stack_verified")
         if middleware_hits:
             collected.append("middleware_real_usage")
@@ -195,7 +200,7 @@ class StageProgressEngine:
             collected.append("jd_gap_covered")
 
         missing: list[str] = []
-        if len(core_hits) < 2:
+        if len(core_hits) < 1:
             missing.append("core_stack_verified")
         if not middleware_hits:
             missing.append("middleware_real_usage")
@@ -204,7 +209,8 @@ class StageProgressEngine:
         if not jd_hits:
             missing.append("jd_gap_covered")
 
-        completed = len(core_hits) >= 2 and bool(middleware_hits) and usage_evidence >= 1 and bool(jd_hits)
+        min_bar_passed = len(core_hits) >= 1 and usage_evidence >= 1 and bool(middleware_hits or jd_hits)
+        completed = min_bar_passed or (len(core_hits) >= 2 and bool(middleware_hits) and usage_evidence >= 1)
         confidence = min(
             1.0,
             (min(2, len(core_hits)) * 0.25) +
@@ -212,7 +218,7 @@ class StageProgressEngine:
             (0.25 if usage_evidence >= 1 else 0.0) +
             (0.25 if jd_hits else 0.0),
         )
-        reason = "s3_signals_completed" if completed else "s3_missing_stack_evidence"
+        reason = "s3_stack_verified_enough" if min_bar_passed else "s3_missing_stack_evidence"
         return StageProgressSnapshot(
             stage="S3",
             completed=completed,
@@ -220,4 +226,5 @@ class StageProgressEngine:
             missing_signals=missing,
             confidence=confidence,
             reason=reason,
+            min_bar_passed=min_bar_passed,
         )

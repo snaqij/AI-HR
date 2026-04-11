@@ -5,6 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# Allow running as a script before importing third-party modules that depend on stdlib names
+# such as `copy`, which would otherwise be shadowed by `ai_hr/copy`.
+if __package__ in {None, ""}:
+    project_root = Path(__file__).resolve().parents[1]
+    script_dir = str(Path(__file__).resolve().parent)
+    sys.path[:] = [item for item in sys.path if Path(item or ".").resolve() != Path(script_dir).resolve()]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
 import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -13,9 +22,6 @@ from starlette.middleware.cors import CORSMiddleware
 
 if __package__ in {None, ""}:
     # Allow running as a script: python ai_hr/main.py
-    project_root = Path(__file__).resolve().parents[1]
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
     from ai_hr.api.router import api_router
     from ai_hr.core.config import Settings, get_settings
     from ai_hr.core.exceptions import AIHRException, ResourceNotFoundError

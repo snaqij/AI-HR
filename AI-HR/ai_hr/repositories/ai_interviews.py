@@ -9,7 +9,14 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from ..core.exceptions import ResourceNotFoundError
-from ..db.models import AIInterviewHandoff, AIInterviewQuestionSet, AIInterviewReport, AIInterviewSession, AIInterviewTurn
+from ..db.models import (
+    AIInterviewHandoff,
+    AIInterviewInvitation,
+    AIInterviewQuestionSet,
+    AIInterviewReport,
+    AIInterviewSession,
+    AIInterviewTurn,
+)
 
 
 class AIInterviewSessionRepository:
@@ -160,28 +167,36 @@ class AIInterviewSessionRepository:
         seen_event_ids = list((session_entity.payload or {}).get("seen_event_ids", []))
         return event_id in seen_event_ids
 
-    def get_latest_question_set_version(self, session_id: str) -> int:
-        stmt = select(func.max(AIInterviewQuestionSet.version)).where(AIInterviewQuestionSet.session_id == session_id)
+    def get_latest_question_set_version(self, session_id: str | None = None, invitation_id: str | None = None) -> int:
+        stmt = select(func.max(AIInterviewQuestionSet.version))
+        if session_id:
+            stmt = stmt.where(AIInterviewQuestionSet.session_id == session_id)
+        if invitation_id:
+            stmt = stmt.where(AIInterviewQuestionSet.invitation_id == invitation_id)
         return int(self._session.execute(stmt).scalar_one() or 0)
 
-    def get_latest_question_set(self, session_id: str) -> AIInterviewQuestionSet | None:
-        stmt = (
-            select(AIInterviewQuestionSet)
-            .where(AIInterviewQuestionSet.session_id == session_id)
-            .order_by(desc(AIInterviewQuestionSet.version), desc(AIInterviewQuestionSet.created_at))
-        )
+    def get_latest_question_set(self, session_id: str | None = None, invitation_id: str | None = None) -> AIInterviewQuestionSet | None:
+        stmt = select(AIInterviewQuestionSet)
+        if session_id:
+            stmt = stmt.where(AIInterviewQuestionSet.session_id == session_id)
+        if invitation_id:
+            stmt = stmt.where(AIInterviewQuestionSet.invitation_id == invitation_id)
+            
+        stmt = stmt.order_by(desc(AIInterviewQuestionSet.version), desc(AIInterviewQuestionSet.created_at))
         return self._session.execute(stmt).scalars().first()
 
     def create_question_set(
         self,
         *,
-        session_id: str,
+        session_id: str | None = None,
+        invitation_id: str | None = None,
         version: int,
         source: str,
         questions: list[dict[str, Any]],
     ) -> AIInterviewQuestionSet:
         entity = AIInterviewQuestionSet(
             session_id=session_id,
+            invitation_id=invitation_id,
             version=version,
             source=source,
             questions_json=questions,
@@ -273,6 +288,60 @@ class AIInterviewSessionRepository:
             payload=payload or {},
         )
         self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity
+
+class AIInterviewInvitationRepository:
+    """Persistence layer for AI interview invitations."""
+
+    def __init__(self, session: Session):
+        self._session = session
+
+    def create(
+        self,
+        *,
+        candidate_id: str,
+        job_id: str,
+        token: str,
+        expires_at: datetime,
+        payload: dict[str, Any] | None = None,
+        note: str | None = None,
+    ) -> AIInterviewInvitation:
+        entity = AIInterviewInvitation(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            token=token,
+            status="pending",
+            expires_at=expires_at,
+            payload=payload or {},
+            note=note,
+        )
+        self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity
+
+    def get_by_id(self, invitation_id: str) -> AIInterviewInvitation:
+        """通过 ID 获取邀请记录。"""
+        entity = self._session.query(AIInterviewInvitation).get(invitation_id)
+        if not entity:
+            raise InvalidStateError(f"AI interview invitation with ID '{invitation_id}' not found")
+        return entity
+
+    def get_by_token(self, token: str) -> AIInterviewInvitation:
+        stmt = select(AIInterviewInvitation).where(AIInterviewInvitation.token == token)
+        entity = self._session.execute(stmt).scalar_one_or_none()
+        if entity is None:
+            raise ResourceNotFoundError(f"AI interview invitation with token '{token}' was not found")
+        return entity
+
+    def update_status(self, invitation_id: str, status: str) -> AIInterviewInvitation:
+        stmt = select(AIInterviewInvitation).where(AIInterviewInvitation.id == invitation_id)
+        entity = self._session.execute(stmt).scalar_one_or_none()
+        if entity is None:
+            raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
+        entity.status = status
         self._session.commit()
         self._session.refresh(entity)
         return entity

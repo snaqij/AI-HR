@@ -14,19 +14,20 @@
               "extension_group": "rtc",
               "property": {
                 "app_id": "72f8343592b64607a2e0c7b995c637c2",
-                "channel": "ai-intv-c564c9cf-7422-4b98-b898-8acd81f68346",
-                "remote_user_id": "364875447",
+                "channel": "ai-intv-8d92f250-2a3c-4b8e-b955-7145cf480bab",
+                "remote_user_id": "629135950",
                 "subscribe_audio": true,
                 "publish_audio": true,
-                "token": "00672f8343592b64607a2e0c7b995c637c2IACK8gUSBs2W7B5Jp3q4gCC5oH9fiuMHwHk0ri8QA60iIi50P4HwpNJmIgAkBvIBgvvYaQQAAQASuNdpAgASuNdpAwASuNdpBAASuNdp",
-                "user_id": "1712205284",
+                "token": "00672f8343592b64607a2e0c7b995c637c2IADQ/8x+CXy74wr7cXSAQpGSfPEsso/Hsama3A+gfUR8BJ8J4VcVL3o7IgAFtykBAIXbaQQAAQCQQdppAgCQQdppAwCQQdppBACQQdpp",
+                "user_id": "1818804843",
                 "uid": 882763965,
                 "remote_uid": 1205891896,
                 "enable_string_uid": false,
                 "publish_data": false,
                 "auto_join": true,
-                "stream_id": 1712205284,
-                "remote_stream_id": 364875447
+                "stream_id": 1818804843,
+                "remote_stream_id": 629135950,
+                "app_certificate": "ec7f70298bc7479da3326d5ece61e10b"
               }
             },
             {
@@ -62,10 +63,365 @@
                 "max_followup": 2,
                 "resume_summary": "一名具有 5 年经验的后端开发工程师，精通 Java/Python，熟悉分布式系统和 Redis。曾在某电商公司参与秒杀系统的架构设计。",
                 "job_requirements": "需要具备扎实的数据结构基础，熟悉常用的中间件，能够解决高并发下的系统稳定性问题。",
-                "session_id": "a14f2322-6cd6-46d4-82a6-7ae7e91812c5",
-                "candidate_id": "7b1b25b7-5e20-44ed-8dd4-62b3df77d344",
-                "job_id": "627ce971-77d5-4c41-8867-8f66eb5ce21c",
-                "language": "zh-CN"
+                "session_id": "cdd2465a-419b-4579-8d02-406e2f0dba4b",
+                "candidate_id": "038658d6-f062-4ea9-91a5-03b7d2c162f8",
+                "job_id": "ab85ccd2-051d-497c-9290-905cee8181ff",
+                "language": "zh-CN",
+                "company_info": "【公司介绍】\n我们是“北京深澜智远科技有限公司”。\n公司成立于2025年，是一家非常具有爆发力的初创企业，曾在短短三个月内连续完成两轮千万级融资。\n\n【团队背景】\n我们的核心团队拥有深厚的学术与工业界背景，成员主要由来自北京邮电大学、香港中文大学等顶尖高校的硕士，以及阿里巴巴等知名互联网公司的资深工程师组成。\n\n【核心业务与愿景】\n我们专注于 AI 数字员工在各行各业的业务赋能。\n我们的愿景是“构建千行百业的 AI 员工”，致力于通过先进的 AI 技术，为企业打造高效、智能的数字劳动力，推动产业智能化升级。",
+                "company_info_source": "payload",
+                "company_info_version": "runtime_v1",
+                "question_pack": {
+                  "source": "llm",
+                  "version": 1,
+                  "language": "zh-CN",
+                  "questions": [
+                    {
+                      "idx": 1,
+                      "question_id": "s3_1",
+                      "id": "s3_1",
+                      "question": "你在简历里写了Python，那在实际项目中，你是如何处理Python中的GIL（全局解释器锁）对多线程性能的影响的？有没有具体的应对策略？",
+                      "dimension": "机制与原理理解",
+                      "question_type": "profile",
+                      "expected_signal": "理解GIL的存在意义、对CPU密集型多线程的限制，以及如何通过多进程、协程（asyncio）或使用C扩展来绕过或缓解其影响。",
+                      "followup_condition": "候选人提到多进程或协程",
+                      "stage": "S3",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能清晰解释GIL的工作原理和影响范围",
+                        "能提出至少一种有效的实践方案（如多进程、asyncio）",
+                        "能结合具体场景说明选择不同方案的原因"
+                      ],
+                      "topic_name": "机制与原理理解",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "机制与原理理解",
+                      "bucket": "stack",
+                      "target_skill": "Python并发编程",
+                      "source_evidence": "候选人技能：Python"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s3_1",
+                      "id": "s3_1",
+                      "question": "你提到使用FastAPI。FastAPI的依赖注入系统（Depends）在实际项目中是怎么用的？它和你在其他框架里用过的依赖注入方式有什么不同？",
+                      "dimension": "机制与原理理解",
+                      "question_type": "profile",
+                      "expected_signal": "理解FastAPI Depends的声明式用法、作用域（请求级）、与Pydantic的结合，并能对比Spring等框架的DI容器差异。",
+                      "followup_condition": "候选人提到其他框架（如Spring）",
+                      "stage": "S3",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能说明Depends如何用于获取请求上下文（如数据库会话、用户身份）",
+                        "能对比出FastAPI DI的轻量级、函数式与Spring等重型容器的区别",
+                        "能提到依赖的复用和测试便利性"
+                      ],
+                      "topic_name": "机制与原理理解",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "机制与原理理解",
+                      "bucket": "stack",
+                      "target_skill": "FastAPI",
+                      "source_evidence": "候选人技能：FastAPI"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s3_1",
+                      "id": "s3_1",
+                      "question": "你用过MySQL，在高并发场景下，除了加索引，你还用过哪些手段来优化一条复杂查询的性能？可以结合你遇到过的慢查询例子来说。",
+                      "dimension": "场景应用与问题排查",
+                      "question_type": "profile",
+                      "expected_signal": "能超出基础索引，谈到执行计划分析、查询重写、分区、读写分离、或应用层缓存等更深层优化思路。",
+                      "followup_condition": "候选人提到执行计划或查询重写",
+                      "stage": "S3",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能提及使用EXPLAIN分析执行计划",
+                        "能举例说明如何通过改写SQL（如减少子查询、优化JOIN顺序）来提升性能",
+                        "能意识到数据库优化与架构优化（如缓存、分库分表）的边界"
+                      ],
+                      "topic_name": "场景应用与问题排查",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "场景应用与问题排查",
+                      "bucket": "stack",
+                      "target_skill": "MySQL性能优化",
+                      "source_evidence": "候选人技能：MySQL；简历：性能优化"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s3_1",
+                      "id": "s3_1",
+                      "question": "Redis你主要用它来解决什么问题？在你们项目里，Redis缓存和数据库的数据一致性是怎么保证的？比如更新了数据库，缓存怎么处理？",
+                      "dimension": "机制与原理理解",
+                      "question_type": "profile",
+                      "expected_signal": "理解缓存穿透、击穿、雪崩的常见解决方案，并能清晰描述缓存更新策略（如Cache Aside模式）及其潜在的一致性问题。",
+                      "followup_condition": "候选人提到Cache Aside或双写",
+                      "stage": "S3",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能准确描述Cache Aside（先更新数据库，再删除缓存）流程",
+                        "能指出该模式在并发下可能存在的脏数据问题",
+                        "能提及设置缓存过期时间作为兜底"
+                      ],
+                      "topic_name": "机制与原理理解",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "机制与原理理解",
+                      "bucket": "stack",
+                      "target_skill": "Redis应用与一致性",
+                      "source_evidence": "候选人技能：Redis"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s4_1",
+                      "id": "s4_1",
+                      "question": "你简历里提到了分布式系统。如果你们服务需要做一个全局唯一的、趋势递增的ID生成器，你会怎么设计？需要考虑哪些因素？",
+                      "dimension": "场景应用与问题排查",
+                      "question_type": "capability",
+                      "expected_signal": "能对比UUID、数据库自增、Snowflake等方案的优缺点，并能根据业务场景（如分库分表、时序要求、吞吐量）做出合理选择。",
+                      "followup_condition": "候选人提到Snowflake算法",
+                      "stage": "S4",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能清晰阐述Snowflake的位数划分（时间戳、机器ID、序列号）",
+                        "能指出该方案的潜在问题（如时钟回拨）及应对思路",
+                        "能结合业务场景说明选择理由"
+                      ],
+                      "topic_name": "场景应用与问题排查",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "场景应用与问题排查",
+                      "bucket": "stack",
+                      "target_skill": "分布式ID生成",
+                      "source_evidence": "岗位要求：分布式系统；简历：高并发服务治理"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s4_1",
+                      "id": "s4_1",
+                      "question": "你负责过高并发服务，那在流量洪峰到来时，除了加机器，你们在应用层面还做过哪些限流或降级的措施？具体是怎么实现的？",
+                      "dimension": "场景应用与问题排查",
+                      "question_type": "capability",
+                      "expected_signal": "了解常见的限流算法（如令牌桶、漏桶）和降级策略，并能说明其落地方式（如使用中间件或自行实现）。",
+                      "followup_condition": "候选人提到具体算法（如令牌桶）",
+                      "stage": "S4",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能说出至少一种限流算法的原理和适用场景",
+                        "能区分限流、熔断、降级的不同目的",
+                        "能提及从网关层或应用层实现的实践经验"
+                      ],
+                      "topic_name": "场景应用与问题排查",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "场景应用与问题排查",
+                      "bucket": "stack",
+                      "target_skill": "高并发治理",
+                      "source_evidence": "简历：负责过高并发服务治理"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s4_1",
+                      "id": "s4_1",
+                      "question": "假设你负责的一个核心接口，平时响应时间在50ms左右，突然有一天它的P99延迟飙升到了2秒，但请求量并没有明显变化。你的排查思路是什么？会依次看哪些地方？",
+                      "dimension": "场景应用与问题排查",
+                      "question_type": "capability",
+                      "expected_signal": "形成从外到内、从应用到基础设施的排查链路，如：监控指标（应用/数据库/缓存）、链路追踪、日志分析、资源监控（CPU/IO/网络）。",
+                      "followup_condition": "候选人提到数据库或缓存",
+                      "stage": "S4",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "排查思路有层次（应用->依赖中间件->基础设施）",
+                        "能联想到慢查询、缓存失效、Full GC、网络抖动等常见原因",
+                        "知道如何利用监控和日志工具定位问题"
+                      ],
+                      "topic_name": "场景应用与问题排查",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "场景应用与问题排查",
+                      "bucket": "scenario",
+                      "target_skill": "线上问题排查",
+                      "source_evidence": "简历：性能优化"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s4_1",
+                      "id": "s4_1",
+                      "question": "一个用户积分兑换礼品的场景，涉及“查询用户积分余额”和“扣减积分”两个操作。在高并发下，如何保证用户不会超兑？即积分不会扣成负数。",
+                      "dimension": "场景应用与问题排查",
+                      "question_type": "capability",
+                      "expected_signal": "能意识到在并发下“先查后改”的非原子性问题，并提出基于数据库行锁（SELECT FOR UPDATE）、乐观锁（版本号）或直接在UPDATE语句中做条件判断（如`UPDATE points SET balance = balance - cost WHERE user_id=? AND balance >= cost`）等解决方案。",
+                      "followup_condition": "候选人提到数据库行锁或乐观锁",
+                      "stage": "S4",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能指出“先查后改”在并发下的问题",
+                        "能提出至少一种在数据库层面保证原子性的方案",
+                        "能分析不同方案（如行锁 vs 乐观锁）的适用场景和优缺点"
+                      ],
+                      "topic_name": "场景应用与问题排查",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "场景应用与问题排查",
+                      "bucket": "scenario",
+                      "target_skill": "并发控制与事务",
+                      "source_evidence": "岗位要求：分布式系统；简历：高并发服务治理"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s4_1",
+                      "id": "s4_1",
+                      "question": "你们系统用Redis做热点数据的缓存。现在发现某个热点Key的访问QPS极高，导致Redis单个实例CPU负载很高，甚至影响了其他Key的访问。你会怎么分析和解决这个问题？",
+                      "dimension": "场景应用与问题排查",
+                      "question_type": "capability",
+                      "expected_signal": "能识别出“热点Key”问题，并提出解决方案，如：本地缓存（JVM Cache）、Key拆分（分片）、读写分离、或使用更高效的数据结构。",
+                      "followup_condition": "候选人提到本地缓存或Key拆分",
+                      "stage": "S4",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "能准确识别问题根因是单一Key访问过于集中",
+                        "能提出有效的技术方案来分散访问压力",
+                        "能评估不同方案的副作用（如本地缓存的一致性问题）"
+                      ],
+                      "topic_name": "场景应用与问题排查",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "场景应用与问题排查",
+                      "bucket": "scenario",
+                      "target_skill": "缓存热点问题处理",
+                      "source_evidence": "候选人技能：Redis；简历：高并发服务治理"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s5_1",
+                      "id": "s5_1",
+                      "question": "你简历里提到“负责过高并发服务治理”。可以挑一个你印象最深的治理案例，说说当时遇到了什么具体问题？你主导或参与了哪些治理动作？最后的效果怎么样？",
+                      "dimension": "项目/实习中的真实落地",
+                      "question_type": "capability",
+                      "expected_signal": "能清晰描述问题背景、技术挑战、采取的具体措施（如架构调整、代码优化、参数调优等）以及可量化的结果（如延迟降低XX%、吞吐提升XX%）。",
+                      "followup_condition": "候选人描述了具体措施",
+                      "stage": "S5",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "案例描述具体、真实",
+                        "能清晰说明自己的角色和贡献",
+                        "有量化的结果证明治理效果",
+                        "能反思过程中的难点或收获"
+                      ],
+                      "topic_name": "项目/实习中的真实落地",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "项目/实习中的真实落地",
+                      "bucket": "experience",
+                      "target_skill": "系统治理经验",
+                      "source_evidence": "简历：负责过高并发服务治理和性能优化"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s5_1",
+                      "id": "s5_1",
+                      "question": "在性能优化方面，你做过的最有成就感的一次优化是什么？当时是怎么发现这个性能瓶颈的？你用了什么工具或方法？优化前后的对比数据如何？",
+                      "dimension": "项目/实习中的真实落地",
+                      "question_type": "capability",
+                      "expected_signal": "能说明性能问题的发现途径（监控告警、用户反馈、压测）、分析工具（Profiler、慢查询日志、APM）和具体的优化手段，并提供数据对比。",
+                      "followup_condition": "候选人提到具体工具（如Py-Spy, Arthas）",
+                      "stage": "S5",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "问题发现和分析过程逻辑清晰",
+                        "优化手段针对性强，有技术深度",
+                        "有明确的前后性能数据对比",
+                        "体现了主动发现和解决问题的能力"
+                      ],
+                      "topic_name": "项目/实习中的真实落地",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "项目/实习中的真实落地",
+                      "bucket": "experience",
+                      "target_skill": "性能优化实践",
+                      "source_evidence": "简历：性能优化"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s5_1",
+                      "id": "s5_1",
+                      "question": "在你过去的项目里，FastAPI通常和哪些技术组件搭配使用？比如怎么集成ORM、怎么管理数据库连接池？你们项目的API文档和测试是怎么做的？",
+                      "dimension": "项目/实习中的真实落地",
+                      "question_type": "capability",
+                      "expected_signal": "了解FastAPI常见的生态组合（如SQLAlchemy ORM、Alembic迁移、Pytest），并能说明数据库连接池配置、依赖注入管理、以及利用FastAPI自动生成OpenAPI文档的实践。",
+                      "followup_condition": "候选人提到SQLAlchemy或Alembic",
+                      "stage": "S5",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "技术选型合理，了解生态工具",
+                        "有具体的工程实践细节（如连接池配置参数）",
+                        "能说明API文档的维护和测试策略",
+                        "体现了工程化思维"
+                      ],
+                      "topic_name": "项目/实习中的真实落地",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "项目/实习中的真实落地",
+                      "bucket": "experience",
+                      "target_skill": "技术栈整合与工程实践",
+                      "source_evidence": "候选人技能：Python, FastAPI, MySQL"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s5_1",
+                      "id": "s5_1",
+                      "question": "你提到用Redis，在你们项目中，Redis是单机部署还是集群？当时是基于什么考虑做出这个选择的？在使用的过程中，有没有遇到过因为Redis导致的服务故障？是怎么解决的？",
+                      "dimension": "项目/实习中的真实落地",
+                      "question_type": "capability",
+                      "expected_signal": "能根据业务规模、数据量、可用性要求解释选型原因，并能分享真实的故障排查和恢复经历，体现对中间件稳定性的重视。",
+                      "followup_condition": "候选人提到集群模式或故障经历",
+                      "stage": "S5",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "技术选型有合理的业务考量",
+                        "故障描述具体，排查过程清晰",
+                        "有总结预防措施或改进方案",
+                        "体现了运维意识和ownership"
+                      ],
+                      "topic_name": "项目/实习中的真实落地",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "项目/实习中的真实落地",
+                      "bucket": "experience",
+                      "target_skill": "中间件运维与故障处理",
+                      "source_evidence": "候选人技能：Redis"
+                    },
+                    {
+                      "idx": 1,
+                      "question_id": "s5_1",
+                      "id": "s5_1",
+                      "question": "你做了5年后端开发，在你经历的项目迭代中，有没有遇到过因为需求或架构变动，导致需要对数据库表结构进行大规模调整的情况？你们是怎么做的？如何保证平滑迁移和数据安全？",
+                      "dimension": "项目/实习中的真实落地",
+                      "question_type": "capability",
+                      "expected_signal": "能描述在线DDL的风险，并提及使用工具（如pt-online-schema-change）、分阶段发布、双写、回滚方案等策略来保证变更安全。",
+                      "followup_condition": "候选人提到在线变更工具或双写方案",
+                      "stage": "S5",
+                      "max_followups": 1,
+                      "success_signals": [
+                        "意识到大规模DDL对线上服务的风险",
+                        "有成熟、安全的变更流程和方法",
+                        "强调了数据备份、验证和回滚预案",
+                        "体现了严谨的工程态度"
+                      ],
+                      "topic_name": "项目/实习中的真实落地",
+                      "topic_aliases": [],
+                      "focus_slot": "",
+                      "focus_hint": "项目/实习中的真实落地",
+                      "bucket": "experience",
+                      "target_skill": "数据库变更管理",
+                      "source_evidence": "候选人技能：MySQL；简历：5年后端开发经验"
+                    }
+                  ],
+                  "session_id": "cdd2465a-419b-4579-8d02-406e2f0dba4b",
+                  "question_count": 14
+                },
+                "question_pack_source": "llm",
+                "question_pack_version": "1"
               }
             },
             {
@@ -101,6 +457,30 @@
               "cmd": [
                 {
                   "name": "on_connected",
+                  "dest": [
+                    {
+                      "extension": "interview_orchestrator"
+                    }
+                  ]
+                },
+                {
+                  "name": "on_connection_error",
+                  "dest": [
+                    {
+                      "extension": "interview_orchestrator"
+                    }
+                  ]
+                },
+                {
+                  "name": "on_connection_failure",
+                  "dest": [
+                    {
+                      "extension": "interview_orchestrator"
+                    }
+                  ]
+                },
+                {
+                  "name": "on_token_expired",
                   "dest": [
                     {
                       "extension": "interview_orchestrator"

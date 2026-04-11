@@ -25,7 +25,19 @@
         "name": "on_connected"
       },
       {
+        "name": "on_connection_error"
+      },
+      {
+        "name": "on_connection_failure"
+      },
+      {
+        "name": "on_token_expired"
+      },
+      {
         "name": "start_of_sentence"
+      },
+      {
+        "name": "end_of_sentence"
       }
     ]
   }

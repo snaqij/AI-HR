@@ -19,6 +19,26 @@ class AIInterviewSessionCreateRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AIInterviewInvitationCreateRequest(BaseModel):
+    """创建面试邀请请求。"""
+
+    candidate_id: str = Field(min_length=1)
+    job_id: str = Field(min_length=1)
+    note: str | None = None
+
+
+class AIInterviewInvitationResponse(BaseModel):
+    """面试邀请响应。"""
+
+    id: str
+    token: str
+    candidate_id: str
+    job_id: str
+    status: str
+    expires_at: datetime
+    job_title: str
+
+
 class AIInterviewSessionRTCInfo(BaseModel):
     """RTC runtime details returned to frontend clients."""
 

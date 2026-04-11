@@ -1,4 +1,4 @@
-"""AI 面试会话服务。"""
+"""AI 闈㈣瘯浼氳瘽鏈嶅姟銆?"""
 
 from __future__ import annotations
 
@@ -9,12 +9,13 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-# ── 进程级 Provider 单例（双检锁）──
-# AliyunNlsASRProvider 维护 NLS WebSocket 长连接，必须全局复用。
-# 每次调用 get_ai_interview_service 若重新 create_asr_provider，
-# 会为每个音频 chunk 新建连接，立即触发 TOO_MANY_REQUESTS。
+# 鈹€鈹€ 杩涚▼绾?Provider 鍗曚緥锛堝弻妫€閿侊級鈹€鈹€
+# AliyunNlsASRProvider 缁存姢 NLS WebSocket 闀胯繛鎺ワ紝蹇呴』鍏ㄥ眬澶嶇敤銆?
+# 姣忔璋冪敤 get_ai_interview_service 鑻ラ噸鏂?create_asr_provider锛?
+# 浼氫负姣忎釜闊抽 chunk 鏂板缓杩炴帴锛岀珛鍗宠Е鍙?TOO_MANY_REQUESTS銆?
 _PROVIDER_SINGLETON_LOCK = threading.Lock()
 _ASR_PROVIDER_SINGLETON: "ASRProvider | None" = None
 _TTS_PROVIDER_SINGLETON: "TTSProvider | None" = None
@@ -25,46 +26,69 @@ _DUPLEX_FINALIZED_SEQ: dict[str, set[int]] = {}
 _DUPLEX_TIMELINE_LOCK = threading.Lock()
 _DUPLEX_TIMELINE_MARKERS: dict[str, dict[int, dict[str, int]]] = {}
 from sqlalchemy.orm import Session
+from ..copy.ai_interviews import (
+    DEFAULT_TTS_VOICE,
+    FOLLOWUP_DEFAULT_QUESTION,
+    FOLLOWUP_DEFAULT_SIGNAL,
+    FOLLOWUP_SPEAKER_AI,
+    FOLLOWUP_SPEAKER_CANDIDATE,
+    INSUFFICIENT_EVIDENCE_FLAG,
+    LLM_PREFETCH_FROM_PARTIAL_FLAG,
+    LOW_CONFIDENCE_FLAG,
+    RECENT_CONTEXT_EMPTY,
+    REPORT_EMPTY_SUMMARY,
+)
 from ..core.config import get_settings
 from ..core.exceptions import InvalidStateError
 from ..db.session import SessionLocal
-from ..repositories.ai_interviews import AIInterviewSessionRepository
+from ..domain.constants import (
+    BlockReason,
+    CandidateStageResult,
+    HandoffReason,
+    InterviewAction,
+    InterviewEventType,
+    InterviewOutcomeStatus,
+    InterviewRecommendation,
+    InterviewSessionStatus,
+    InterviewStage,
+    InterviewStageGroup,
+    ModelRoutePolicy,
+    ModelRouteResult,
+    PayloadKey,
+    PromptTaskKey,
+    RiskTag,
+    RuntimeMode,
+    SENSITIVE_FLAG_PREFIX,
+    SpeakerRole,
+    build_sensitive_flag,
+)
+from ..repositories.ai_interviews import (
+    AIInterviewInvitationRepository,
+    AIInterviewSessionRepository,
+)
 from ..repositories.ai_observability import AIObservabilityRepository
 from ..repositories.ai_runtime import AIRuntimeRepository
 from ..repositories.candidates import CandidateRepository
 from ..repositories.events import EventRepository
 from ..repositories.interviews import InterviewRepository
 from ..repositories.jobs import JobRepository
-from .rtc.base import RTCGateway
-from .rtc.factory import create_rtc_gateway
-from .speech.base import ASRProvider, TTSProvider
-from .speech.factory import create_asr_provider, create_tts_provider
-from .ten_runtime import TENRuntimeManager
-from .llm.client import InvokeContext, LLMClient
-from .llm.guardrails import GuardrailService
-from .llm.prompts import PromptTemplate, get_prompt_template
-from .llm.router import ModelRouter
-from .orchestrator.realtime import RealtimeOrchestrator
-from .orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
-from .interview_runtime.factory import get_interview_runtime_store
-from .interview_runtime.question_flow import InterviewQuestionFlowEngine
-from .interview_runtime.store import InterviewRuntimeStore
 from ..schemas.ai_interviews import (
     AIInterviewASRStreamRequest,
     AIInterviewASRStreamResponse,
+    AIInterviewInvitationResponse,
     AIInterviewMetricsResponse,
     AIInterviewQuestionGenerateRequest,
+    AIInterviewQuestionGenerateResult,
     AIInterviewQuestionPackPrebuildRequest,
     AIInterviewRTCAudioSubscribeRequest,
     AIInterviewRTCAudioSubscribeResponse,
     AIInterviewRTCASRIngestRequest,
-    AIInterviewRTCVideoPolicyRequest,
-    AIInterviewRTCVideoPolicyResponse,
     AIInterviewRTCJoinRequest,
     AIInterviewRTCJoinResponse,
     AIInterviewRTCReconnectRequest,
     AIInterviewRTCReconnectResponse,
-    AIInterviewTENRuntimeResponse,
+    AIInterviewRTCVideoPolicyRequest,
+    AIInterviewRTCVideoPolicyResponse,
     AIInterviewReplayResponse,
     AIInterviewReportResponse,
     AIInterviewSessionCreateRequest,
@@ -72,9 +96,41 @@ from ..schemas.ai_interviews import (
     AIInterviewSessionFinishRequest,
     AIInterviewSessionHandoffRequest,
     AIInterviewSessionStartRequest,
+    AIInterviewTENRuntimeResponse,
     AIInterviewTTSStreamRequest,
     AIInterviewTTSStreamResponse,
 )
+from .interview_runtime.question_flow import InterviewQuestionFlowEngine
+from .interview_runtime.question_schema import normalize_question_item, normalize_question_pack
+from .interview_runtime.question_seed_builder import build_stage_seed_questions
+from .interview_runtime.runtime_engine import InterviewRuntimeEngine
+from .interview_runtime.store import InterviewRuntimeStore
+from .interview_runtime import get_interview_runtime_store
+from .llm.client import InvokeContext, LLMClient
+from .llm.guardrails import GuardrailService
+from .llm.prompts import PromptTemplate, get_prompt_template
+from .llm.router import ModelRouter
+from .orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
+from .orchestrator.realtime import RealtimeOrchestrator
+from .rtc.base import RTCGateway
+from .rtc.factory import create_rtc_gateway
+from .speech.base import ASRProvider, TTSProvider
+from .speech.factory import create_asr_provider, create_tts_provider
+from .ten_runtime import TENRuntimeManager
+
+# 鈹€鈹€ 杩涚▼绾?Provider 鍗曚緥锛堝弻妫€閿侊級鈹€鈹€
+# AliyunNlsASRProvider 缁存姢 NLS WebSocket 闀胯繛鎺ワ紝蹇呴鬱鍏ㄥ眬澶嶇敤銆?
+# 姣忔璋冪敤 get_ai_interview_service 鑻ラ噸鏂?create_asr_provider锛?
+# 浼氫负姣忎釜闊抽 chunk 鏂板缓杩炴帴锛岀珛鍗卽瑙﹀彂 TOO_MANY_REQUESTS銆?
+_PROVIDER_SINGLETON_LOCK = threading.Lock()
+_ASR_PROVIDER_SINGLETON: "ASRProvider | None" = None
+_TTS_PROVIDER_SINGLETON: "TTSProvider | None" = None
+
+# Turn-level deduplication markers for duplex flow
+_DUPLEX_FINALIZE_LOCK = threading.Lock()
+_DUPLEX_FINALIZED_SEQ: dict[str, set[int]] = {}
+_DUPLEX_TIMELINE_LOCK = threading.Lock()
+_DUPLEX_TIMELINE_MARKERS: dict[str, dict[int, dict[str, int]]] = {}
 
 logger = logging.getLogger(__name__)
 
@@ -108,12 +164,13 @@ def _get_duplex_timeline_markers(*, session_id: str, seq: int) -> dict[str, int]
 
 
 class AIInterviewService:
-    """提供 AI 面试会话编排能力。"""
+    """鎻愪緵 AI 闈㈣瘯浼氳瘽缂栨帓鑳藉姏銆?"""
 
     def __init__(
         self,
         *,
         session_repository: AIInterviewSessionRepository,
+        invitation_repository: AIInterviewInvitationRepository,
         runtime_repository: AIRuntimeRepository,
         candidate_repository: CandidateRepository,
         job_repository: JobRepository,
@@ -129,6 +186,7 @@ class AIInterviewService:
     ):
         self._settings = get_settings()
         self._session_repository = session_repository
+        self._invitation_repository = invitation_repository
         self._runtime_repository = runtime_repository
         self._candidate_repository = candidate_repository
         self._job_repository = job_repository
@@ -147,19 +205,124 @@ class AIInterviewService:
         self._runtime_store = runtime_store
         self._ten_runtime_manager = ten_runtime_manager or TENRuntimeManager(self._settings)
         self._question_flow_engine = InterviewQuestionFlowEngine()
+        self._runtime_engine = InterviewRuntimeEngine(question_flow_engine=self._question_flow_engine)
         self._duplex_prefetch_lock = threading.Lock()
         self._duplex_prefetch_cache: dict[str, dict] = {}
         self._duplex_prefetch_inflight: set[str] = set()
         self._duplex_prefetch_abort_events: dict[str, threading.Event] = {}
 
+    def create_invitation(self, candidate_id: str, job_id: str, note: str | None = None) -> AIInterviewInvitationResponse:
+        """创建面试邀请链接并触发题目预生成。"""
+        # 0. 验证候选人和岗位是否存在
+        self._candidate_repository.get(candidate_id)
+        job = self._job_repository.get(job_id)
+
+        # 1. 生成 Token 和有效期 (3天)
+        token = uuid.uuid4().hex
+        expires_at = datetime.now(UTC).replace(tzinfo=None) + timedelta(days=3)
+
+        # 2. 创建邀请记录
+        entity = self._invitation_repository.create(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            token=token,
+            expires_at=expires_at,
+            note=note
+        )
+
+        # 3. 立即自动触发题目生成
+        try:
+            # 使用空 session_id，传入 invitation_id
+            self.generate_question_set(invitation_id=entity.id)
+            self._invitation_repository.update_status(entity.id, "ready")
+        except Exception as e:
+            logger.error("Failed to auto-generate questions for invitation %s: %s", entity.id, e)
+            # 保持 pending 状态，后续访问时会再次尝试生成
+
+        return AIInterviewInvitationResponse(
+            id=entity.id,
+            token=entity.token,
+            candidate_id=entity.candidate_id,
+            job_id=entity.job_id,
+            status=entity.status,
+            expires_at=entity.expires_at,
+            job_title=job.title or "Unknown"
+        )
+
+    def get_invitation_by_token(self, token: str) -> AIInterviewInvitationResponse:
+        """获取邀请链接详情并校验。"""
+        entity = self._invitation_repository.get_by_token(token)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        
+        if entity.expires_at < now:
+            self._invitation_repository.update_status(entity.id, "expired")
+            raise InvalidStateError(f"Invitation link with token '{token}' has expired")
+            
+        job = self._job_repository.get(entity.job_id)
+        return AIInterviewInvitationResponse(
+            id=entity.id,
+            token=entity.token,
+            candidate_id=entity.candidate_id,
+            job_id=entity.job_id,
+            status=entity.status,
+            expires_at=entity.expires_at,
+            job_title=job.title or "Unknown"
+        )
+
+    def activate_invitation(self, token: str, operator: str = "candidate") -> dict:
+        """通过邀请链接激活面试，创建新 Session。"""
+        invitation = self._invitation_repository.get_by_token(token)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        
+        if invitation.expires_at < now:
+            raise InvalidStateError("Invitation link has expired")
+
+        # 1. 创建全新的 Session (哪怕之前退出过)
+        session_create_req = AIInterviewSessionCreateRequest(
+            candidate_id=invitation.candidate_id,
+            job_id=invitation.job_id,
+            channel="invitation_link",
+            language="zh-CN",
+            note=invitation.note,
+            payload={"invitation_token": token}
+        )
+        session_dict = self.create_session(session_create_req)
+        session_id = session_dict["id"]
+
+        # 2. 检查是否有预生成的题目包，并关联到新 Session
+        # 如果当前 invitation 已经有题目，则直接关联
+        prebuilt_set = self._session_repository.get_latest_question_set(invitation_id=invitation.id)
+        if prebuilt_set:
+            # 关联题目集到新 Session (通过版本号叠加)
+            version = self._session_repository.get_latest_question_set_version(session_id) + 1
+            self._session_repository.create_question_set(
+                session_id=session_id,
+                invitation_id=invitation.id,
+                version=version,
+                source=prebuilt_set.source,
+                questions=prebuilt_set.questions_json
+            )
+            # 标记邀请链接已开始使用 (status 改为 started)
+            self._invitation_repository.update_status(invitation.id, "started")
+
+        # 3. 启动 Session
+        start_req = AIInterviewSessionStartRequest(operator=operator)
+        return self.start_session(session_id, start_req)
+
     def create_session(self, payload: AIInterviewSessionCreateRequest) -> dict:
-        """创建 AI 面试会话并返回入会信息。"""
+        """鍒涘缓 AI 闈㈣瘯浼氳瘽骞惰繑鍥炲叆浼氫俊鎭€?"""
         self._candidate_repository.get(payload.candidate_id)
-        self._job_repository.get(payload.job_id)
+        job = self._job_repository.get(payload.job_id)
 
         join_token = uuid.uuid4().hex
         rtc_room_id = f"ai-intv-{uuid.uuid4()}"
         rtc_info = self._rtc_gateway.create_room(session_id=f"{payload.candidate_id}:{payload.job_id}", preferred_room_id=rtc_room_id)
+
+        runtime_company_payload = self._build_runtime_company_payload(
+            job_id=payload.job_id,
+            job_requirements=job.requirements or "",
+            payload=dict(payload.payload),
+        )
 
         entity = self._session_repository.create(
             candidate_id=payload.candidate_id,
@@ -170,76 +333,104 @@ class AIInterviewService:
             join_token=rtc_info.join_token or join_token,
             note=payload.note,
             payload={
-                "interview_stage": "intro",
+                "interview_stage": InterviewStage.OPENING,
                 **self._build_rtc_payload(rtc_info),
+                **runtime_company_payload,
                 **dict(payload.payload),
             },
         )
-        ten_patch = self._prepare_ten_runtime(entity)
-        if ten_patch:
-            entity = self._session_repository.update_status(entity.id, status=entity.status, payload_patch=ten_patch)
-            entity = self._maybe_auto_launch_ten(entity)
+        entity = self._session_repository.update_status(
+            entity.id,
+            status=entity.status,
+            payload_patch={
+                "ten_enabled": bool(self._settings.ai_interview_ten_enabled),
+                "ten_launch_status": "pending_start" if self._settings.ai_interview_ten_enabled else "disabled",
+            },
+        )
         return self._to_session_dict(entity)
 
     def get_session(self, session_id: str) -> dict:
-        """获取 AI 面试会话详情。"""
+        """鑾峰彇 AI 闈㈣瘯浼氳瘽璇︽儏銆?"""
         entity = self._session_repository.get(session_id)
         return self._to_session_dict(entity)
 
     def start_session(self, session_id: str, payload: AIInterviewSessionStartRequest) -> dict:
-        """启动 AI 面试会话。"""
+        """鍚姩 AI 闈㈣瘯浼氳瘽銆?"""
         entity = self._session_repository.get(session_id)
-        if entity.status != "created":
+        if entity.status != InterviewSessionStatus.CREATED:
             raise InvalidStateError(f"AI interview session '{session_id}' cannot start from status '{entity.status}'")
         # Prewarm ASR/TTS connection to reduce first-turn latency spikes.
         self.asr_warmup(session_id=session_id)
-        self.tts_warmup(session_id=session_id, voice="default")
+        self.tts_warmup(session_id=session_id, voice=DEFAULT_TTS_VOICE)
         
         prebuilt_patch = self._attach_prebuilt_question_pack(session_id=session_id)
         payload_patch = {"last_operator": payload.operator}
         payload_patch.update(prebuilt_patch)
-        question_pack = self._runtime_store.get_question_pack(session_id=session_id)
+        question_pack = self._ensure_runtime_question_pack_for_start(session_id=session_id)
         if question_pack:
-            state = self._load_or_init_runtime_state(session_id=session_id, question_pack=question_pack)
-            payload_patch["interview_stage"] = self._question_flow_engine.derive_stage(state=state)
+            state = self._reset_runtime_state_for_start(session_id=session_id, question_pack=question_pack)
+            payload_patch[PayloadKey.INTERVIEW_STAGE] = self._question_flow_engine.derive_stage(
+                state=state,
+                question_pack=question_pack,
+            )
+            payload_patch["question_pack"] = question_pack
+            payload_patch["question_count"] = int(question_pack.get("question_count") or 0)
+            payload_patch["question_pack_version"] = int(question_pack.get("version") or 0)
+            payload_patch["question_pack_source"] = str(
+                question_pack.get("source") or payload_patch.get("question_pack_source") or ""
+            )
+        else:
+            logger.error(
+                "ai_interview.start_session_question_pack_unavailable session_id=%s",
+                session_id,
+            )
         entity = self._session_repository.update_status(
             session_id,
-            status="in_progress",
+            status=InterviewSessionStatus.IN_PROGRESS,
             payload_patch=payload_patch,
         )
+        ten_patch = self._prepare_ten_runtime(entity)
+        if ten_patch:
+            entity = self._session_repository.update_status(
+                entity.id,
+                status=entity.status,
+                payload_patch=ten_patch,
+            )
+        if question_pack:
+            self._log_runtime_start_snapshot(session_id=session_id, question_pack=question_pack)
         return self._to_session_dict(entity)
 
     def asr_warmup(self, session_id: str) -> None:
-        """预热 ASR 连接。"""
+        """棰勭儹 ASR 杩炴帴銆?"""
         try:
             self._asr_provider.warmup(session_id=session_id)
         except Exception:
             pass
 
-    def tts_warmup(self, session_id: str, voice: str = "default") -> None:
-        """预热 TTS 资源。"""
+    def tts_warmup(self, session_id: str, voice: str = DEFAULT_TTS_VOICE) -> None:
+        """棰勭儹 TTS 璧勬簮銆?"""
         try:
             self._tts_provider.warmup(session_id=session_id, voice=voice)
         except Exception:
             pass
 
     def finish_session(self, session_id: str, payload: AIInterviewSessionFinishRequest) -> dict:
-        """结束 AI 面试会话。"""
+        """缁撴潫 AI 闈㈣瘯浼氳瘽銆?"""
         entity = self._session_repository.get(session_id)
-        if entity.status != "in_progress":
+        if entity.status != InterviewSessionStatus.IN_PROGRESS:
             raise InvalidStateError(f"AI interview session '{session_id}' cannot finish from status '{entity.status}'")
         entity = self._session_repository.update_status(
             session_id,
             status=payload.result_status,
             note=payload.note,
-            payload_patch={"finish_operator": payload.operator, "interview_stage": "closing"},
+            payload_patch={"finish_operator": payload.operator, PayloadKey.INTERVIEW_STAGE: InterviewStage.CLOSING},
         )
         return self._to_session_dict(entity)
 
     def handoff_session(self, session_id: str, payload: AIInterviewSessionHandoffRequest) -> dict:
-        """将会话转人工并写入 handoff 记录。"""
+        """灏嗕細璇濊浆浜哄伐骞跺啓鍏?handoff 璁板綍銆?"""
         entity = self._session_repository.get(session_id)
-        if entity.status != "in_progress":
+        if entity.status != InterviewSessionStatus.IN_PROGRESS:
             raise InvalidStateError(f"AI interview session '{session_id}' cannot handoff from status '{entity.status}'")
 
         handoff = self._session_repository.create_handoff(
@@ -252,10 +443,10 @@ class AIInterviewService:
         )
         entity = self._session_repository.update_status(
             session_id,
-            status="failed",
+            status=InterviewSessionStatus.FAILED,
             payload_patch={
                 "handoff_id": handoff.id,
-                "handoff_reason": payload.reason,
+                PayloadKey.HANDOFF_REASON: payload.reason,
                 "handoff_operator": payload.operator,
             },
         )
@@ -265,9 +456,9 @@ class AIInterviewService:
         }
 
     def append_event(self, session_id: str, payload: AIInterviewSessionEventRequest) -> dict:
-        """上报实时事件并按 event_id 去重。"""
+        """涓婃姤瀹炴椂浜嬩欢骞舵寜 event_id 鍘婚噸銆?"""
         entity = self._session_repository.get(session_id)
-        if entity.status != "in_progress":
+        if entity.status != InterviewSessionStatus.IN_PROGRESS:
             raise InvalidStateError(f"AI interview session '{session_id}' cannot accept events from status '{entity.status}'")
 
         action: str | None = None
@@ -303,7 +494,7 @@ class AIInterviewService:
                 }
 
             # Only mark as finalized if we are processing a candidate's authoritative turn
-            if payload.speaker == "candidate" and (payload.transcript or "").strip():
+            if payload.speaker == SpeakerRole.CANDIDATE and (payload.transcript or "").strip():
                 # We only mark it as fully 'done' if we are about to trigger the orchestrator
                 # Note: seq is added to the set after we are SURE this is a meaningful final turn.
                 seq_set.add(payload.seq)
@@ -318,16 +509,16 @@ class AIInterviewService:
                 "action": None,
                 "decision_reason": None,
                 "policy_flags": [],
-                "interview_stage": None,
-                "followup_question": None,
+                PayloadKey.INTERVIEW_STAGE: None,
+                PayloadKey.FOLLOWUP_QUESTION: None,
                 "followup_audio_uris": [],
-                "runtime_mode": runtime_mode,
+                PayloadKey.RUNTIME_MODE: runtime_mode,
                 "model_route": model_route,
-                "degradation_mode": None,
-                "latency_breakdown": {},
+                PayloadKey.DEGRADATION_MODE: None,
+                PayloadKey.LATENCY_BREAKDOWN: {},
             }
 
-        if payload.speaker == "candidate":
+        if payload.speaker == SpeakerRole.CANDIDATE:
             # logger.debug(f"DEBUG [append_event] Processing candidate turn: session={session_id} seq={payload.seq}")
             duplex_mode = bool((payload.payload or {}).get("duplex_mode"))
             prefetched_followup = str((payload.payload or {}).get("prefetched_followup_question") or "").strip()
@@ -349,7 +540,7 @@ class AIInterviewService:
                 interview_stage = self._advance_stage(session_id)
 
             def _on_audio_packet(packet: dict) -> None:
-                """将 TTS 分片推送至事件总线并打印调试。"""
+                """灏?TTS 鍒嗙墖鎺ㄩ€佽嚦浜嬩欢鎬荤嚎骞舵墦鍗拌皟璇曘€?"""
                 if packet.get("audio_bytes") and not packet.get("_first_pcm_marker_recorded"):
                     packet["tts_first_pcm_at_ms"] = _record_duplex_timeline_marker(
                         session_id=session_id,
@@ -359,7 +550,7 @@ class AIInterviewService:
                     packet["_first_pcm_marker_recorded"] = True
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,
-                    event_type="tts.packet",
+                    event_type=InterviewEventType.TTS_PACKET,
                     payload=packet,
                 )
 
@@ -414,7 +605,7 @@ class AIInterviewService:
             degradation_mode = orchestrated.degradation_mode
             latency_breakdown = orchestrated.latency_breakdown
 
-            if prefetched_followup and action not in {"handoff", "blocked"}:
+            if prefetched_followup and action not in {InterviewAction.HANDOFF, InterviewAction.BLOCKED}:
                 followup_question = prefetched_followup
                 original_llm_ms = int(latency_breakdown.get("llm_ms") or 0)
                 latency_breakdown["llm_ms"] = 0
@@ -422,22 +613,22 @@ class AIInterviewService:
                 latency_breakdown["llm_prefetch_ms"] = max(0, prefetched_llm_ms)
                 latency_breakdown["e2e_ms"] = max(1, int(latency_breakdown.get("e2e_ms") or 0) - original_llm_ms)
                 if prefetched_from_partial:
-                    decision_flags = [*decision_flags, "llm_prefetch_from_partial"]
+                    decision_flags = [*decision_flags, LLM_PREFETCH_FROM_PARTIAL_FLAG]
 
             latency_breakdown.update(self._build_turn_timeline_breakdown(session_id=session_id, seq=payload.seq))
 
             effective_confidence = payload.confidence if payload.confidence is not None else 0.9
-            if question_pack and action not in {"handoff", "blocked"}:
+            if question_pack and action not in {InterviewAction.HANDOFF, InterviewAction.BLOCKED}:
                 flow_result = self._update_question_flow_after_turn(
                     session_id=session_id,
                     transcript=effective_transcript or "",
                     confidence=effective_confidence,
                     question_pack=question_pack,
                 )
-                if flow_result.get("interview_stage"):
-                    interview_stage = flow_result["interview_stage"]
+                if flow_result.get(PayloadKey.INTERVIEW_STAGE):
+                    interview_stage = flow_result[PayloadKey.INTERVIEW_STAGE]
                 if flow_result.get("need_followup"):
-                    decision_flags = [*decision_flags, "insufficient_evidence"]
+                    decision_flags = [*decision_flags, INSUFFICIENT_EVIDENCE_FLAG]
                     decision_reason = flow_result.get("reason") or decision_reason
 
         turn, deduplicated = self._session_repository.create_turn_event(
@@ -451,10 +642,10 @@ class AIInterviewService:
             policy_flags=payload.policy_flags + decision_flags,
             payload={
                 **payload.payload,
-                "latency_breakdown": latency_breakdown,
-                "degradation_mode": degradation_mode,
-                "followup_question": followup_question,
-                "interview_stage": interview_stage,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
+                PayloadKey.DEGRADATION_MODE: degradation_mode,
+                PayloadKey.FOLLOWUP_QUESTION: followup_question,
+                PayloadKey.INTERVIEW_STAGE: interview_stage,
             },
             transcript_ttl_days=180,
             audio_ttl_days=30,
@@ -469,120 +660,79 @@ class AIInterviewService:
                 "transcript": effective_transcript,
                 "accepted": not deduplicated,
                 "deduplicated": deduplicated,
-                "followup_question": followup_question,
+                PayloadKey.FOLLOWUP_QUESTION: followup_question,
                 "followup_audio_uris": followup_audio_uris,
                 "action": action,
                 "decision_reason": decision_reason,
-                "latency_breakdown": latency_breakdown,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
             },
         )
-        if payload.speaker == "candidate":
-            transcript_preview = (effective_transcript or "").strip()
-            if transcript_preview:
-                logger.info(
-                    "candidate_turn session=%s seq=%s accepted=%s deduplicated=%s text=%s",
-                    session_id,
-                    payload.seq,
-                    not deduplicated,
-                    deduplicated,
-                    transcript_preview[:180],
-                )
-                # print(f"DEBUG [ASR] Session: {session_id}, Transcript: {transcript_preview}")
-                # if followup_question:
-                #     print(f"DEBUG [LLM] Session: {session_id}, Action: {action}, Followup: {followup_question}")
-                # else:
-                #     print(f"DEBUG [LLM] Session: {session_id}, No followup generated. Action: {action}, Reason: {decision_reason}")
-                
-                # if followup_audio_uris:
-                #     print(f"DEBUG [TTS] Session: {session_id}, Audio URIs: {len(followup_audio_uris)} packets")
-        return {
-            "session_id": session_id,
-            "event_id": payload.event_id,
-            "accepted": not deduplicated,
-            "deduplicated": deduplicated,
-            "turn_id": turn.id if turn else None,
-            "action": action,
-            "decision_reason": decision_reason,
-            "policy_flags": decision_flags,
-            "interview_stage": interview_stage,
-            "followup_question": followup_question,
-            "followup_audio_uris": followup_audio_uris,
-            "runtime_mode": runtime_mode,
-            "model_route": model_route,
-            "degradation_mode": degradation_mode,
-            "latency_breakdown": latency_breakdown,
-        }
-        
 
-    def generate_question_set(self, session_id: str, payload: AIInterviewQuestionGenerateRequest) -> dict:
-        """基于候选人简历与岗位要求生成问题集并持久化。"""
-        session_entity = self._session_repository.get(session_id)
-        if not payload.force_regenerate:
-            existing = self._get_existing_question_set(session_id=session_id)
-            if existing is not None:
-                return existing
-        candidate = self._candidate_repository.get(session_entity.candidate_id)
-        job = self._job_repository.get(session_entity.job_id)
-        resume_text = candidate.resume_text or ""
-        job_requirements = job.requirements or ""
-        skills = (candidate.raw_profile or {}).get("skills", [])
+    def generate_question_set(
+        self, 
+        session_id: str | None = None, 
+        invitation_id: str | None = None,
+        force_regenerate: bool = False
+    ) -> AIInterviewQuestionGenerateResult:
+        """生成或获取面试题目集。支持通过 session_id 或 invitation_id。"""
+        context_id = session_id or invitation_id
+        if not context_id:
+            raise ValueError("Either session_id or invitation_id must be provided")
 
-        rule_questions = self._build_questions(
-            resume_text=resume_text,
-            job_requirements=job_requirements,
-            skills=skills,
-            question_count=payload.question_count,
-            language=session_entity.language,
-        )
-        questions = list(rule_questions)
-        if self._is_interview_llm_enabled():
-            llm_questions = self._build_questions_with_llm(
-                session_id=session_id,
-                resume_text=resume_text,
-                job_requirements=job_requirements,
-                skills=skills,
-                question_count=payload.question_count,
-                language=session_entity.language,
+        # 1. 尝试获取现有题目
+        if not force_regenerate:
+            existing = self._session_repository.get_latest_question_set(
+                session_id=session_id, 
+                invitation_id=invitation_id
             )
-            if llm_questions:
-                questions = self._merge_question_candidates(
-                    rule_questions=rule_questions,
-                    llm_questions=llm_questions,
-                    question_count=payload.question_count,
-                    resume_text=resume_text,
-                    job_requirements=job_requirements,
-                    skills=skills,
-                    language=session_entity.language,
+            if existing:
+                return AIInterviewQuestionGenerateResult(
+                    version=existing.version,
+                    question_count=len(existing.questions_json),
+                    source=existing.source
                 )
-        latest_version = self._session_repository.get_latest_question_set_version(session_id)
-        version = latest_version + 1
-        self._session_repository.create_question_set(
-            session_id=session_id,
-            version=version,
-            source=payload.source,
-            questions=questions,
+
+        # 2. 获取业务基础数据
+        if session_id:
+            session_entity = self._session_repository.get(session_id)
+            candidate_id = session_entity.candidate_id
+            job_id = session_entity.job_id
+            language = session_entity.language
+        else:
+            invitation_entity = self._invitation_repository.get_by_id(invitation_id)
+            candidate_id = invitation_entity.candidate_id
+            job_id = invitation_entity.job_id
+            language = "zh-CN"
+
+        candidate = self._candidate_repository.get(candidate_id)
+        job = self._job_repository.get(job_id)
+
+        # 3. 执行生成
+        questions, mode = self._generate_questions_with_fallback(
+            session_id=context_id,
+            job_title=job.title or "",
+            resume_text=candidate.resume_text or "",
+            job_requirements=job.requirements or "",
+            skills=(candidate.raw_profile or {}).get("skills", []),
+            question_count=14,
+            language=language
         )
-        question_pack = {
-            "session_id": session_id,
-            "version": version,
-            "source": payload.source,
-            "language": session_entity.language,
-            "question_count": len(questions),
-            "questions": questions,
-        }
-        self._runtime_store.save_question_pack(
+
+        # 4. 保存
+        version = self._session_repository.get_latest_question_set_version(session_id) + 1 if session_id else 1
+        entity = self._session_repository.create_question_set(
             session_id=session_id,
+            invitation_id=invitation_id,
             version=version,
-            question_pack=question_pack,
-            ttl_seconds=int(self._settings.ai_interview_question_pack_ttl_seconds),
+            source=f"{mode}:invitation" if invitation_id else mode,
+            questions=questions
         )
-        return {
-            "session_id": session_id,
-            "version": version,
-            "question_count": len(questions),
-            "source": payload.source,
-            "questions": questions,
-        }
+
+        return AIInterviewQuestionGenerateResult(
+            version=entity.version,
+            question_count=len(entity.questions_json),
+            source=entity.source
+        )
 
     def prebuild_question_pack(self, payload: AIInterviewQuestionPackPrebuildRequest) -> dict:
         """预生成题包并缓存到运行时存储。"""
@@ -591,33 +741,17 @@ class AIInterviewService:
         resume_text = candidate.resume_text or ""
         job_requirements = job.requirements or ""
         skills = (candidate.raw_profile or {}).get("skills", [])
-        rule_questions = self._build_questions(
+        
+        questions, generation_mode = self._generate_questions_with_fallback(
+            session_id=f"prebuild:{payload.candidate_id}:{payload.job_id}",
+            job_title=job.title or "",
             resume_text=resume_text,
             job_requirements=job_requirements,
             skills=skills,
             question_count=payload.question_count,
             language=payload.language,
         )
-        questions = list(rule_questions)
-        if self._is_interview_llm_enabled():
-            llm_questions = self._build_questions_with_llm(
-                session_id=f"prebuild:{payload.candidate_id}:{payload.job_id}",
-                resume_text=resume_text,
-                job_requirements=job_requirements,
-                skills=skills,
-                question_count=payload.question_count,
-                language=payload.language,
-            )
-            if llm_questions:
-                questions = self._merge_question_candidates(
-                    rule_questions=rule_questions,
-                    llm_questions=llm_questions,
-                    question_count=payload.question_count,
-                    resume_text=resume_text,
-                    job_requirements=job_requirements,
-                    skills=skills,
-                    language=payload.language,
-                )
+        
         resume_hash = self._compute_prebuild_resume_hash(
             resume_text=resume_text,
             job_requirements=job_requirements,
@@ -629,27 +763,170 @@ class AIInterviewService:
             language=payload.language,
             resume_hash=resume_hash,
         )
-        question_pack = {
-            "candidate_id": payload.candidate_id,
-            "job_id": payload.job_id,
+        
+        question_pack = normalize_question_pack({
+            PayloadKey.CANDIDATE_ID: payload.candidate_id,
+            PayloadKey.JOB_ID: payload.job_id,
             "language": payload.language,
             "source": payload.source,
-            "question_count": len(questions),
             "questions": questions,
             "resume_hash": resume_hash,
-        }
+        })
+        
         ttl_seconds = int(self._settings.ai_interview_prebuild_pack_ttl_seconds)
         self._runtime_store.save_prebuilt_pack(
             key=cache_key,
             question_pack=question_pack,
             ttl_seconds=ttl_seconds,
         )
+        
         return {
             "cache_key": cache_key,
             "question_count": len(questions),
             "expires_in_seconds": ttl_seconds,
             "source": payload.source,
+            "generation_mode": generation_mode,
         }
+
+    def _generate_questions_with_fallback(
+        self,
+        *,
+        session_id: str,
+        job_title: str,
+        resume_text: str,
+        job_requirements: str,
+        skills: list[str],
+        question_count: int,
+        language: str = "zh-CN",
+    ) -> tuple[list[dict], str]:
+        """优先使用 LLM 生成题目，仅在 LLM 异常或题目不足时回退到规则驱动。"""
+        llm_questions = []
+        
+        if self._is_interview_llm_enabled():
+            try:
+                llm_questions = self._build_questions_with_llm(
+                    session_id=session_id,
+                    job_title=job_title,
+                    resume_text=resume_text,
+                    job_requirements=job_requirements,
+                    skills=skills,
+                    question_count=question_count,
+                    language=language,
+                )
+                # 如果 LLM 生成了足够的题目，直接使用 LLM 结果
+                if len(llm_questions) >= max(3, question_count // 2):
+                    return list(llm_questions), "llm"
+            except Exception as e:
+                logger.error(f"ai_interview.llm_question_generation_failed session_id={session_id} error={e}", exc_info=True)
+
+        # 回退逻辑：生成规则题目
+        rule_questions = self._build_questions(
+            resume_text=resume_text,
+            job_requirements=job_requirements,
+            skills=skills,
+            question_count=question_count,
+            language=language,
+        )
+
+        # 如果有部分 LLM 题目但不足，尝试混合（增强版）
+        if llm_questions:
+            try:
+                merged = self._merge_question_candidates(
+                    rule_questions=rule_questions,
+                    llm_questions=llm_questions,
+                    question_count=question_count,
+                    resume_text=resume_text,
+                    job_requirements=job_requirements,
+                    skills=skills,
+                    language=language,
+                )
+                return list(merged), "llm_hybrid"
+            except Exception as e:
+                logger.error(f"ai_interview.question_merge_failed session_id={session_id} error={e}")
+                return list(llm_questions) if len(llm_questions) >= 3 else list(rule_questions), "llm_hybrid_fallback"
+
+        # 完全规则回退
+        return list(rule_questions), "rule_fallback"
+
+    def _build_questions_with_llm(
+        self,
+        *,
+        session_id: str,
+        job_title: str,
+        resume_text: str,
+        job_requirements: str,
+        skills: list[str],
+        question_count: int,
+        language: str = "zh-CN",
+    ) -> list[dict]:
+        """使用 LLM (v4) 生成结构化面试题目，采用更稳建的正则解析方式。"""
+        template = self._resolve_prompt_template(
+            task_key=PromptTaskKey.INTERVIEW_QUESTION_SET,
+            default_version="v4"
+        )
+        rendered = template.render(
+            language=language,
+            job_title=job_title,
+            job_requirements=job_requirements,
+            resume_text=resume_text[:4000],
+            skills=skills or [],
+            question_count=question_count,
+        )
+
+        context = InvokeContext(
+            task_key=PromptTaskKey.INTERVIEW_QUESTION_SET,
+            trace_id=f"intv-gen-{session_id}-{uuid.uuid4().hex[:6]}",
+            prompt=f"{template.system_prompt}\n{rendered}",
+            entity_type="session",
+            entity_id=session_id,
+        )
+
+        # 采用文本模式调用，绕过 Pydantic 契约限制（v4 模板字段多于契约定义）
+        response = self._llm_client.invoke(context)
+        raw_text = response.content.get("text", "") if response.content else ""
+        
+        if not raw_text:
+            logger.warning(f"ai_interview.llm_questions_empty_response session_id={session_id}")
+            return []
+
+        # 手动解析 JSON (参考 demo 脚本逻辑)
+        try:
+            json_match = re.search(r"\{[\s\S]*\}", raw_text)
+            if json_match:
+                data = json.loads(json_match.group(0))
+            else:
+                data = json.loads(raw_text)
+            
+            questions = data.get("questions", [])
+        except Exception as e:
+            logger.error(f"ai_interview.llm_questions_parse_failed session_id={session_id} error={e}")
+            logger.debug(f"Raw LLM output: {raw_text}")
+            return []
+
+        # 标准化题目格式，保留 LLM 生成的额外业务字段
+        normalized = []
+        for item in questions:
+            q = self._normalize_question_item(item)
+            if q:
+                # 保留 LLM 输出中可能包含的、但标准归一化逻辑未涵盖的字段 (如 module, role_type 等)
+                if isinstance(item, dict):
+                    q.update({k: v for k, v in item.items() if k not in q})
+                normalized.append(q)
+
+        logger.info(
+            "ai_interview.llm_questions_generated session_id=%s count=%s first_q=%s",
+            session_id,
+            len(normalized),
+            normalized[0]["question"][:50] if normalized else "None",
+        )
+
+        return normalized
+    def _is_interview_llm_enabled(self) -> bool:
+        """Determine whether the interview LLM flow is enabled."""
+        return self._runtime_repository.is_feature_enabled(
+            feature_key="ai_interview_llm",
+            default_enabled=self._settings.ai_interview_llm_enabled,
+        )
 
     def get_report(
         self,
@@ -658,7 +935,7 @@ class AIInterviewService:
         run_id: str | None = None,
         force_recompute: bool = False,
     ) -> AIInterviewReportResponse:
-        """查询会话报告，支持 run_id 复算与回放。"""
+        """鏌ヨ浼氳瘽鎶ュ憡锛屾敮鎸?run_id 澶嶇畻涓庡洖鏀俱€?"""
         runtime_mode = self._resolve_runtime_mode()
         turns = self._session_repository.list_turns(session_id)
         resolved_run_id = run_id or self._build_run_id(session_id=session_id, runtime_mode=runtime_mode, turns=turns)
@@ -675,11 +952,11 @@ class AIInterviewService:
             risk_tags=report_entity.risk_tags_json,
             recommendation=report_entity.recommendation,
             runtime_mode=runtime_mode,
-            run_id=str((report_entity.payload or {}).get("run_id", resolved_run_id)),
+            run_id=str((report_entity.payload or {}).get(PayloadKey.RUN_ID, resolved_run_id)),
         )
 
     def get_replay(self, session_id: str, *, limit: int = 50, offset: int = 0) -> AIInterviewReplayResponse:
-        """返回会话回放数据，支持按 turn 粒度定位。"""
+        """杩斿洖浼氳瘽鍥炴斁鏁版嵁锛屾敮鎸佹寜 turn 绮掑害瀹氫綅銆?"""
         self._session_repository.get(session_id)
         turns = self._session_repository.list_turns(session_id)
         paged = turns[max(0, offset) : max(0, offset) + max(1, min(limit, 200))]
@@ -700,11 +977,11 @@ class AIInterviewService:
         return AIInterviewReplayResponse(session_id=session_id, total_turns=len(turns), items=items)
 
     def get_metrics(self, *, window_minutes: int, min_samples: int = 5) -> AIInterviewMetricsResponse:
-        """聚合 handoff/blocked/latency 指标并给出告警原因。"""
+        """鑱氬悎 handoff/blocked/latency 鎸囨爣骞剁粰鍑哄憡璀﹀師鍥犮€?"""
         sessions = self._session_repository.list_sessions(window_minutes=window_minutes)
         total = len(sessions)
-        handoff_count = sum(1 for item in sessions if item.status == "failed" and (item.payload or {}).get("handoff_reason"))
-        blocked_count = sum(1 for item in sessions if item.status == "failed" and (item.payload or {}).get("blocked_reason"))
+        handoff_count = sum(1 for item in sessions if item.status == InterviewSessionStatus.FAILED and (item.payload or {}).get(PayloadKey.HANDOFF_REASON))
+        blocked_count = sum(1 for item in sessions if item.status == InterviewSessionStatus.FAILED and (item.payload or {}).get(PayloadKey.BLOCKED_REASON))
         handoff_rate = round(handoff_count / total, 4) if total > 0 else 0.0
         blocked_rate = round(blocked_count / total, 4) if total > 0 else 0.0
 
@@ -721,7 +998,7 @@ class AIInterviewService:
         candidate_turn_count_by_session: dict[str, int] = {}
         for item in turns:
             candidate_turn_count_by_session[item.session_id] = candidate_turn_count_by_session.get(item.session_id, 0) + 1
-            breakdown = (item.payload or {}).get("latency_breakdown", {})
+            breakdown = (item.payload or {}).get(PayloadKey.LATENCY_BREAKDOWN, {})
             if isinstance(breakdown, dict):
                 if isinstance(breakdown.get("asr_ms"), int):
                     asr_latencies.append(int(breakdown["asr_ms"]))
@@ -736,7 +1013,7 @@ class AIInterviewService:
                 if isinstance(breakdown.get("llm_prefetch_hit"), int):
                     prefetch_total += 1
                     prefetch_hits += 1 if int(breakdown["llm_prefetch_hit"]) > 0 else 0
-            followup = str((item.payload or {}).get("followup_question") or "").strip()
+            followup = str((item.payload or {}).get(PayloadKey.FOLLOWUP_QUESTION) or "").strip()
             if followup:
                 followup_questions.append(followup)
 
@@ -898,7 +1175,7 @@ class AIInterviewService:
                 "packet_index": packet_index,
                 "client_first_play_at_ms": played_at_ms,
                 "transport": transport or "binary",
-                "latency_breakdown": markers,
+                PayloadKey.LATENCY_BREAKDOWN: markers,
             },
         )
         return {
@@ -908,10 +1185,11 @@ class AIInterviewService:
         }
 
     def rtc_join(self, session_id: str, payload: AIInterviewRTCJoinRequest) -> AIInterviewRTCJoinResponse:
-        """RTC-001：候选人入会，支持后续重连。"""
+        """RTC-001锛氬€欓€変汉鍏ヤ細锛屾敮鎸佸悗缁噸杩炪€?"""
         entity = self._session_repository.get(session_id)
+        self._ensure_session_active_for_realtime(entity, action="rtc_join")
         if payload.candidate_id != entity.candidate_id:
-            raise InvalidStateError("candidate_id 与会话不匹配")
+            raise InvalidStateError("candidate_id 涓庝細璇濅笉鍖归厤")
         join_info = self._rtc_gateway.join_room(
             session_id=session_id,
             room_id=entity.rtc_room_id,
@@ -961,10 +1239,12 @@ class AIInterviewService:
 
     def get_ten_runtime_config(self, session_id: str) -> AIInterviewTENRuntimeResponse:
         entity = self._session_repository.get(session_id)
+        self._ensure_session_active_for_realtime(entity, action="ten_runtime_config")
         return AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
 
     def launch_ten_session(self, session_id: str) -> AIInterviewTENRuntimeResponse:
         entity = self._session_repository.get(session_id)
+        self._ensure_session_active_for_realtime(entity, action="ten_launch")
         ten_patch = self._prepare_ten_runtime(entity)
         if ten_patch:
             entity = self._session_repository.update_status(session_id, status=entity.status, payload_patch=ten_patch)
@@ -974,8 +1254,9 @@ class AIInterviewService:
         return AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
 
     def rtc_reconnect(self, session_id: str, payload: AIInterviewRTCReconnectRequest) -> AIInterviewRTCReconnectResponse:
-        """RTC-001：断线重连。"""
+        """RTC-001锛氭柇绾块噸杩炪€?"""
         entity = self._session_repository.get(session_id)
+        self._ensure_session_active_for_realtime(entity, action="rtc_reconnect")
         merged = dict(entity.payload or {})
         reconnect_count = int(merged.get("rtc_reconnect_count", 0)) + 1
         reconnect_info = self._rtc_gateway.reconnect_room(
@@ -1007,11 +1288,19 @@ class AIInterviewService:
             reconnect_count=reconnect_info.reconnect_count,
         )
 
+    @staticmethod
+    def _ensure_session_active_for_realtime(entity, *, action: str) -> None:
+        if entity.status not in {InterviewSessionStatus.CREATED, InterviewSessionStatus.IN_PROGRESS}:
+            raise InvalidStateError(
+                f"AI interview session '{entity.id}' cannot perform '{action}' from status '{entity.status}'. "
+                "Please create a new session for a new interview."
+            )
+
     def rtc_subscribe_audio(self, session_id: str, payload: AIInterviewRTCAudioSubscribeRequest) -> AIInterviewRTCAudioSubscribeResponse:
-        """RTC-001D：订阅候选人音轨，支持开关降级。"""
+        """RTC-001D锛氳闃呭€欓€変汉闊宠建锛屾敮鎸佸紑鍏抽檷绾с€?"""
         entity = self._session_repository.get(session_id)
         if payload.candidate_id != entity.candidate_id:
-            raise InvalidStateError("candidate_id 与会话不匹配")
+            raise InvalidStateError("candidate_id 涓庝細璇濅笉鍖归厤")
 
         feature_enabled = bool(self._settings.ai_interview_rtc_audio_subscribe_enabled)
         participant_identity = (payload.participant_identity or f"{payload.candidate_id}:{payload.client_id}").strip()
@@ -1094,10 +1383,10 @@ class AIInterviewService:
         )
 
     def rtc_apply_video_policy(self, session_id: str, payload: AIInterviewRTCVideoPolicyRequest) -> AIInterviewRTCVideoPolicyResponse:
-        """RTC-004：候选人视频上行策略与 AI 订阅/录制策略应用。"""
+        """RTC-004锛氬€欓€変汉瑙嗛涓婅绛栫暐涓?AI 璁㈤槄/褰曞埗绛栫暐搴旂敤銆?"""
         entity = self._session_repository.get(session_id)
         if payload.candidate_id != entity.candidate_id:
-            raise InvalidStateError("candidate_id 与会话不匹配")
+            raise InvalidStateError("candidate_id 涓庝細璇濅笉鍖归厤")
 
         feature_enabled = bool(self._settings.ai_interview_rtc_video_policy_enabled)
         participant_identity = (payload.participant_identity or f"{payload.candidate_id}:{payload.client_id}").strip()
@@ -1398,7 +1687,7 @@ class AIInterviewService:
         """RTC-002B/003B: ingest room audio frame then optionally trigger followup + TTS publish."""
         session_entity = self._session_repository.get_by_room_id(payload.room_id)
         if session_entity is None:
-            raise InvalidStateError(f"room_id '{payload.room_id}' 未关联任何 AI 面试会话")
+            raise InvalidStateError(f"room_id '{payload.room_id}' 鏈叧鑱斾换浣?AI 闈㈣瘯浼氳瘽")
 
         asr_req = AIInterviewASRStreamRequest(
             seq=payload.seq,
@@ -1429,7 +1718,7 @@ class AIInterviewService:
             event_req = AIInterviewSessionEventRequest(
                 event_id=f"rtc-room-{payload.seq}-{payload.chunk_index}-{uuid.uuid4().hex[:8]}",
                 seq=payload.seq,
-                speaker="candidate",
+                speaker=SpeakerRole.CANDIDATE,
                 transcript=asr_resp.transcript,
                 confidence=asr_resp.confidence,
                 latency_ms=asr_resp.latency_ms,
@@ -1441,7 +1730,7 @@ class AIInterviewService:
                 },
             )
             event_result = self.append_event(session_entity.id, event_req)
-            followup_question = str((event_result or {}).get("followup_question") or "").strip()
+            followup_question = str((event_result or {}).get(PayloadKey.FOLLOWUP_QUESTION) or "").strip()
             if payload.auto_tts_publish and followup_question:
                 tts_req = AIInterviewTTSStreamRequest(
                     text=followup_question,
@@ -1485,13 +1774,13 @@ class AIInterviewService:
         }
 
     def asr_stream(self, session_id: str, payload: AIInterviewASRStreamRequest) -> AIInterviewASRStreamResponse:
-        """RTC-002：ASR 流式适配，返回转写结果并落库。"""
+        """RTC-002锛欰SR 娴佸紡閫傞厤锛岃繑鍥炶浆鍐欑粨鏋滃苟钀藉簱銆?"""
         entity = self._session_repository.get(session_id)
         audio_bytes = getattr(payload, "audio_bytes", None)
         if self._settings.asr_force_streaming and not (payload.audio_base64 or audio_bytes) and not payload.is_final:
-            raise InvalidStateError("ASR force_streaming 已开启，音频数据不可为空")
+            raise InvalidStateError("ASR force_streaming 宸插紑鍚紝闊抽鏁版嵁涓嶅彲涓虹┖")
         if payload.chunk_index > payload.chunk_total:
-            raise InvalidStateError("chunk_index 不能大于 chunk_total")
+            raise InvalidStateError("chunk_index 涓嶈兘澶т簬 chunk_total")
         ingest_start = time.perf_counter()
         asr_result = self._asr_provider.transcribe_stream(
             session_id=session_id,
@@ -1523,7 +1812,7 @@ class AIInterviewService:
         turn, deduplicated = self._session_repository.create_turn_event(
             session_id=session_id,
             event_id=event_id,
-            speaker="candidate" if payload.is_final else "candidate_partial",
+            speaker=SpeakerRole.CANDIDATE if payload.is_final else SpeakerRole.CANDIDATE_PARTIAL,
             transcript=transcript,
             audio_uri=None,
             confidence=asr_result.confidence,
@@ -1541,7 +1830,7 @@ class AIInterviewService:
                 "participant_identity": payload.participant_identity,
                 "track_sid": payload.track_sid,
                 "audio_bytes": len(getattr(payload, "audio_bytes", None) or payload.audio_base64 or ""),
-                "latency_breakdown": latency_breakdown,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
             },
             transcript_ttl_days=180,
             audio_ttl_days=30,
@@ -1565,7 +1854,7 @@ class AIInterviewService:
                 "track_sid": payload.track_sid,
                 "latency_ms": asr_result.latency_ms,
                 "provider": asr_result.provider,
-                "latency_breakdown": latency_breakdown,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
                 "deduplicated": deduplicated,
             },
         )
@@ -1576,7 +1865,7 @@ class AIInterviewService:
                 payload={
                     "event_id": event_id,
                     "turn_id": turn.id if turn else None,
-                    "speaker": "candidate" if payload.is_final else "candidate_partial",
+                    "speaker": SpeakerRole.CANDIDATE if payload.is_final else SpeakerRole.CANDIDATE_PARTIAL,
                     "transcript": transcript,
                     "latency_ms": asr_result.latency_ms,
                     "chunk_index": payload.chunk_index,
@@ -1610,7 +1899,7 @@ class AIInterviewService:
         )
 
     def tts_stream(self, session_id: str, payload: AIInterviewTTSStreamRequest) -> AIInterviewTTSStreamResponse:
-        """RTC-003：TTS 流式播报，返回分片与音频地址。"""
+        """RTC-003锛歍TS 娴佸紡鎾姤锛岃繑鍥炲垎鐗囦笌闊抽鍦板潃銆?"""
         entity = self._session_repository.get(session_id)
         text = payload.text.strip()
         tts_start = time.perf_counter()
@@ -1633,7 +1922,7 @@ class AIInterviewService:
                     stream_audio_uris.append(packet_audio_uri)
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,
-                    event_type="tts.packet",
+                    event_type=InterviewEventType.TTS_PACKET,
                     payload={
                         "voice": payload.voice,
                         "packet_index": packet_index,
@@ -1708,7 +1997,7 @@ class AIInterviewService:
                 "bot_identity": bot_identity,
                 "target_latency_ms": payload.target_latency_ms,
                 "realtime_target_met": realtime_target_met,
-                "latency_breakdown": latency_breakdown,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
             },
             transcript_ttl_days=180,
             audio_ttl_days=30,
@@ -1722,7 +2011,7 @@ class AIInterviewService:
             session_id=session_id,
             job_id=entity.job_id,
             payload={
-                "voice": payload.voice,
+                PayloadKey.VOICE: payload.voice,
                 "chunk_count": len(tts_result.chunks),
                 "provider": tts_result.provider,
                 "published": published,
@@ -1731,7 +2020,7 @@ class AIInterviewService:
                 "bot_identity": bot_identity,
                 "target_latency_ms": payload.target_latency_ms,
                 "realtime_target_met": realtime_target_met,
-                "latency_breakdown": latency_breakdown,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
             },
         )
         DEFAULT_INTERVIEW_EVENT_BUS.publish(
@@ -1739,10 +2028,10 @@ class AIInterviewService:
             event_type="tts.ready",
             payload={
                 "text": text,
-                "voice": payload.voice,
+                PayloadKey.VOICE: payload.voice,
                 "audio_uris": list(tts_result.audio_uris),
                 "published": published,
-                "latency_breakdown": latency_breakdown,
+                PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
             },
         )
         return AIInterviewTTSStreamResponse(
@@ -1765,10 +2054,10 @@ class AIInterviewService:
         *,
         session_id: str,
         text: str,
-        voice: str = "default",
+        voice: str = DEFAULT_TTS_VOICE,
         chunk_size: int = 24,
     ):
-        """流式生成 TTS 包，用于 duplex 首包优先推送。"""
+        """娴佸紡鐢熸垚 TTS 鍖咃紝鐢ㄤ簬 duplex 棣栧寘浼樺厛鎺ㄩ€併€?"""
         self._session_repository.get(session_id)
         for packet in self._tts_provider.synthesize_stream_iter(
             session_id=session_id,
@@ -1834,7 +2123,7 @@ class AIInterviewService:
                 event_req = AIInterviewSessionEventRequest(
                     event_id=f"eot-flush-{uuid.uuid4().hex[:8]}",
                     seq=max(1, seq),
-                    speaker="candidate",
+                    speaker=SpeakerRole.CANDIDATE,
                     transcript=asr_resp.transcript,
                     confidence=asr_resp.confidence,
                     payload={"source": "eot_flush"},
@@ -1855,7 +2144,7 @@ class AIInterviewService:
         payload: dict,
         audio_bytes: bytes | None = None,
     ) -> dict:
-        """全双工实时音频分片处理：ASR -> 事件回写(可选) -> 追问/音频输出。"""
+        """鍏ㄥ弻宸ュ疄鏃堕煶棰戝垎鐗囧鐞嗭細ASR -> 浜嬩欢鍥炲啓(鍙€? -> 杩介棶/闊抽杈撳嚭銆?"""
         # Use passed arguments which are already extracted/validated in the route
         frame_id = str(payload.get("frame_id") or "")
         if frame_id:
@@ -1965,7 +2254,7 @@ class AIInterviewService:
                     payload={
                         "event_id": f"asr-turn-{session_id}-{seq}-{chunk_index}",
                         "turn_id": None,
-                        "speaker": "candidate_partial",
+                        "speaker": SpeakerRole.CANDIDATE_PARTIAL,
                         "transcript": asr_resp.transcript,
                         "latency_ms": asr_resp.latency_ms,
                         "chunk_index": chunk_index,
@@ -1991,7 +2280,7 @@ class AIInterviewService:
             if prefetched:
                 event_payload.update(
                     {
-                        "prefetched_followup_question": prefetched["followup_question"],
+                        "prefetched_followup_question": prefetched[PayloadKey.FOLLOWUP_QUESTION],
                         "prefetched_llm_ms": int(prefetched.get("llm_prefetch_ms") or 0),
                         "prefetched_from_partial": True,
                     }
@@ -1999,7 +2288,7 @@ class AIInterviewService:
             event_req = AIInterviewSessionEventRequest(
                 event_id=f"duplex-turn-{session_id}-{seq}",
                 seq=seq,
-                speaker="candidate",
+                speaker=SpeakerRole.CANDIDATE,
                 transcript=asr_resp.transcript,
                 confidence=asr_resp.confidence,
                 latency_ms=asr_resp.latency_ms,
@@ -2056,13 +2345,13 @@ class AIInterviewService:
 
             # --- Tentative Execution Trigger (Wait for punctuation or length) ---
             # Lowered threshold and added fallback for long sentences without punctuation
-            has_punctuation = any(p in normalized for p in ("。", "？", "！", ".", "?", "!"))
+            has_punctuation = any(p in normalized for p in ("。", "，", "；", ".", "?", "!"))
             if not is_final and (
                 (len(normalized) >= 4 and has_punctuation) or 
                 (len(normalized) >= 20) # Fallback for unpunctuated streams
             ):
                 logger.info(f"Triggering TENTATIVE execution for session={session_id} seq={seq} transcript='{normalized}'")
-                stage = "core"
+                stage = InterviewStageGroup.CORE
                 language = "zh-CN"
                 try:
                     session_entity = self._session_repository.get(session_id)
@@ -2087,7 +2376,7 @@ class AIInterviewService:
                 return
 
             # --- Background Prefetch Worker ---
-            stage = "core"
+            stage = InterviewStageGroup.CORE
             language = "zh-CN"
             try:
                 session_entity = self._session_repository.get(session_id)
@@ -2172,7 +2461,7 @@ class AIInterviewService:
                 if not followup:
                     return
                 entry = {
-                    "followup_question": followup,
+                    PayloadKey.FOLLOWUP_QUESTION: followup,
                     "partial_transcript": normalized,
                     "text_hash": text_hash,
                     "created_at_ms": now_ms,
@@ -2207,7 +2496,7 @@ class AIInterviewService:
         inflight_key: str,
         abort_event: threading.Event,
     ) -> None:
-        """运行后台实时编排（不写数据库）。"""
+        """杩愯鍚庡彴瀹炴椂缂栨帓锛堜笉鍐欐暟鎹簱锛夈€?"""
         from ..db.session import SessionLocal
         with SessionLocal() as session:
             worker_service = get_ai_interview_service(session)
@@ -2225,9 +2514,9 @@ class AIInterviewService:
                         packet["_first_pcm_marker_recorded"] = True
                     DEFAULT_INTERVIEW_EVENT_BUS.publish(
                         session_id=session_id,
-                        event_type="tts.packet",
+                        event_type=InterviewEventType.TTS_PACKET,
                         payload={
-                            "voice": "default",
+                            PayloadKey.VOICE: DEFAULT_TTS_VOICE,
                             "packet_index": packet.get("index"),
                             "is_final_packet": bool(packet.get("is_final_packet")),
                             "audio_uri": packet.get("audio_uri"),
@@ -2243,7 +2532,7 @@ class AIInterviewService:
                 
                 prefetched_followup = None
                 if cached and cached.get("text_hash") == inflight_key.split(":")[-1]:
-                     prefetched_followup = cached.get("followup_question")
+                     prefetched_followup = cached.get(PayloadKey.FOLLOWUP_QUESTION)
 
                 def llm_stream_wrapper(t, c, s, l):
                     return worker_service._build_followup_question_with_llm(
@@ -2322,6 +2611,20 @@ class AIInterviewService:
         rtc_block = self._build_rtc_dict(entity, rtc_override=rtc_override)
         if not rtc_block.get("app_id") or not rtc_block.get("channel_name"):
             return {}
+        runtime_payload = dict(entity.payload or {})
+        runtime_payload.update(
+            self._build_runtime_company_payload(
+                job_id=entity.job_id,
+                job_requirements="",
+                payload=runtime_payload,
+            )
+        )
+        runtime_payload.update(
+            self._build_runtime_question_pack_payload(
+                session_id=entity.id,
+                payload=runtime_payload,
+            )
+        )
         return self._ten_runtime_manager.prepare_session(
             session_id=entity.id,
             candidate_id=entity.candidate_id,
@@ -2332,8 +2635,124 @@ class AIInterviewService:
                 "ten_bot_user_id": str((entity.payload or {}).get("ten_agent_user_id") or rtc_block.get("ten_bot_user_id") or ""),
                 "ten_bot_token": str((entity.payload or {}).get("ten_agent_token") or rtc_block.get("ten_bot_token") or ""),
             },
-            payload=entity.payload or {},
+            payload=runtime_payload,
         )
+
+    def _build_runtime_question_pack_payload(
+        self,
+        *,
+        session_id: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        merged_payload = dict(payload or {})
+        raw_question_pack = merged_payload.get("question_pack")
+        if isinstance(raw_question_pack, dict):
+            normalized_pack = normalize_question_pack(raw_question_pack)
+            if normalized_pack.get("questions"):
+                return {
+                    "question_pack": normalized_pack,
+                    "question_pack_source": str(
+                        merged_payload.get("question_pack_source")
+                        or normalized_pack.get("source")
+                        or "payload"
+                    ).strip(),
+                    "question_pack_version": (
+                        merged_payload.get("question_pack_version")
+                        or normalized_pack.get("version")
+                        or ""
+                    ),
+                }
+
+        cached_pack = self._runtime_store.get_question_pack(session_id=session_id)
+        if isinstance(cached_pack, dict) and cached_pack.get("questions"):
+            normalized_pack = normalize_question_pack(cached_pack)
+            return {
+                "question_pack": normalized_pack,
+                "question_pack_source": str(
+                    merged_payload.get("question_pack_source")
+                    or normalized_pack.get("source")
+                    or "runtime_store"
+                ).strip(),
+                "question_pack_version": (
+                    merged_payload.get("question_pack_version")
+                    or normalized_pack.get("version")
+                    or ""
+                ),
+            }
+
+        existing = self._get_existing_question_set(session_id=session_id)
+        if existing and existing.get("questions"):
+            normalized_pack = normalize_question_pack(existing)
+            return {
+                "question_pack": normalized_pack,
+                "question_pack_source": str(
+                    merged_payload.get("question_pack_source")
+                    or normalized_pack.get("source")
+                    or "question_set"
+                ).strip(),
+                "question_pack_version": (
+                    merged_payload.get("question_pack_version")
+                    or normalized_pack.get("version")
+                    or ""
+                ),
+            }
+        return {}
+
+    def _build_runtime_company_payload(
+        self,
+        *,
+        job_id: str,
+        job_requirements: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, str]:
+        merged_payload = dict(payload or {})
+        explicit_company_info = str(
+            merged_payload.get("company_info")
+            or merged_payload.get("company_profile")
+            or merged_payload.get("company_intro")
+            or ""
+        ).strip()
+        if explicit_company_info:
+            return {
+                "company_info": explicit_company_info,
+                "company_info_source": "payload",
+                "company_info_version": "runtime_v1",
+            }
+
+        fallback_company_info = self._load_company_info_fallback(
+            job_id=job_id,
+            job_requirements=job_requirements,
+        )
+        if fallback_company_info:
+            return {
+                "company_info": fallback_company_info,
+                "company_info_source": "dev_file_fallback",
+                "company_info_version": "runtime_v1",
+            }
+        return {}
+
+    def _load_company_info_fallback(self, *, job_id: str, job_requirements: str) -> str:
+        if str(self._settings.environment or "").strip().lower() not in {"dev", "development"}:
+            return ""
+
+        candidate_paths = [
+            Path(__file__).resolve().parents[2] / "data" / "company_info.txt",
+            Path("d:/24985/code/boss-cli-main/AI-HR/data/company_info.txt"),
+        ]
+        for path in candidate_paths:
+            try:
+                if path.exists():
+                    text = path.read_text(encoding="utf-8").strip()
+                    if text:
+                        return text
+            except Exception:
+                logger.warning("ai_interview.company_info_fallback_read_failed path=%s", path)
+
+        if job_requirements.strip():
+            return f"宀椾綅鐩稿叧淇℃伅鍙傝€冿細{job_requirements.strip()[:220]}"
+        if job_id:
+            logger.warning("ai_interview.company_info_missing job_id=%s", job_id)
+        return ""
 
     def _build_rtc_dict(self, entity, rtc_override=None) -> dict:
         base = self._build_rtc_payload(rtc_override) if rtc_override is not None else dict(entity.payload or {})
@@ -2400,14 +2819,14 @@ class AIInterviewService:
             return None
 
     def _to_session_dict(self, entity) -> dict:
-        """将会话实体转换为统一响应结构。"""
+        """灏嗕細璇濆疄浣撹浆鎹负缁熶竴鍝嶅簲缁撴瀯銆?"""
         join_url = f"/ai-interview/session/{entity.id}?token={entity.join_token}"
         rtc = self._build_rtc_dict(entity)
         ten = self._build_ten_runtime_response(entity)
         return {
             "id": entity.id,
-            "candidate_id": entity.candidate_id,
-            "job_id": entity.job_id,
+            PayloadKey.CANDIDATE_ID: entity.candidate_id,
+            PayloadKey.JOB_ID: entity.job_id,
             "status": entity.status,
             "channel": entity.channel,
             "language": entity.language,
@@ -2488,7 +2907,7 @@ class AIInterviewService:
         return raw_kind
 
     def _resolve_runtime_mode(self) -> str:
-        """根据运行时开关解析 AI 面试运行模式。"""
+        """鏍规嵁杩愯鏃跺紑鍏宠В鏋?AI 闈㈣瘯杩愯妯″紡銆?"""
         feature_key = "ai_interview_runtime"
         flag = self._runtime_repository.get_feature_flag(feature_key)
         if flag is None:
@@ -2500,7 +2919,7 @@ class AIInterviewService:
         return "llm_assist"
 
     def _load_or_init_runtime_state(self, *, session_id: str, question_pack: dict) -> dict:
-        """加载会话运行态，不存在则初始化。"""
+        """鍔犺浇浼氳瘽杩愯鎬侊紝涓嶅瓨鍦ㄥ垯鍒濆鍖栥€?"""
         current = self._runtime_store.get_session_state(session_id=session_id)
         if current:
             return current
@@ -2512,8 +2931,138 @@ class AIInterviewService:
         )
         return initial
 
+    def _reset_runtime_state_for_start(self, *, session_id: str, question_pack: dict) -> dict:
+        """Force a clean runtime state for every newly started interview session."""
+
+        initial = self._question_flow_engine.init_state(question_pack=question_pack)
+        self._runtime_store.init_session_state(
+            session_id=session_id,
+            state=initial,
+            ttl_seconds=int(self._settings.ai_interview_state_ttl_seconds),
+        )
+        return initial
+
+    def _refresh_runtime_question_pack_for_start(self, *, session_id: str) -> dict | None:
+        """Hydrate the latest session-scoped question pack into runtime store before start."""
+
+        latest = self._session_repository.get_latest_question_set(session_id)
+        if latest is not None:
+            questions = [item for item in (latest.questions_json or []) if isinstance(item, dict)]
+            question_pack = {
+                "session_id": session_id,
+                "version": int(latest.version),
+                "source": str(latest.source or "session_latest"),
+                "question_count": len(questions),
+                "questions": questions,
+            }
+            self._runtime_store.save_question_pack(
+                session_id=session_id,
+                version=int(latest.version),
+                question_pack=question_pack,
+                ttl_seconds=int(self._settings.ai_interview_question_pack_ttl_seconds),
+            )
+            logger.info(
+                "ai_interview.question_pack_refreshed_for_start session_id=%s version=%s source=%s question_count=%s question_ids=%s",
+                session_id,
+                question_pack.get("version"),
+                question_pack.get("source"),
+                question_pack.get("question_count"),
+                self._summarize_question_ids(question_pack),
+            )
+            return question_pack
+        logger.warning("ai_interview.question_pack_missing_for_start session_id=%s", session_id)
+        return self._runtime_store.get_question_pack(session_id=session_id)
+
+    def _ensure_runtime_question_pack_for_start(self, *, session_id: str) -> dict | None:
+        """Ensure every started session has a session-scoped question pack."""
+
+        question_pack = self._refresh_runtime_question_pack_for_start(session_id=session_id)
+        if question_pack and question_pack.get("questions"):
+            return question_pack
+
+        session_entity = self._session_repository.get(session_id)
+        candidate = self._candidate_repository.get(session_entity.candidate_id)
+        job = self._job_repository.get(session_entity.job_id)
+        question_count = max(1, int((session_entity.payload or {}).get("question_count") or 14))
+        questions, generation_mode = self._generate_questions_with_fallback(
+            session_id=session_id,
+            job_title=job.title or "",
+            resume_text=candidate.resume_text or "",
+            job_requirements=job.requirements or "",
+            skills=(candidate.raw_profile or {}).get("skills", []),
+            question_count=question_count,
+            language=session_entity.language,
+        )
+        if not questions:
+            logger.warning("ai_interview.question_pack_auto_generate_empty session_id=%s", session_id)
+            return None
+
+        version = self._session_repository.get_latest_question_set_version(session_id) + 1
+        source = generation_mode
+        self._session_repository.create_question_set(
+            session_id=session_id,
+            version=version,
+            source=source,
+            questions=questions,
+        )
+        question_pack = normalize_question_pack(
+            {
+                "session_id": session_id,
+                "version": version,
+                "source": source,
+                "language": session_entity.language,
+                "questions": questions,
+            }
+        )
+        self._runtime_store.save_question_pack(
+            session_id=session_id,
+            version=version,
+            question_pack=question_pack,
+            ttl_seconds=int(self._settings.ai_interview_question_pack_ttl_seconds),
+        )
+        logger.info(
+            "ai_interview.question_pack_auto_generated_for_start session_id=%s version=%s source=%s generation_mode=%s question_count=%s question_ids=%s",
+            session_id,
+            version,
+            source,
+            generation_mode,
+            question_pack.get("question_count"),
+            self._summarize_question_ids(question_pack),
+        )
+        return question_pack
+
+    def _log_runtime_start_snapshot(self, *, session_id: str, question_pack: dict) -> None:
+        """Emit a startup snapshot for runtime pack/state verification."""
+
+        state = self._runtime_store.get_session_state(session_id=session_id) or {}
+        logger.info(
+            "ai_interview.start_runtime_ready session_id=%s question_pack_version=%s question_pack_source=%s "
+            "question_count=%s state_stage=%s active_question_index=%s current_question_id=%s question_ids=%s",
+            session_id,
+            question_pack.get("version"),
+            question_pack.get("source"),
+            question_pack.get("question_count"),
+            state.get("interview_stage"),
+            state.get("active_question_index"),
+            state.get("current_question_id"),
+            self._summarize_question_ids(question_pack),
+        )
+
+    @staticmethod
+    def _summarize_question_ids(question_pack: dict[str, object] | None) -> str:
+        questions = question_pack.get("questions", []) if isinstance(question_pack, dict) else []
+        question_ids: list[str] = []
+        if isinstance(questions, list):
+            for item in questions[:16]:
+                if not isinstance(item, dict):
+                    continue
+                identifier = str(item.get("idx") or item.get("question_id") or item.get("id") or "").strip()
+                if identifier:
+                    question_ids.append(identifier)
+        return ",".join(question_ids)
+
     def _get_active_question_context(self, *, session_id: str) -> dict | None:
-        """读取当前活动题目上下文。"""
+        """璇诲彇褰撳墠娲诲姩棰樼洰涓婁笅鏂囥€?"""
         question_pack = self._runtime_store.get_question_pack(session_id=session_id)
         if not question_pack:
             return None
@@ -2523,17 +3072,18 @@ class AIInterviewService:
         return self._question_flow_engine.current_question(state=state, question_pack=question_pack)
 
     def _advance_stage_by_question_flow(self, *, session_id: str, state: dict) -> str:
-        """根据题流状态推进阶段。"""
-        stage = self._question_flow_engine.derive_stage(state=state)
+        """鏍规嵁棰樻祦鐘舵€佹帹杩涢樁娈点€?"""
+        question_pack = self._runtime_store.get_question_pack(session_id=session_id) or {}
+        stage = self._question_flow_engine.derive_stage(state=state, question_pack=question_pack)
         current = self._session_repository.get(session_id)
         self._session_repository.update_status(
             session_id,
             status=current.status,
-            payload_patch={"interview_stage": stage},
+            payload_patch={PayloadKey.INTERVIEW_STAGE: stage},
         )
         self._runtime_store.patch_session_state(
             session_id=session_id,
-            patch={"interview_stage": stage},
+            patch={PayloadKey.INTERVIEW_STAGE: stage},
             ttl_seconds=int(self._settings.ai_interview_state_ttl_seconds),
         )
         return stage
@@ -2546,16 +3096,18 @@ class AIInterviewService:
         confidence: float | None,
         question_pack: dict,
     ) -> dict:
-        """基于本轮回答更新题流状态。"""
+        """鍩轰簬鏈疆鍥炵瓟鏇存柊棰樻祦鐘舵€併€?"""
         state = self._load_or_init_runtime_state(session_id=session_id, question_pack=question_pack)
-        evaluation = self._question_flow_engine.evaluate_answer(transcript=transcript, confidence=confidence)
-        updated = self._question_flow_engine.apply_turn_result(
+        decision = self._runtime_engine.process_candidate_turn(
             state=state,
-            evaluation=evaluation,
-            max_followup_per_question=2,
+            question_pack=question_pack,
+            transcript=transcript,
+            confidence=confidence,
         )
-        updated_stage = self._question_flow_engine.derive_stage(state=updated)
-        updated["interview_stage"] = updated_stage
+        evaluation = decision.evaluation
+        updated = dict(decision.updated_state)
+        updated_stage = self._question_flow_engine.derive_stage(state=updated, question_pack=question_pack)
+        updated[PayloadKey.INTERVIEW_STAGE] = updated_stage
         questions = question_pack.get("questions", []) if isinstance(question_pack, dict) else []
         total_questions = len(questions) if isinstance(questions, list) else int(question_pack.get("question_count") or 0)
         completed_questions = max(0, int(updated.get("completed_questions", 0)))
@@ -2574,7 +3126,7 @@ class AIInterviewService:
             session_id,
             status=current.status,
             payload_patch={
-                "interview_stage": updated_stage,
+                PayloadKey.INTERVIEW_STAGE: updated_stage,
                 "question_count": total_questions,
                 "question_completion_rate": completion_rate,
                 "question_flow": {
@@ -2588,12 +3140,12 @@ class AIInterviewService:
         return {
             "need_followup": bool(evaluation.get("need_followup")),
             "reason": str(evaluation.get("reason") or ""),
-            "interview_stage": updated_stage,
+            PayloadKey.INTERVIEW_STAGE: updated_stage,
             "question_completion_rate": completion_rate,
         }
 
     def _attach_prebuilt_question_pack(self, *, session_id: str) -> dict[str, object]:
-        """在会话启动阶段尝试装载预生成题包。"""
+        """鍦ㄤ細璇濆惎鍔ㄩ樁娈靛皾璇曡杞介鐢熸垚棰樺寘銆?"""
         try:
             session_entity = self._session_repository.get(session_id)
             candidate = self._candidate_repository.get(session_entity.candidate_id)
@@ -2649,14 +3201,14 @@ class AIInterviewService:
             return {"prebuilt_pack_hit": False}
 
     def _build_prebuild_cache_key(self, *, job_id: str, candidate_id: str, language: str, resume_hash: str) -> str:
-        """构建预生成题包 key。"""
+        """鏋勫缓棰勭敓鎴愰鍖?key銆?"""
         normalized_lang = (language or "zh-CN").strip()
         normalized_hash = (resume_hash or "").strip()[:16]
         return f"{job_id}:{candidate_id}:{normalized_lang}:{normalized_hash}"
 
     @staticmethod
     def _compute_prebuild_resume_hash(*, resume_text: str, job_requirements: str, skills: list[str]) -> str:
-        """计算预生成题包内容哈希。"""
+        """璁＄畻棰勭敓鎴愰鍖呭唴瀹瑰搱甯屻€?"""
         material = {
             "resume_text": (resume_text or "")[:4000],
             "job_requirements": (job_requirements or "")[:1200],
@@ -2712,30 +3264,37 @@ class AIInterviewService:
     @staticmethod
     def _normalize_stage_code(raw_stage: str, dimension: str = "") -> str:
         stage = str(raw_stage or "").strip().upper()
-        if stage in {"S2", "S3", "S4", "S5", "S6", "S7"}:
+        if stage in {
+            InterviewStage.SELF_INTRO,
+            InterviewStage.TECH_STACK,
+            InterviewStage.PROJECT_DEEP_DIVE,
+            InterviewStage.JD_MATCH,
+            InterviewStage.GENERAL_PROBE,
+            InterviewStage.COMPANY_QA,
+        }:
             return stage
 
         hint = f"{raw_stage} {dimension}".lower()
         if any(
             token in hint
-            for token in ("自我介绍", "沟通", "经历概述", "intro", "self_intro", "introduction")
+            for token in ("自我介绍", "候选人画像", "经历概述", "intro", "self_intro", "introduction")
         ):
-            return "S2"
+            return InterviewStage.SELF_INTRO
         if any(
             token in hint
-            for token in ("项目深挖", "项目经验", "ownership", "模块", "挑战", "project", "tradeoff")
+            for token in ("椤圭洰娣辨寲", "椤圭洰缁忛獙", "ownership", "妯″潡", "鎸戞垬", "project", "tradeoff")
         ):
-            return "S4"
-        if any(token in hint for token in ("实习", "职责", "协作", "intern", "experience_validation")):
-            return "S5"
+            return InterviewStage.PROJECT_DEEP_DIVE
+        if any(token in hint for token in ("瀹炰範", "鑱岃矗", "鍗忎綔", "intern", "experience_validation")):
+            return InterviewStage.JD_MATCH
         if any(
             token in hint
-            for token in ("系统设计", "排查", "性能", "故障", "system", "troubleshooting", "capability_probe")
+            for token in ("绯荤粺璁捐", "鎺掓煡", "鎬ц兘", "鏁呴殰", "system", "troubleshooting", "capability_probe")
         ):
-            return "S6"
-        if any(token in hint for token in ("反问", "团队", "公司介绍", "qa", "company_qa")):
-            return "S7"
-        return "S3"
+            return InterviewStage.GENERAL_PROBE
+        if any(token in hint for token in ("鍙嶉棶", "鍥㈤槦", "鍏徃浠嬬粛", "qa", "company_qa")):
+            return InterviewStage.COMPANY_QA
+        return InterviewStage.TECH_STACK
 
     @staticmethod
     def _repair_question_text(question: str, *, dimension: str, language: str = "zh-CN") -> str:
@@ -2751,55 +3310,34 @@ class AIInterviewService:
             "哪块",
             "哪个",
             "有没有",
-            "能否",
-            "能不能",
-            "介绍",
-            "聊聊",
-            "说说",
             "举例",
             "结合",
             "什么",
         )
         if text.endswith(("？", "?")) and not any(token in text for token in interrogatives):
-            stem = text.rstrip("？?").rstrip("。")
+            stem = text.rstrip("？").rstrip("。")
             if stem.startswith(("你提到", "你说", "你简历里写了", "你简历里提到", "你对", "你熟悉", "你做过", "岗位要求")):
                 return f"{stem}，能具体说说吗？"
         if len(text) < 14 and text.endswith(("？", "?")):
-            stem = text.rstrip("？?").rstrip("。")
+            stem = text.rstrip("？").rstrip("。")
             return f"{stem}，具体是怎么做的？"
         return text
 
     @staticmethod
     def _normalize_question_item(item: dict | object) -> dict | None:
-        if not isinstance(item, dict):
+        normalized = normalize_question_item(item)
+        if normalized is None:
             return None
-        dimension = str(item.get("dimension") or "communication").strip() or "communication"
-        stage = AIInterviewService._normalize_stage_code(str(item.get("stage") or ""), dimension)
-        question = AIInterviewService._shorten_question_text(str(item.get("question") or "").strip())
-        question = AIInterviewService._repair_question_text(question, dimension=dimension, language="zh-CN")
+        question = AIInterviewService._shorten_question_text(str(normalized.get("question") or "").strip())
+        question = AIInterviewService._repair_question_text(
+            question,
+            dimension=str(normalized.get("dimension") or "communication"),
+            language="zh-CN",
+        )
         if not question:
             return None
-        try:
-            max_followups = int(item.get("max_followups") or 2)
-        except (TypeError, ValueError):
-            max_followups = 2
-        return {
-            "question": question,
-            "dimension": dimension,
-            "expected_signal": str(item.get("expected_signal") or "").strip(),
-            "followup_condition": str(item.get("followup_condition") or "").strip(),
-            "stage": stage,
-            "max_followups": max(1, min(3, max_followups)),
-            "success_signals": [
-                str(value).strip()
-                for value in (
-                    item.get("success_signals")
-                    if isinstance(item.get("success_signals"), list)
-                    else [item.get("success_signals")] if item.get("success_signals") else []
-                )
-                if str(value).strip()
-            ],
-        }
+        normalized["question"] = question
+        return normalized
 
     @staticmethod
     def _extract_keyword_tokens(*, skills: list[str], job_requirements: str, resume_text: str, language: str) -> set[str]:
@@ -2816,7 +3354,9 @@ class AIInterviewService:
 
     def _score_question_item(self, *, question: dict, source: str, keyword_tokens: set[str], language: str) -> int:
         text = f"{question.get('question', '')} {question.get('expected_signal', '')} {question.get('followup_condition', '')}".lower()
-        base = 58 if source == "llm" else 48
+        base = 70 if source == "llm" else 48
+        if source == "seed":
+            base += 15 # 绉嶅瓙棰樺叿鏈夐珮浼樺厛绾?
         if question.get("expected_signal"):
             base += 8
         if question.get("followup_condition"):
@@ -2842,12 +3382,99 @@ class AIInterviewService:
     def _stage_quota_plan(question_count: int) -> dict[str, int]:
         total = max(1, int(question_count or 0))
         if total >= 14:
-            return {"S2": 1, "S3": 8, "S4": 2, "S5": 1, "S6": 1, "S7": 1}
+            return {
+                InterviewStage.SELF_INTRO: 1,
+                InterviewStage.TECH_STACK: 8,
+                InterviewStage.PROJECT_DEEP_DIVE: 2,
+                InterviewStage.JD_MATCH: 1,
+                InterviewStage.GENERAL_PROBE: 1,
+                InterviewStage.COMPANY_QA: 1,
+            }
         if total >= 12:
-            return {"S2": 1, "S3": 7, "S4": 1, "S5": 1, "S6": 1, "S7": 1}
+            return {
+                InterviewStage.SELF_INTRO: 1,
+                InterviewStage.TECH_STACK: 7,
+                InterviewStage.PROJECT_DEEP_DIVE: 1,
+                InterviewStage.JD_MATCH: 1,
+                InterviewStage.GENERAL_PROBE: 1,
+                InterviewStage.COMPANY_QA: 1,
+            }
         if total >= 10:
-            return {"S2": 1, "S3": 6, "S4": 1, "S5": 1, "S6": 1}
-        return {"S2": 1, "S3": max(1, total - 3), "S4": 1, "S6": 1}
+            return {
+                InterviewStage.SELF_INTRO: 1,
+                InterviewStage.TECH_STACK: 6,
+                InterviewStage.PROJECT_DEEP_DIVE: 1,
+                InterviewStage.JD_MATCH: 1,
+                InterviewStage.GENERAL_PROBE: 1,
+            }
+        return {
+            InterviewStage.SELF_INTRO: 1,
+            InterviewStage.TECH_STACK: max(1, total - 3),
+            InterviewStage.PROJECT_DEEP_DIVE: 1,
+            InterviewStage.GENERAL_PROBE: 1,
+        }
+
+    @staticmethod
+    def _question_bucket(question: dict) -> str:
+        bucket = str(question.get("bucket") or "").strip().lower()
+        if bucket in {"profile", "stack", "scenario", "experience", "wrap_up"}:
+            return bucket
+        stage = str(question.get("stage") or InterviewStage.TECH_STACK).strip()
+        dimension = str(question.get("dimension") or "").strip().lower()
+        if stage == InterviewStage.SELF_INTRO:
+            return "profile"
+        if stage in {InterviewStage.COMPANY_QA, InterviewStage.CLOSING}:
+            return "wrap_up"
+        if stage == InterviewStage.PROJECT_DEEP_DIVE or dimension in {
+            "performance_troubleshooting",
+            "system_design",
+            "scenario_design",
+        }:
+            return "scenario"
+        if stage == InterviewStage.JD_MATCH or dimension in {
+            "focus_experience",
+            "experience_validation",
+            "jd_match",
+            "jd_match_case",
+            "jd_readiness",
+            "jd_gap_analysis",
+            "project_deep_dive",
+            "project_tradeoff",
+            "internship_experience",
+            "project_experience",
+        }:
+            return "experience"
+        return "stack"
+
+    @staticmethod
+    def _technical_bucket_plan(question_count: int) -> dict[str, dict[str, int]]:
+        total = max(1, int(question_count or 0))
+        if total >= 12:
+            scenario_target = 3
+            stack_target = min(8, max(5, total - scenario_target - 5))
+            experience_target = max(3, total - scenario_target - stack_target)
+            return {
+                "stack": {"min": 5, "target": stack_target, "max": 8},
+                "scenario": {"min": 3, "target": scenario_target, "max": 3},
+                "experience": {"min": 3, "target": min(5, experience_target), "max": 5},
+            }
+        if total >= 9:
+            scenario_target = 3
+            stack_target = max(4, total - scenario_target - 3)
+            experience_target = max(2, total - scenario_target - stack_target)
+            return {
+                "stack": {"min": 4, "target": min(6, stack_target), "max": 7},
+                "scenario": {"min": 3, "target": 3, "max": 3},
+                "experience": {"min": 2, "target": min(4, experience_target), "max": 4},
+            }
+        scenario_target = min(2, max(1, total // 3))
+        stack_target = max(1, total - scenario_target - 1)
+        experience_target = max(1, total - scenario_target - stack_target)
+        return {
+            "stack": {"min": 1, "target": stack_target, "max": max(1, total - scenario_target)},
+            "scenario": {"min": scenario_target, "target": scenario_target, "max": scenario_target},
+            "experience": {"min": 1, "target": experience_target, "max": max(1, total - stack_target - scenario_target)},
+        }
 
     def _build_stage_seed_questions(
         self,
@@ -2856,26 +3483,26 @@ class AIInterviewService:
         skills: list[str],
         language: str,
     ) -> list[dict]:
-        primary_skill = next((str(item).strip() for item in (skills or []) if str(item).strip()), "核心技术")
+        primary_skill = next((str(item).strip() for item in (skills or []) if str(item).strip()), "核心技能")
         job_hint = (job_requirements or "").strip()[:80] or "岗位要求"
         if language == "en-US":
             primary_skill = primary_skill or "core skill"
             job_hint = (job_requirements or "").strip()[:80] or "job requirements"
             return [
-                {"stage": "S2", "question": "Please give me a short self-introduction, focusing on your recent project and role.", "dimension": "self_intro", "expected_signal": "Recent experience, role, and main project", "followup_condition": "Follow up if the introduction is scattered", "max_followups": 1, "success_signals": ["recent experience", "role", "main project"]},
-                {"stage": "S4", "question": f"In the project where you used {primary_skill} most deeply, what was the hardest part you handled yourself?", "dimension": "project_deep_dive", "expected_signal": "Personal ownership, technical challenge, handling approach", "followup_condition": "Follow up if ownership is unclear", "max_followups": 2, "success_signals": ["personal ownership", "technical challenge", "handling approach"]},
-                {"stage": "S4", "question": "Which design choice in that project needed the most trade-off, and why?", "dimension": "project_tradeoff", "expected_signal": "Trade-off thinking, constraints, design rationale", "followup_condition": "Follow up if trade-offs are missing", "max_followups": 2, "success_signals": ["trade-off", "constraints", "design rationale"]},
-                {"stage": "S5", "question": "Looking at your collaboration or internship-like experience, what did you really own end to end?", "dimension": "experience_validation", "expected_signal": "Actual ownership, delivery depth, collaboration boundary", "followup_condition": "Follow up if the answer stays at team level", "max_followups": 2, "success_signals": ["actual ownership", "delivery depth", "collaboration boundary"]},
-                {"stage": "S6", "question": "If one of your services suddenly slows down online, what troubleshooting order would you follow?", "dimension": "capability_probe", "expected_signal": "Troubleshooting path, metrics awareness, diagnosis order", "followup_condition": "Follow up if there are no concrete steps", "max_followups": 2, "success_signals": ["troubleshooting path", "metrics awareness", "diagnosis order"]},
-                {"stage": "S7", "question": "After the technical part, what would you most want to know about this role or team?", "dimension": "company_qa", "expected_signal": "Candidate concern, role understanding focus", "followup_condition": "No follow-up unless unclear", "max_followups": 1, "success_signals": ["candidate concern", "role understanding focus"]},
+                {"stage": InterviewStage.SELF_INTRO, "question": "Please give me a short self-introduction, focusing on your recent project and role.", "dimension": "self_intro", "expected_signal": "Recent experience, role, and main project", "followup_condition": "Follow up if the introduction is scattered", "max_followups": 1, "success_signals": ["recent experience", "role", "main project"]},
+                {"stage": InterviewStage.PROJECT_DEEP_DIVE, "question": f"In the project where you used {primary_skill} most deeply, what was the hardest part you handled yourself?", "dimension": "project_deep_dive", "expected_signal": "Personal ownership, technical challenge, handling approach", "followup_condition": "Follow up if ownership is unclear", "max_followups": 2, "success_signals": ["personal ownership", "technical challenge", "handling approach"]},
+                {"stage": InterviewStage.PROJECT_DEEP_DIVE, "question": "Which design choice in that project needed the most trade-off, and why?", "dimension": "project_tradeoff", "expected_signal": "Trade-off thinking, constraints, design rationale", "followup_condition": "Follow up if trade-offs are missing", "max_followups": 2, "success_signals": ["trade-off", "constraints", "design rationale"]},
+                {"stage": InterviewStage.JD_MATCH, "question": "Looking at your collaboration or internship-like experience, what did you really own end to end?", "dimension": "experience_validation", "expected_signal": "Actual ownership, delivery depth, collaboration boundary", "followup_condition": "Follow up if the answer stays at team level", "max_followups": 2, "success_signals": ["actual ownership", "delivery depth", "collaboration boundary"]},
+                {"stage": InterviewStage.GENERAL_PROBE, "question": "If one of your services suddenly slows down online, what troubleshooting order would you follow?", "dimension": "capability_probe", "expected_signal": "Troubleshooting path, metrics awareness, diagnosis order", "followup_condition": "Follow up if there are no concrete steps", "max_followups": 2, "success_signals": ["troubleshooting path", "metrics awareness", "diagnosis order"]},
+                {"stage": InterviewStage.COMPANY_QA, "question": "After the technical part, what would you most want to know about this role or team?", "dimension": "company_qa", "expected_signal": "Candidate concern, role understanding focus", "followup_condition": "No follow-up unless unclear", "max_followups": 1, "success_signals": ["candidate concern", "role understanding focus"]},
             ]
         return [
-            {"stage": "S2", "question": "先简单介绍一下你自己，重点说最近的项目和你的角色。", "dimension": "self_intro", "expected_signal": "最近经历、项目方向、角色定位", "followup_condition": "如果介绍发散，追问最近项目和核心职责", "max_followups": 1, "success_signals": ["最近经历", "项目方向", "角色定位"]},
-            {"stage": "S4", "question": f"你用 {primary_skill} 最深的那个项目里，最难的点是什么？你当时是怎么处理的？", "dimension": "project_deep_dive", "expected_signal": "个人职责、技术难点、处理方式", "followup_condition": "如果没有讲清本人做了什么，继续追问", "max_followups": 2, "success_signals": ["个人职责", "技术难点", "处理方式"]},
-            {"stage": "S4", "question": "那个项目里有没有哪个方案你们反复权衡过？最后为什么这么定？", "dimension": "project_tradeoff", "expected_signal": "取舍思路、约束条件、方案原因", "followup_condition": "如果没有说清取舍和约束，继续追问", "max_followups": 2, "success_signals": ["取舍思路", "约束条件", "方案原因"]},
-            {"stage": "S5", "question": "如果看实习或协作经历，你真正独立负责到交付的是哪一块？", "dimension": "experience_validation", "expected_signal": "真实负责范围、交付深度、协作边界", "followup_condition": "如果回答还停留在团队层面，继续追问", "max_followups": 2, "success_signals": ["真实负责范围", "交付深度", "协作边界"]},
-            {"stage": "S6", "question": "如果你负责的服务线上突然变慢了，你一般按什么顺序排查？", "dimension": "capability_probe", "expected_signal": "排查路径、指标意识、定位顺序", "followup_condition": "如果没有具体排查步骤，继续追问", "max_followups": 2, "success_signals": ["排查路径", "指标意识", "定位顺序"]},
-            {"stage": "S7", "question": f"技术部分聊完后，结合这个岗位“{job_hint}”，你最想了解我们哪一块？", "dimension": "company_qa", "expected_signal": "候选人关注点、岗位理解方向", "followup_condition": "除非候选人的问题不清楚，否则不继续追问", "max_followups": 1, "success_signals": ["候选人关注点", "岗位理解方向"]},
+            {"stage": InterviewStage.SELF_INTRO, "question": "先简单介绍一下你自己，重点说最近的项目和你的角色。", "dimension": "self_intro", "expected_signal": "最近经历、项目方向、角色定位", "followup_condition": "如果介绍发散，追问最近项目和核心职责", "max_followups": 1, "success_signals": ["最近经历", "项目方向", "角色定位"]},
+            {"stage": InterviewStage.PROJECT_DEEP_DIVE, "question": f"你用 {primary_skill} 最深的那个项目里，最难的点是什么？你当时是怎么处理的？", "dimension": "project_deep_dive", "expected_signal": "个人职责、技术难点、处理方式", "followup_condition": "如果没有讲清本人做了什么，继续追问", "max_followups": 2, "success_signals": ["个人职责", "技术难点", "处理方式"]},
+            {"stage": InterviewStage.PROJECT_DEEP_DIVE, "question": "那个项目里有没有哪个方案你们反复权衡过？最后为什么这么定？", "dimension": "project_tradeoff", "expected_signal": "取舍思路、约束条件、方案原因", "followup_condition": "如果没有说清取舍和约束，继续追问", "max_followups": 2, "success_signals": ["取舍思路", "约束条件", "方案原因"]},
+            {"stage": InterviewStage.JD_MATCH, "question": "如果看实习或协作经历，你真正独立负责到交付的是哪一块？", "dimension": "experience_validation", "expected_signal": "真实负责范围、交付深度、协作边界", "followup_condition": "如果回答还停留在团队层面，继续追问", "max_followups": 2, "success_signals": ["真实负责范围", "交付深度", "协作边界"]},
+            {"stage": InterviewStage.GENERAL_PROBE, "question": "如果你负责的服务线上突然变慢了，你一般按什么顺序排查？", "dimension": "capability_probe", "expected_signal": "排查路径、指标意识、定位顺序", "followup_condition": "如果没有具体排查步骤，继续追问", "max_followups": 2, "success_signals": ["排查路径", "指标意识", "定位顺序"]},
+            {"stage": InterviewStage.COMPANY_QA, "question": f"技术部分聊完后，结合这个岗位“{job_hint}”，你最想了解我们哪一块？", "dimension": "company_qa", "expected_signal": "候选人关注点、岗位理解方向", "followup_condition": "除非候选人的问题不清楚，否则不继续追问", "max_followups": 1, "success_signals": ["候选人关注点", "岗位理解方向"]},
         ]
 
     def _merge_question_candidates(
@@ -2941,88 +3568,119 @@ class AIInterviewService:
             reverse=True,
         )
 
-        quota_plan = self._stage_quota_plan(question_count)
+        bucket_plan = self._technical_bucket_plan(question_count)
+        bucket_order = ("stack", "scenario", "experience")
         picked: list[dict] = []
         seen_questions: set[str] = set()
-        seen_dimensions_by_stage: dict[str, set[str]] = {}
+        seen_dimensions_by_bucket: dict[str, set[str]] = {}
+        seen_skills_by_bucket: dict[str, set[str]] = {}
+        bucket_counts = {bucket: 0 for bucket in bucket_order}
 
-        for stage_code, quota in quota_plan.items():
-            if quota <= 0:
-                continue
-            stage_picked = 0
+        def _bucket_items(bucket_name: str, *, seeds_only: bool | None = None) -> list[dict]:
+            filtered: list[dict] = []
             for item in ranked:
-                question = item["question"]
-                if str(question.get("stage") or "S3") != stage_code:
+                if self._question_bucket(item["question"]) != bucket_name:
                     continue
-                normalized_text = item["normalized_text"]
-                if normalized_text in seen_questions:
+                if seeds_only is True and item["source"] != "seed":
                     continue
-                stage_dims = seen_dimensions_by_stage.setdefault(stage_code, set())
-                dimension = str(question.get("dimension") or "communication").strip().lower()
-                if dimension and dimension in stage_dims and item["source"] != "seed":
+                if seeds_only is False and item["source"] == "seed":
                     continue
-                picked.append(question)
-                seen_questions.add(normalized_text)
-                if dimension:
-                    stage_dims.add(dimension)
-                stage_picked += 1
-                if stage_picked >= quota or len(picked) >= question_count:
-                    break
-            if len(picked) >= question_count:
-                return picked[:question_count]
+                filtered.append(item)
+            return filtered
 
-        stage_counts = {}
-        for question in picked:
-            code = str(question.get("stage") or "S3")
-            stage_counts[code] = stage_counts.get(code, 0) + 1
-
-        seed_ranked = [item for item in ranked if item["source"] == "seed"]
-        for stage_code, quota in quota_plan.items():
-            current_count = int(stage_counts.get(stage_code, 0))
-            if current_count >= quota:
-                continue
-            for item in seed_ranked:
-                question = item["question"]
-                if str(question.get("stage") or "S3") != stage_code:
-                    continue
-                normalized_text = item["normalized_text"]
-                if normalized_text in seen_questions:
-                    continue
-                picked.append(question)
-                seen_questions.add(normalized_text)
-                stage_counts[stage_code] = stage_counts.get(stage_code, 0) + 1
-                if len(picked) >= question_count or stage_counts[stage_code] >= quota:
-                    break
-            if len(picked) >= question_count:
-                return picked[:question_count]
-
-        for item in ranked:
+        def _try_pick(item: dict, bucket_name: str, *, enforce_diversity: bool) -> bool:
             question = item["question"]
             normalized_text = item["normalized_text"]
             if normalized_text in seen_questions:
-                continue
-            stage_code = str(question.get("stage") or "S3")
-            stage_dims = seen_dimensions_by_stage.setdefault(stage_code, set())
+                return False
             dimension = str(question.get("dimension") or "communication").strip().lower()
-            if dimension and dimension in stage_dims:
-                continue
+            target_skill = str(question.get("target_skill") or "").strip().lower()
+            bucket_dims = seen_dimensions_by_bucket.setdefault(bucket_name, set())
+            bucket_skills = seen_skills_by_bucket.setdefault(bucket_name, set())
+            if enforce_diversity:
+                if dimension and dimension in bucket_dims and item["source"] != "seed":
+                    return False
+                if target_skill and target_skill in bucket_skills and item["source"] != "seed":
+                    return False
             picked.append(question)
             seen_questions.add(normalized_text)
             if dimension:
-                stage_dims.add(dimension)
+                bucket_dims.add(dimension)
+            if target_skill:
+                bucket_skills.add(target_skill)
+            bucket_counts[bucket_name] = bucket_counts.get(bucket_name, 0) + 1
+            return True
+
+        for bucket_name in bucket_order:
+            minimum = int(bucket_plan.get(bucket_name, {}).get("min", 0))
+            for strict_mode in (True, False):
+                if bucket_counts[bucket_name] >= minimum:
+                    break
+                for item in _bucket_items(bucket_name, seeds_only=False):
+                    if _try_pick(item, bucket_name, enforce_diversity=strict_mode):
+                        if bucket_counts[bucket_name] >= minimum or len(picked) >= question_count:
+                            break
+                if len(picked) >= question_count:
+                    return picked[:question_count]
+            if bucket_counts[bucket_name] >= minimum:
+                continue
+            for item in _bucket_items(bucket_name, seeds_only=True):
+                if _try_pick(item, bucket_name, enforce_diversity=False):
+                    if bucket_counts[bucket_name] >= minimum or len(picked) >= question_count:
+                        break
             if len(picked) >= question_count:
-                return picked
+                return picked[:question_count]
+
+        for bucket_name in bucket_order:
+            target = int(bucket_plan.get(bucket_name, {}).get("target", bucket_counts.get(bucket_name, 0)))
+            maximum = int(bucket_plan.get(bucket_name, {}).get("max", target))
+            limit = min(maximum, max(target, bucket_counts.get(bucket_name, 0)))
+            for strict_mode in (True, False):
+                if bucket_counts[bucket_name] >= limit:
+                    break
+                for item in _bucket_items(bucket_name, seeds_only=None):
+                    if _try_pick(item, bucket_name, enforce_diversity=strict_mode):
+                        if bucket_counts[bucket_name] >= limit or len(picked) >= question_count:
+                            break
+                if len(picked) >= question_count:
+                    return picked[:question_count]
+
+        ordered: list[dict] = []
+        for bucket_name in bucket_order:
+            for question in picked:
+                if self._question_bucket(question) == bucket_name:
+                    ordered.append(question)
+
+        if len(ordered) >= question_count:
+            return ordered[:question_count]
 
         for item in ranked:
-            question = item["question"]
+            if len(ordered) >= question_count:
+                break
             normalized_text = item["normalized_text"]
             if normalized_text in seen_questions:
                 continue
-            picked.append(question)
-            seen_questions.add(normalized_text)
-            if len(picked) >= question_count:
+            question = item["question"]
+            bucket_name = self._question_bucket(question)
+            maximum = int(bucket_plan.get(bucket_name, {}).get("max", question_count))
+            if bucket_counts.get(bucket_name, 0) >= maximum and bucket_name in bucket_plan:
+                continue
+            if _try_pick(item, bucket_name, enforce_diversity=False):
+                ordered.append(question)
+
+        if len(ordered) >= question_count:
+            return ordered[:question_count]
+
+        for item in ranked:
+            if len(ordered) >= question_count:
                 break
-        return picked[:question_count]
+            normalized_text = item["normalized_text"]
+            if normalized_text in seen_questions:
+                continue
+            question = item["question"]
+            if _try_pick(item, self._question_bucket(question), enforce_diversity=False):
+                ordered.append(question)
+        return ordered[:question_count]
 
     def _resolve_prompt_template(self, *, task_key: str, default_version: str) -> PromptTemplate:
         """Resolve active runtime prompt template; fallback to bundled template library."""
@@ -3053,18 +3711,18 @@ class AIInterviewService:
         interview_stage: str,
         language: str,
     ) -> dict[str, str]:
-        """构建追问 Prompt 上下文。"""
+        """鏋勫缓杩介棶 Prompt 涓婁笅鏂囥€?"""
         compact_answer = " ".join((transcript or "").strip().split())[:320]
         active_question = self._get_active_question_context(session_id=session_id) or {}
-        current_question = str(active_question.get("question") or "请结合当前问题补充细节。").strip()
-        expected_signal = str(active_question.get("expected_signal") or "挖掘候选人陈述的项目细节、核心难点或技术决策背景").strip()
-        turns = self._session_repository.list_recent_turns(session_id, limit=4)
+        current_question = str(active_question.get("question") or FOLLOWUP_DEFAULT_QUESTION).strip()
+        expected_signal = str(active_question.get("expected_signal") or FOLLOWUP_DEFAULT_SIGNAL).strip()
+        turns = self._session_repository.list_recent_turns(session_id, limit=20)
         summaries: list[str] = []
         for item in turns:
             text = " ".join((item.transcript or "").strip().split())
             if not text:
                 continue
-            speaker = "候选人" if item.speaker == "candidate" else "AI"
+            speaker = FOLLOWUP_SPEAKER_CANDIDATE if item.speaker == SpeakerRole.CANDIDATE else FOLLOWUP_SPEAKER_AI
             summaries.append(f"{speaker}:{text[:240]}")
         # Handle next question preview for v4 natural transition
         next_q_text = ""
@@ -3073,10 +3731,10 @@ class AIInterviewService:
             q_pack = self._runtime_store.get_question_pack(session_id=session_id)
             if q_pack:
                 state = self._runtime_store.get_session_state(session_id=session_id)
-                current_idx = state.get("current_question_index", 0)
+                current_idx = state.get("active_question_index", 0)
                 if current_idx + 1 < len(q_pack):
                     next_q = q_pack[current_idx + 1]
-                    next_q_text = f"\n备选下一个正式问题：{next_q.get('question')}\n"
+                    next_q_text = f"\n澶囬€変笅涓€涓寮忛棶棰橈細{next_q.get('question')}\n"
         except Exception:
             pass
 
@@ -3086,9 +3744,10 @@ class AIInterviewService:
             "current_question": current_question,
             "expected_signal": expected_signal,
             "answer": compact_answer,
-            "last_turns_summary": " | ".join(summaries) if summaries else "无历史上下文",
+            "last_turns_summary": " | ".join(summaries) if summaries else "鏃犲巻鍙蹭笂涓嬫枃",
             "confidence": f"{confidence:.2f}" if confidence is not None else "",
             "next_question_section": next_q_text,
+            "stage_hint": "当前是 S2 暖场阶段，请保持简洁。如果候选人已提供基本背景，请尽快引导至技术深挖，避免重复确认职责。" if interview_stage == "S2" else "",
         }
 
     def _parse_track_sids_from_settings(self) -> list[str]:
@@ -3104,79 +3763,79 @@ class AIInterviewService:
         return [item.strip() for item in raw.split(",") if item.strip()]
 
     def _decide_interview_action(self, *, session_id: str, transcript: str, confidence: float | None) -> tuple[str, str, list[str]]:
-        """根据敏感和置信度策略决定继续、拦截或转人工。"""
+        """鏍规嵁鏁忔劅鍜岀疆淇″害绛栫暐鍐冲畾缁х画銆佹嫤鎴垨杞汉宸ャ€?"""
         runtime_mode = self._resolve_runtime_mode()
-        if runtime_mode == "rule_only":
-            return "auto_continue", "rule_only_mode", []
+        if runtime_mode == RuntimeMode.RULE_ONLY:
+            return InterviewAction.AUTO_CONTINUE, "rule_only_mode", []
 
         sensitive_keywords = ("身份证", "银行卡", "宗教", "种族", "违法")
         flags: list[str] = []
         for keyword in sensitive_keywords:
             if keyword in (transcript or ""):
-                flags.append(f"sensitive:{keyword}")
+                flags.append(build_sensitive_flag(keyword))
 
         if flags:
             self._session_repository.create_handoff(
                 session_id=session_id,
-                reason="sensitive_content",
+                reason=BlockReason.SENSITIVE_CONTENT,
                 trigger_flags=flags,
                 operator="system",
                 payload={"transcript": transcript[:200]},
             )
             self._session_repository.update_status(
                 session_id,
-                status="failed",
-                payload_patch={"blocked_reason": "sensitive_content", "blocked_flags": flags},
+                status=InterviewSessionStatus.FAILED,
+                payload_patch={PayloadKey.BLOCKED_REASON: BlockReason.SENSITIVE_CONTENT, PayloadKey.BLOCKED_FLAGS: flags},
             )
-            return "blocked", "sensitive_content", flags
+            return InterviewAction.BLOCKED, BlockReason.SENSITIVE_CONTENT, flags
 
         min_confidence = 0.60
         max_low_streak = 2
         session_entity = self._session_repository.get(session_id)
         session_payload = dict(session_entity.payload or {})
-        low_streak = int(session_payload.get("low_confidence_streak", 0))
+        low_streak = int(session_payload.get(PayloadKey.LOW_CONFIDENCE_STREAK, 0))
         if confidence is not None and confidence < min_confidence:
             low_streak += 1
-            flags.append("low_confidence")
+            flags.append(LOW_CONFIDENCE_FLAG)
             self._session_repository.update_status(
                 session_id,
                 status=session_entity.status,
-                payload_patch={"low_confidence_streak": low_streak},
+                payload_patch={PayloadKey.LOW_CONFIDENCE_STREAK: low_streak},
             )
             if low_streak >= max_low_streak:
                 self._session_repository.create_handoff(
                     session_id=session_id,
-                    reason="low_confidence_streak",
+                    reason=HandoffReason.LOW_CONFIDENCE_STREAK,
                     trigger_flags=flags,
                     operator="system",
                     payload={"confidence": confidence, "streak": low_streak},
                 )
                 self._session_repository.update_status(
                     session_id,
-                    status="failed",
-                    payload_patch={"handoff_reason": "low_confidence_streak", "low_confidence_streak": low_streak},
+                    status=InterviewSessionStatus.FAILED,
+                    payload_patch={PayloadKey.HANDOFF_REASON: HandoffReason.LOW_CONFIDENCE_STREAK, PayloadKey.LOW_CONFIDENCE_STREAK: low_streak},
                 )
-                return "handoff", "low_confidence_streak", flags
-            return "auto_continue", "low_confidence_but_within_threshold", flags
+                return InterviewAction.HANDOFF, HandoffReason.LOW_CONFIDENCE_STREAK, flags
+            return InterviewAction.AUTO_CONTINUE, "low_confidence_but_within_threshold", flags
 
         if low_streak != 0:
             self._session_repository.update_status(
                 session_id,
                 status=session_entity.status,
-                payload_patch={"low_confidence_streak": 0},
+                payload_patch={PayloadKey.LOW_CONFIDENCE_STREAK: 0},
             )
-        return "auto_continue", "confidence_passed", flags
+        return InterviewAction.AUTO_CONTINUE, "confidence_passed", flags
 
     def _advance_stage(self, session_id: str) -> str:
-        """BE-011：根据候选人回答轮次推进面试阶段，支持重入。"""
+        """BE-011锛氭牴鎹€欓€変汉鍥炵瓟杞鎺ㄨ繘闈㈣瘯闃舵锛屾敮鎸侀噸鍏ャ€?"""
         turns = self._session_repository.list_turns(session_id)
-        candidate_turn_count = len([item for item in turns if item.speaker == "candidate"])
+        candidate_turn_count = len([item for item in turns if item.speaker == SpeakerRole.CANDIDATE])
         if candidate_turn_count <= 2:
-            stage = "intro"
+            stage = InterviewStage.SELF_INTRO
         elif candidate_turn_count <= 5:
-            stage = "core"
+            stage = InterviewStage.TECH_STACK
         else:
-            stage = "deep_dive"
+            stage = InterviewStage.PROJECT_DEEP_DIVE
         current = self._session_repository.get(session_id)
         self._session_repository.update_status(
             session_id,
@@ -3194,8 +3853,8 @@ class AIInterviewService:
         language: str,
         action: str | None,
     ) -> str | None:
-        """BE-012：生成可解释追问内容，异常分支降级为空。"""
-        if action in {"handoff", "blocked"}:
+        """BE-012锛氱敓鎴愬彲瑙ｉ解釋杩介棶鍐呭锛屽紓甯稿垎鏀檷绾т负绌恒€?"""
+        if action in {InterviewAction.HANDOFF, InterviewAction.BLOCKED}:
             return None
         if confidence is not None and confidence < 0.60:
             if language == "en-US":
@@ -3203,10 +3862,9 @@ class AIInterviewService:
             return "请用一个具体案例补充你的回答，包含背景、行动与结果。"
         if len((transcript or "").strip()) < 18:
             if language == "en-US":
-                return f"We are in {interview_stage or 'core'} stage, please add more detail and measurable outcomes."
-            return f"当前处于 {interview_stage or 'core'} 阶段，请补充更多细节和量化结果。"
+                return f"We are in {interview_stage or InterviewStageGroup.CORE} stage, please add more detail and measurable outcomes."
+            return f"当前处于 {interview_stage or InterviewStageGroup.CORE} 阶段，请补充更多细节和量化结果。"
         return None
-
     def _build_questions(
         self,
         *,
@@ -3216,19 +3874,16 @@ class AIInterviewService:
         question_count: int,
         language: str,
     ) -> list[dict]:
-        """Build a stable fallback question pack with stronger S3 coverage."""
+        """Build a stable fallback question pack."""
 
         normalized_skills = [str(item).strip() for item in (skills or []) if str(item).strip()]
         if not normalized_skills:
             normalized_skills = ["Java", "Spring Boot", "MySQL", "Redis"]
 
-        middleware_keywords = (
-            "mysql", "postgres", "redis", "kafka", "rocketmq", "rabbitmq",
-            "es", "elasticsearch", "mongodb", "clickhouse",
-        )
+        middleware_keywords = ("mysql", "postgres", "redis", "kafka", "rocketmq", "rabbitmq", "es", "elasticsearch", "mongodb", "clickhouse")
         core_skills = normalized_skills[:2]
         while len(core_skills) < 2:
-            core_skills.append("?????" if language != "en-US" else "core stack")
+            core_skills.append("核心技术栈" if language != "en-US" else "core stack")
 
         middleware_skills = [
             skill for skill in normalized_skills
@@ -3240,342 +3895,90 @@ class AIInterviewService:
             if candidate not in middleware_skills and candidate not in core_skills:
                 middleware_skills.append(candidate)
 
+        supplemental_skills = [
+            skill for skill in normalized_skills
+            if skill not in core_skills and skill not in middleware_skills
+        ][:4]
+
         def _signals(*items: str) -> list[str]:
             return [item for item in items if item]
 
-        def _q(
-            *,
-            question: str,
-            dimension: str,
-            expected_signal: str,
-            followup_condition: str,
-            stage: str = "S3",
-            max_followups: int = 2,
-            success_signals: list[str] | None = None,
-        ) -> dict:
+        def _q(*, question: str, dimension: str, expected_signal: str, followup_condition: str, stage: str = InterviewStage.TECH_STACK, bucket: str = "", max_followups: int = 2, success_signals: list[str] | None = None, target_skill: str = "", source_evidence: str = "") -> dict:
             return {
                 "question": question,
                 "dimension": dimension,
                 "expected_signal": expected_signal,
                 "followup_condition": followup_condition,
                 "stage": stage,
+                "bucket": bucket,
                 "max_followups": max_followups,
                 "success_signals": success_signals or [],
+                "target_skill": target_skill,
+                "source_evidence": source_evidence,
             }
 
         question_bank: list[dict] = []
 
         for skill in core_skills[:2]:
             if language == "en-US":
-                question_bank.append(
-                    _q(
-                        question=f"You mentioned {skill} quite prominently in your resume. In which project did you use it most deeply, and what exactly were you responsible for?",
-                        dimension="core_stack_validation",
-                        expected_signal="Concrete ownership, real usage scenario, and project context",
-                        followup_condition="Follow up if the answer stays at the concept level or lacks personal ownership",
-                        success_signals=_signals("project context", "personal ownership", "real usage scenario"),
-                    )
-                )
+                question_bank.append(_q(question=f"You highlighted {skill} in your resume. In which project did you use it most deeply, and what exactly were you responsible for?", dimension="core_stack_validation", expected_signal="Project context, ownership, and depth of usage", followup_condition="Follow up if ownership or usage depth is unclear", bucket="stack", success_signals=_signals("project context", "ownership", "depth of usage"), target_skill=skill, source_evidence=f"resume_skill:{skill}"))
             else:
-                question_bank.append(
-                    _q(
-                        question=f"???? {skill} ????????????????????????????????",
-                        dimension="core_stack_validation",
-                        expected_signal="??????????????????",
-                        followup_condition="?????????????????????????",
-                        success_signals=_signals("????", "????", "??????"),
-                    )
-                )
+                question_bank.append(_q(question=f"你简历里重点写了 {skill}，它在哪个项目里用得最深？你当时具体负责了什么？", dimension="core_stack_validation", expected_signal="项目场景、个人职责、使用深度", followup_condition="如果没有讲清个人职责或真实使用深度，继续追问", bucket="stack", success_signals=_signals("项目场景", "个人职责", "使用深度"), target_skill=skill, source_evidence=f"resume_skill:{skill}"))
 
         for skill in middleware_skills[:2]:
             if language == "en-US":
-                question_bank.append(
-                    _q(
-                        question=f"In your real project work, where did {skill} fit into the architecture, and why did you choose it there?",
-                        dimension="middleware_usage",
-                        expected_signal="Architecture position, selection reason, and practical usage details",
-                        followup_condition="Follow up if the answer does not explain why this component was needed",
-                        success_signals=_signals("architecture position", "selection reason", "practical usage"),
-                    )
-                )
+                question_bank.append(_q(question=f"In your project, where did {skill} sit in the architecture, and why did you choose it there?", dimension="middleware_usage", expected_signal="Architecture position, selection reason, and practical usage", followup_condition="Follow up if the reason for using this component is vague", bucket="stack", success_signals=_signals("architecture position", "selection reason", "practical usage"), target_skill=skill, source_evidence=f"resume_skill:{skill}"))
             else:
-                question_bank.append(
-                    _q(
-                        question=f"?????????{skill} ?????????????????????",
-                        dimension="middleware_usage",
-                        expected_signal="??????????????",
-                        followup_condition="??????????????????????",
-                        success_signals=_signals("????", "????", "????"),
-                    )
-                )
+                question_bank.append(_q(question=f"在你的真实项目里，{skill} 主要放在系统的哪个位置？你们为什么要在那一层用它？", dimension="middleware_usage", expected_signal="架构位置、选型原因、实际使用方式", followup_condition="如果没有说明为什么要用它，继续追问", bucket="stack", success_signals=_signals("架构位置", "选型原因", "实际使用方式"), target_skill=skill, source_evidence=f"resume_skill:{skill}"))
+
+        for skill in supplemental_skills:
+            if language == "en-US":
+                question_bank.append(_q(question=f"For {skill}, what concrete problem did it help you solve in a real project, and how did you verify the effect afterward?", dimension="stack_verification", expected_signal="Real usage context, solved problem, and verification", followup_condition="Follow up if the answer lacks project evidence", bucket="stack", success_signals=_signals("real usage context", "solved problem", "verification"), target_skill=skill, source_evidence=f"resume_skill:{skill}"))
+            else:
+                question_bank.append(_q(question=f"回到你简历里的 {skill}，它在真实项目里主要帮你解决了什么问题？你后面是怎么验证效果的？", dimension="stack_verification", expected_signal="真实使用场景、解决的问题、验证方式", followup_condition="如果没有结合项目证据，继续追问", bucket="stack", success_signals=_signals("真实使用场景", "解决的问题", "验证方式"), target_skill=skill, source_evidence=f"resume_skill:{skill}"))
 
         if language == "en-US":
-            question_bank.extend(
-                [
-                    _q(
-                        question="If the system latency suddenly rises after a release, what signals would you look at first, and how would you narrow it down?",
-                        dimension="performance_troubleshooting",
-                        expected_signal="Monitoring awareness, narrowing-down path, and diagnosis order",
-                        followup_condition="Follow up if the answer lacks concrete troubleshooting steps",
-                        success_signals=_signals("monitoring signals", "diagnosis order", "troubleshooting path"),
-                    ),
-                    _q(
-                        question="Pick one design choice in your recent project that affected performance or stability. Why did you settle on that option?",
-                        dimension="system_design",
-                        expected_signal="Trade-off thinking, system constraints, and design rationale",
-                        followup_condition="Follow up if the answer has no trade-off or no practical constraint",
-                        success_signals=_signals("trade-off", "constraints", "design rationale"),
-                    ),
-                ]
-            )
+            question_bank.extend([
+                _q(question="If the system latency suddenly rises after a release, what signals would you look at first, and how would you narrow it down?", dimension="performance_troubleshooting", expected_signal="Monitoring signals, diagnosis order, troubleshooting path", followup_condition="Follow up if there are no concrete troubleshooting steps", stage=InterviewStage.PROJECT_DEEP_DIVE, bucket="scenario", success_signals=_signals("monitoring signals", "diagnosis order", "troubleshooting path")),
+                _q(question="Pick one design choice in your recent project that affected performance or stability. Why did you settle on that option?", dimension="system_design", expected_signal="Trade-off, constraints, design rationale", followup_condition="Follow up if the trade-off is unclear", stage=InterviewStage.PROJECT_DEEP_DIVE, bucket="scenario", success_signals=_signals("trade-off", "constraints", "design rationale")),
+                _q(question="Suppose a core interface suddenly faces traffic several times higher than usual. How would you protect availability and avoid cascading failures?", dimension="scenario_design", expected_signal="Capacity protection, degradation strategy, stability thinking", followup_condition="Follow up if there are no concrete fallback measures", stage=InterviewStage.PROJECT_DEEP_DIVE, bucket="scenario", success_signals=_signals("capacity protection", "degradation strategy", "stability thinking")),
+            ])
         else:
-            question_bank.extend(
-                [
-                    _q(
-                        question="????????????????????????????????????",
-                        dimension="performance_troubleshooting",
-                        expected_signal="??????????????",
-                        followup_condition="????????????????",
-                        success_signals=_signals("????", "????", "????"),
-                    ),
-                    _q(
-                        question="?????????????????????????????????????????",
-                        dimension="system_design",
-                        expected_signal="??????????????",
-                        followup_condition="?????????????????",
-                        success_signals=_signals("????", "????", "????"),
-                    ),
-                ]
-            )
+            question_bank.extend([
+                _q(question="如果一次发布之后系统延迟突然升高了，你会先看哪些信号？再怎么一步步缩小排查范围？", dimension="performance_troubleshooting", expected_signal="监控信号、定位顺序、排查路径", followup_condition="如果没有具体排查步骤，继续追问", stage=InterviewStage.PROJECT_DEEP_DIVE, bucket="scenario", success_signals=_signals("监控信号", "定位顺序", "排查路径")),
+                _q(question="结合你最近的项目，挑一个明显影响性能或稳定性的设计选择，说说你们为什么最后这么定。", dimension="system_design", expected_signal="取舍思路、系统约束、设计依据", followup_condition="如果没有说明取舍和约束，继续追问", stage=InterviewStage.PROJECT_DEEP_DIVE, bucket="scenario", success_signals=_signals("取舍思路", "系统约束", "设计依据")),
+                _q(question="假设你负责的核心接口流量突然涨到平时的好几倍，你会怎么做才能先保住可用性，避免整个系统被拖垮？", dimension="scenario_design", expected_signal="容量保护、降级策略、稳定性思路", followup_condition="如果没有具体保护动作或兜底方案，继续追问", stage=InterviewStage.PROJECT_DEEP_DIVE, bucket="scenario", success_signals=_signals("容量保护", "降级策略", "稳定性思路")),
+            ])
 
-        job_hint = job_requirements[:120] if job_requirements else ("role requirements" if language == "en-US" else "????")
+        job_hint = job_requirements[:120] if job_requirements else ("role requirements" if language == "en-US" else "岗位要求")
         if language == "en-US":
-            question_bank.extend(
-                [
-                    _q(
-                        question=f"From the requirement '{job_hint}', which part matches your past experience most directly? Walk me through a concrete case.",
-                        dimension="jd_match_case",
-                        expected_signal="Direct mapping from JD to real experience",
-                        followup_condition="Follow up if the mapping is broad but not evidence-based",
-                        success_signals=_signals("JD mapping", "concrete case", "evidence"),
-                    ),
-                    _q(
-                        question="Which requirement in this role would you be most ready to pick up immediately, and what experience gives you that confidence?",
-                        dimension="jd_readiness",
-                        expected_signal="Readiness judgment tied to real delivery experience",
-                        followup_condition="Follow up if confidence is not backed by actual work",
-                        success_signals=_signals("readiness judgment", "delivery experience"),
-                    ),
-                    _q(
-                        question="Which requirement in this JD is less familiar to you, and how would you close that gap after joining?",
-                        dimension="jd_gap_analysis",
-                        expected_signal="Self-awareness, learning plan, and realistic gap assessment",
-                        followup_condition="Follow up if the answer avoids the gap or lacks a concrete plan",
-                        success_signals=_signals("gap awareness", "learning plan", "realistic assessment"),
-                    ),
-                ]
-            )
+            question_bank.extend([
+                _q(question=f"From the requirement '{job_hint}', which part matches your past experience most directly? Walk me through a concrete case.", dimension="jd_match_case", expected_signal="JD mapping, concrete case, evidence", followup_condition="Follow up if the answer is broad but not evidence-based", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("JD mapping", "concrete case", "evidence"), source_evidence=f"jd:{job_hint}"),
+                _q(question="Which requirement in this role would you be most ready to pick up immediately, and what experience gives you that confidence?", dimension="jd_readiness", expected_signal="Readiness judgment, delivery experience", followup_condition="Follow up if confidence is not backed by actual work", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("readiness judgment", "delivery experience"), source_evidence=f"jd:{job_hint}"),
+                _q(question="Which requirement in this JD is less familiar to you, and how would you close that gap after joining?", dimension="jd_gap_analysis", expected_signal="Gap awareness, learning plan, realistic assessment", followup_condition="Follow up if there is no concrete plan", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("gap awareness", "learning plan", "realistic assessment"), source_evidence=f"jd:{job_hint}"),
+                _q(question="Looking back at your internship or project work, which part best reflects your real ownership from design to delivery?", dimension="experience_validation", expected_signal="Ownership boundary, delivery depth, concrete responsibility", followup_condition="Follow up if the answer stays at team level", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("ownership boundary", "delivery depth", "concrete responsibility")),
+            ])
         else:
-            question_bank.extend(
-                [
-                    _q(
-                        question=f"?????????{job_hint}??????????????????????????????",
-                        dimension="jd_match_case",
-                        expected_signal="JD ??????????????",
-                        followup_condition="???????????????????????",
-                        success_signals=_signals("JD ????", "????", "??"),
-                    ),
-                    _q(
-                        question="????????????????????????????????",
-                        dimension="jd_readiness",
-                        expected_signal="??????????????",
-                        followup_condition="?????????????????????",
-                        success_signals=_signals("??????", "????"),
-                    ),
-                    _q(
-                        question="??????????????????????????????????",
-                        dimension="jd_gap_analysis",
-                        expected_signal="????????????????",
-                        followup_condition="??????????????????????",
-                        success_signals=_signals("??????", "????", "????"),
-                    ),
-                ]
-            )
+            question_bank.extend([
+                _q(question=f"结合这个岗位要求“{job_hint}”，你过去哪段经历和它最直接匹配？请讲一个具体例子。", dimension="jd_match_case", expected_signal="JD 对应关系、具体案例、真实证据", followup_condition="如果只有泛泛匹配没有案例，继续追问", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("JD 对应关系", "具体案例", "真实证据"), source_evidence=f"jd:{job_hint}"),
+                _q(question="这个岗位里你觉得自己上手最快、最有把握的是哪一块？你的信心来自哪段真实经历？", dimension="jd_readiness", expected_signal="就绪度判断、交付经历", followup_condition="如果信心没有建立在真实经历上，继续追问", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("就绪度判断", "交付经历"), source_evidence=f"jd:{job_hint}"),
+                _q(question="如果看这份 JD，有哪一块是你相对不熟的？如果入职后要补上，你会怎么补？", dimension="jd_gap_analysis", expected_signal="差距认知、补足计划、现实评估", followup_condition="如果没有具体补足计划，继续追问", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("差距认知", "补足计划", "现实评估"), source_evidence=f"jd:{job_hint}"),
+                _q(question="回头看你的实习或项目经历，哪一部分最能体现你是从设计到交付真正负责过的？", dimension="experience_validation", expected_signal="职责边界、交付深度、真实负责内容", followup_condition="如果回答还停留在团队层面，继续追问", stage=InterviewStage.JD_MATCH, bucket="experience", success_signals=_signals("职责边界", "交付深度", "真实负责内容")),
+            ])
 
         return question_bank[:question_count]
 
-    def _build_and_persist_report(self, session_id: str, *, runtime_mode: str, turns=None, run_id: str):
-        """根据会话轮次生成简版报告并持久化。"""
-        session_entity = self._session_repository.get(session_id)
-        turns = turns or self._session_repository.list_turns(session_id)
-        candidate_turns = [item for item in turns if item.speaker == "candidate"]
-        candidate_texts = [item.transcript.strip() for item in candidate_turns if (item.transcript or "").strip()]
-        summary = "；".join(candidate_texts[:3]) if candidate_texts else "候选人有效回答较少，建议人工复核。"
-
-        confidences = [item.confidence for item in candidate_turns if item.confidence is not None]
-        avg_confidence = (sum(confidences) / len(confidences)) if confidences else 0.0
-        communication_score = min(100.0, 55.0 + len(candidate_texts) * 8.0)
-        technical_depth_score = round(max(0.0, min(100.0, avg_confidence * 100.0)), 2)
-        job_fit_score = min(100.0, 60.0 + len(candidate_texts) * 5.0)
-        dimension_scores = {
-            "communication": round(communication_score, 2),
-            "technical_depth": technical_depth_score,
-            "job_fit": round(job_fit_score, 2),
-        }
-        total_score = round(sum(dimension_scores.values()) / len(dimension_scores), 2)
-
-        risk_tags: list[str] = []
-        if not candidate_texts:
-            risk_tags.append("insufficient_response")
-        if avg_confidence < 0.55:
-            risk_tags.append("low_confidence_answers")
-        if any("sensitive:" in flag for turn in candidate_turns for flag in (turn.policy_flags or [])):
-            risk_tags.append("sensitive_content")
-
-        recommendation = "advance" if total_score >= 75 and "sensitive_content" not in risk_tags else "manual_review"
-        latest_report = self._session_repository.get_latest_report(session_id)
-        report_version = (latest_report.report_version + 1) if latest_report else 1
-        report_entity = self._session_repository.create_report(
-            session_id=session_id,
-            report_version=report_version,
-            summary=summary[:2000],
-            dimension_scores_json=dimension_scores,
-            risk_tags_json=risk_tags,
-            recommendation=recommendation,
-            payload={"runtime_mode": runtime_mode, "total_score": total_score, "run_id": run_id},
-        )
-
-        # BE-007: 回写既有 candidate/interview 状态与审计事件。
-        self._candidate_repository.update_score(
-            session_entity.candidate_id,
-            total_score=total_score,
-            dimensions=dimension_scores,
-            explanation=summary[:500],
-        )
-        self._candidate_repository.update_stage(session_entity.candidate_id, "interview_done")
-        interview_status = "confirmed" if recommendation == "advance" else "rejected"
-        if hasattr(self._interview_repository, "update_latest_status_by_job_candidate"):
-            self._interview_repository.update_latest_status_by_job_candidate(
-                job_id=session_entity.job_id,
-                candidate_id=session_entity.candidate_id,
-                status=interview_status,
-                payload_patch={"ai_interview_report_id": report_entity.id, "ai_recommendation": recommendation},
-            )
-        self._event_repository.create(
-            event_type="ai_interview.report.generated",
-            entity_type="ai_interview_session",
-            entity_id=session_id,
-            status="success",
-            operator="system",
-            session_id=session_id,
-            job_id=session_entity.job_id,
-            payload={
-                "candidate_id": session_entity.candidate_id,
-                "job_id": session_entity.job_id,
-                "report_id": report_entity.id,
-                "recommendation": recommendation,
-                "total_score": total_score,
-                "risk_tags": risk_tags,
-            },
-        )
-        return report_entity
-
     def _build_run_id(self, *, session_id: str, runtime_mode: str, turns) -> str:
-        """根据输入快照生成可复算 run_id。"""
-        material = {
+        """根据会话数据生成一个稳定的 run_id，用于报告幂等和版本追溯。"""
+        import hashlib
+        import json
+        data = {
             "session_id": session_id,
             "runtime_mode": runtime_mode,
-            "turns": [
-                {
-                    "turn_no": item.turn_no,
-                    "speaker": item.speaker,
-                    "transcript": item.transcript,
-                    "confidence": item.confidence,
-                    "policy_flags": list(item.policy_flags or []),
-                }
-                for item in turns
-            ],
+            "turn_count": len(turns),
+            "last_turn_at": str(turns[-1].created_at) if turns else "empty",
         }
-        digest = hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-        return f"run_{digest[:16]}"
-
-    def _resolve_model_route(self, session_id: str) -> str:
-        """BE-016：根据策略选择成本优先或质量优先模型路由。"""
-        session_entity = self._session_repository.get(session_id)
-        route_policy = str((session_entity.payload or {}).get("model_route_policy", "quality_first")).strip()
-        if route_policy == "cost_first":
-            return "cost_optimized"
-        if route_policy == "balanced":
-            return "balanced"
-        return "quality_max"
-
-    def _is_interview_llm_enabled(self) -> bool:
-        """判定面试链路是否启用 LLM。"""
-        return self._runtime_repository.is_feature_enabled(
-            feature_key="ai_interview_llm",
-            default_enabled=self._settings.ai_interview_llm_enabled,
-        )
-
-    def _build_questions_with_llm(
-        self,
-        *,
-        session_id: str,
-        resume_text: str,
-        job_requirements: str,
-        skills: list[str],
-        question_count: int,
-        language: str,
-    ) -> list[dict]:
-        """使用 LLM 生成问题树，失败时返回空列表用于回退。"""
-        template = self._resolve_prompt_template(task_key="interview_question_set", default_version="v2")
-        try:
-            rendered = template.render(
-                language=language,
-                job_requirements=job_requirements[:1200],
-                resume_text=resume_text[:3000],
-                skills=skills,
-                question_count=question_count,
-            )
-        except KeyError:
-            logger.warning("Invalid runtime prompt placeholders for task=interview_question_set, fallback to bundled v1")
-            template = get_prompt_template("interview_question_set", "v1")
-            rendered = template.render(
-                language=language,
-                job_requirements=job_requirements[:1200],
-                resume_text=resume_text[:3000],
-                skills=skills,
-                question_count=question_count,
-            )
-        prompt = f"{template.system_prompt}\n{rendered}"
-        result = self._llm_client.invoke_json(
-            InvokeContext(
-                task_key="interview_question_set",
-                trace_id=f"ai-intv-q-{session_id}-{uuid.uuid4().hex[:8]}",
-                prompt=prompt,
-                entity_type="ai_interview_session",
-                entity_id=session_id,
-            )
-        )
-        payload = result.content if isinstance(result.content, dict) else {}
-        questions = payload.get("questions", [])
-        cleaned: list[dict] = []
-        for item in questions:
-            normalized = self._normalize_question_item(item)
-            if normalized is None:
-                continue
-            cleaned.append(normalized)
-        cleaned = [item for item in cleaned if item["question"]]
-        if not cleaned:
-            return []
-        return self._merge_question_candidates(
-            rule_questions=[],
-            llm_questions=cleaned,
-            question_count=question_count,
-            resume_text=resume_text,
-            job_requirements=job_requirements,
-            skills=skills,
-            language=language,
-        )[:question_count]
+        return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     def _build_followup_question_with_llm(
         self,
@@ -3583,17 +3986,16 @@ class AIInterviewService:
         session_id: str,
         seq: int | None = None,
         transcript: str,
-        confidence: float | None,
+        confidence: float,
         interview_stage: str,
-        language: str,
-        write_observability: bool = True,
-        emit_delta: bool = True,
+        language: str = "zh-CN",
+        write_observability: bool = False,
         prefetch_mode: bool = False,
         abort_event: threading.Event | None = None,
+        emit_delta: bool = True,
         print_stream: bool = False,
-    ):
-        """使用 LLM 生成实时追问，以生成器形式返回句子流。"""
-        template = self._resolve_prompt_template(task_key="interview_followup", default_version="v5")
+    ) -> Generator[str, None, None]:
+        """Use LLM to generate a deep-dive follow-up question based on candidate response."""
         prompt_ctx = self._build_followup_prompt_context(
             session_id=session_id,
             transcript=transcript,
@@ -3601,11 +4003,15 @@ class AIInterviewService:
             interview_stage=interview_stage,
             language=language,
         )
+        template = self._resolve_prompt_template(
+            task_key=PromptTaskKey.INTERVIEW_FOLLOWUP,
+            default_version="v3"
+        )
         try:
             rendered = template.render(**prompt_ctx)
         except KeyError:
             logger.warning("Invalid runtime prompt placeholders for task=interview_followup, fallback to bundled v3")
-            template = get_prompt_template("interview_followup", "v3")
+            template = get_prompt_template(PromptTaskKey.INTERVIEW_FOLLOWUP, "v3")
             rendered = template.render(**prompt_ctx)
         prompt = f"{template.system_prompt}\n{rendered}"
         llm_client = self._llm_prefetch_client if prefetch_mode else self._llm_client
@@ -3635,7 +4041,7 @@ class AIInterviewService:
 
         text_stream = llm_client.stream_invoke(
             InvokeContext(
-                task_key="interview_followup",
+                task_key=PromptTaskKey.INTERVIEW_FOLLOWUP,
                 trace_id=f"ai-intv-fu-stream-{session_id}-{uuid.uuid4().hex[:8]}",
                 prompt=prompt,
                 entity_type="ai_interview_session",
@@ -3653,7 +4059,7 @@ class AIInterviewService:
             if emit_delta:
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,
-                    event_type="llm.sentence",
+                    event_type=InterviewEventType.LLM_SENTENCE,
                     payload={"text": sentence, "is_final": False}
                 )
             if print_stream:
@@ -3665,7 +4071,7 @@ class AIInterviewService:
 
 
 def _get_singleton_asr_provider() -> "ASRProvider":
-    """返回进程级 ASR Provider 单例（双检锁）。"""
+    """杩斿洖杩涚▼绾?ASR Provider 鍗曚緥锛堝弻妫€閿侊級銆?"""
     global _ASR_PROVIDER_SINGLETON
     if _ASR_PROVIDER_SINGLETON is None:
         with _PROVIDER_SINGLETON_LOCK:
@@ -3676,7 +4082,7 @@ def _get_singleton_asr_provider() -> "ASRProvider":
 
 
 def _get_singleton_tts_provider() -> "TTSProvider":
-    """返回进程级 TTS Provider 单例（双检锁）。"""
+    """杩斿洖杩涚▼绾?TTS Provider 鍗曚緥锛堝弻妫€閿侊級銆?"""
     global _TTS_PROVIDER_SINGLETON
     if _TTS_PROVIDER_SINGLETON is None:
         with _PROVIDER_SINGLETON_LOCK:
@@ -3687,10 +4093,10 @@ def _get_singleton_tts_provider() -> "TTSProvider":
 
 
 def get_ai_interview_service(session: Session) -> AIInterviewService:
-    """返回绑定当前 DB 会话的 AI 面试服务实例。
+    """杩斿洖缁戝畾褰撳墠 DB 浼氳瘽鐨?AI 闈㈣瘯鏈嶅姟瀹炰緥銆?
 
-    ASR/TTS provider 为进程级单例，不随 DB session 重建，
-    避免 NLS 等有状态 provider 每次请求都重新握手。
+    ASR/TTS provider 涓鸿繘绋嬬骇鍗曚緥锛屼笉闅?DB session 閲嶅缓锛?
+    閬垮厤 NLS 绛夋湁鐘舵€?provider 姣忔璇锋眰閮介噸鏂版彙鎵嬨€?
     """
     settings = get_settings()
     runtime_repository = AIRuntimeRepository(session)
@@ -3703,6 +4109,7 @@ def get_ai_interview_service(session: Session) -> AIInterviewService:
     tts_provider = _get_singleton_tts_provider()
     return AIInterviewService(
         session_repository=AIInterviewSessionRepository(session),
+        invitation_repository=AIInterviewInvitationRepository(session),
         runtime_repository=runtime_repository,
         candidate_repository=CandidateRepository(session),
         job_repository=JobRepository(session),

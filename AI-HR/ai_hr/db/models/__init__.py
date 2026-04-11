@@ -1,9 +1,10 @@
-﻿"""数据库模型模块集合。"""
+"""数据库模型模块集合。"""
 
 from .ai_decision_log import AIDecisionLog
 from .ai_eval_run import AIEvalRun
 from .ai_feature_flag import AIFeatureFlag
 from .ai_interview_handoff import AIInterviewHandoff
+from .ai_interview_invitation import AIInterviewInvitation
 from .ai_interview_question_set import AIInterviewQuestionSet
 from .ai_interview_report import AIInterviewReport
 from .ai_interview_session import AIInterviewSession
@@ -29,6 +30,7 @@ __all__ = [
     "AIEvalRun",
     "AIFeatureFlag",
     "AIInterviewHandoff",
+    "AIInterviewInvitation",
     "AIInterviewQuestionSet",
     "AIInterviewReport",
     "AIInterviewSession",

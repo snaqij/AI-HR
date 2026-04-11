@@ -271,14 +271,20 @@ class AliyunNlsASRProvider(ASRProvider):
                 return None
 
             ctx = self._contexts.get(stream_key)
-            if ctx and (not ctx.is_active or (now - ctx.last_active_at > 300.0)):
+            if ctx and (not ctx.is_active or (now - ctx.last_active_at > 15.0)):
                 idle_sec = now - ctx.last_active_at
                 logger.info(
-                    "[NLS] session=%s context invalid (is_active=%s idle=%.1fs), closing",
+                    "[NLS] session=%s context invalid or idle (is_active=%s idle=%.1fs), closing and reconnecting",
                     stream_key, ctx.is_active, idle_sec
                 )
-                # Pop under lock, but don't call stop() here
+                # Pop under lock, and prepare to stop it
                 ctx_to_close = self._contexts.pop(stream_key, None)
+                if ctx_to_close:
+                    try:
+                        # Attempt to stop outside lock if possible, but for simplicity here we just trigger it
+                        ctx_to_close.recognizer.stop()
+                    except Exception:
+                        pass
                 ctx = None
             
             if ctx: # Found an active, non-idle context
