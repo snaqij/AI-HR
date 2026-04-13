@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+
+<html lang="zh-CN"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>面试邀请记录 - Synthetix</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Manrope:wght@600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "tertiary-fixed": "#a2eeff",
+                        "inverse-on-surface": "#eef1f5",
+                        "on-secondary-fixed": "#1b1c1c",
+                        "on-primary-container": "#c6d2ff",
+                        "secondary-fixed": "#e4e2e2",
+                        "background": "#f7fafe",
+                        "surface-variant": "#e0e3e7",
+                        "surface-container": "#ebeef2",
+                        "outline": "#737685",
+                        "on-error": "#ffffff",
+                        "inverse-primary": "#b4c5ff",
+                        "primary-fixed": "#dbe1ff",
+                        "secondary-fixed-dim": "#c8c6c6",
+                        "on-tertiary-fixed-variant": "#004e5a",
+                        "on-tertiary-fixed": "#001f25",
+                        "tertiary-container": "#006472",
+                        "surface-dim": "#d7dade",
+                        "primary-fixed-dim": "#b4c5ff",
+                        "outline-variant": "#c3c6d6",
+                        "surface-tint": "#0052dd",
+                        "on-surface": "#181c1f",
+                        "on-secondary-fixed-variant": "#474747",
+                        "surface-container-high": "#e5e8ec",
+                        "on-tertiary": "#ffffff",
+                        "on-surface-variant": "#434654",
+                        "inverse-surface": "#2d3134",
+                        "on-secondary-container": "#646464",
+                        "primary": "#003aa2",
+                        "primary-container": "#004fd5",
+                        "surface": "#f7fafe",
+                        "on-tertiary-container": "#54e4fe",
+                        "surface-container-low": "#f1f4f8",
+                        "on-primary": "#ffffff",
+                        "on-background": "#181c1f",
+                        "on-primary-fixed-variant": "#003da9",
+                        "tertiary": "#004a55",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary": "#5e5e5e",
+                        "on-error-container": "#93000a",
+                        "error": "#ba1a1a",
+                        "on-secondary": "#ffffff",
+                        "on-primary-fixed": "#00174c",
+                        "tertiary-fixed-dim": "#43d8f2",
+                        "secondary-container": "#e4e2e2",
+                        "error-container": "#ffdad6",
+                        "surface-container-highest": "#e0e3e7",
+                        "surface-bright": "#f7fafe"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "fontFamily": {
+                        "headline": ["Manrope"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3, .brand-font { font-family: 'Manrope', sans-serif; }
+    </style>
+</head>
+<body class="bg-background text-on-surface">
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-full z-40 py-6 px-4 bg-[#f1f4f8] dark:bg-slate-900 h-screen w-64 flex flex-col border-none">
+<div class="flex items-center gap-3 px-2 mb-10">
+<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-container flex items-center justify-center text-white shadow-lg">
+<span class="material-symbols-outlined" data-icon="auto_awesome">auto_awesome</span>
+</div>
+<div>
+<h2 class="text-xl font-bold tracking-tighter text-[#181c1f] dark:text-white">Synthetix</h2>
+<p class="text-[10px] uppercase tracking-widest text-on-surface-variant/70 font-bold">AI 面试官</p>
+</div>
+</div>
+<nav class="flex-1 space-y-1">
+<a class="flex items-center gap-3 px-4 py-3 font-['Manrope'] tracking-tight text-sm font-semibold text-[#434654] dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-all duration-300 rounded-lg group" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="dashboard">dashboard</span>
+<span>控制台</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 font-['Manrope'] tracking-tight text-sm font-semibold text-[#434654] dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-all duration-300 rounded-lg group" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="work">work</span>
+<span>职位管理</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 font-['Manrope'] tracking-tight text-sm font-semibold text-primary bg-white/60 shadow-sm transition-all duration-300 rounded-lg group" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="event_note">event_note</span>
+<span>面试管理</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 font-['Manrope'] tracking-tight text-sm font-semibold text-[#434654] dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-all duration-300 rounded-lg group" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="person_add">person_add</span>
+<span>录用管理</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 font-['Manrope'] tracking-tight text-sm font-semibold text-[#434654] dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-all duration-300 rounded-lg group" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="analytics">analytics</span>
+<span>报表统计</span>
+</a>
+<a class="flex items-center gap-3 px-4 py-3 font-['Manrope'] tracking-tight text-sm font-semibold text-[#434654] dark:text-slate-400 hover:bg-white/50 dark:hover:bg-slate-800/50 transition-all duration-300 rounded-lg group" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="settings">settings</span>
+<span>系统设置</span>
+</a>
+</nav>
+<div class="mt-auto p-4 bg-surface-container-high/40 rounded-2xl">
+<div class="flex items-center gap-3">
+<img alt="Organization Logo" class="w-8 h-8 rounded-lg" data-alt="modern minimalist company logo with geometric shapes and professional blue tones" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAOIrrOO0Zoxes31GkFli93fSJZk8I5JgY7lbjsX4QWieDUzI-tyb4AHVAf6iZPOWsYO8jsMkkIDLrhUFVG2SfK8cK6O7kVYzG-cAUr3l0DKizPhTVgpXoUqj4W2neeDSZNBGh1aaMDinktACazBP1USMwreTZRML9lzwUeOXtEGRMFo8E9sXpNGeJbVOaks1AsT3q6-WMId10Ca_uxlm5umz1zcmEnoEN0fZ6RVZQ6PtOGocRofEV09Xhx8CrGreFIRhYn-qEtZAQ"/>
+<div class="overflow-hidden">
+<p class="text-xs font-bold truncate">企业版方案</p>
+<p class="text-[10px] text-on-surface-variant">订阅进行中</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="ml-64 min-h-screen flex flex-col">
+<!-- TopAppBar -->
+<header class="w-full h-16 sticky top-0 bg-[#f7fafe]/80 dark:bg-slate-950/80 backdrop-blur-xl flex items-center justify-between px-8 z-30 shadow-[0_12px_32px_-4px_rgba(24,28,31,0.06)]">
+<div class="flex items-center gap-8">
+<h1 class="font-['Manrope'] text-lg font-bold text-on-surface">面试智能中心</h1>
+<nav class="flex gap-6">
+<a class="text-[#0052CC] border-b-2 border-[#0052CC] pb-1 font-medium text-sm transition-colors" href="#">所有记录</a>
+<a class="text-[#434654] dark:text-slate-400 hover:text-[#0052CC] transition-colors font-medium text-sm" href="#">正在进行</a>
+</nav>
+</div>
+<div class="flex items-center gap-6">
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm" data-icon="search">search</span>
+<input class="bg-surface-container-low border-none rounded-full py-1.5 pl-9 pr-4 text-sm w-64 focus:ring-2 focus:ring-primary/20 transition-all" placeholder="搜索面试记录..." type="text"/>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined" data-icon="help_outline">help_outline</span>
+</button>
+<div class="h-8 w-[1px] bg-outline-variant/30"></div>
+<button class="bg-gradient-to-r from-primary to-primary-container text-white px-5 py-2 rounded-lg text-sm font-bold shadow-sm hover:-translate-y-0.5 transition-transform">
+                    创建邀请
+                </button>
+<img alt="Recruiter Profile" class="w-8 h-8 rounded-full border-2 border-white shadow-sm" data-alt="professional corporate headshot of a recruitment manager in a modern office environment" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAV5akv_EE2dNO_gAgxSHtwESxUO-x_7FeiLsGBBKagxhdd6RvTzGe42C495709IW0qWoV3NpmziG6XE-58V9P698mcZ5Sog_OTtbWG_aiWRCPJWbKCsOCh5mZ25IlesDzS5nZChttdndaK_DUOYFOoZQKH-hzKiAbXvzEkQUi7UxcfN0ZR3BYT-e7eKHOqYdkeV2NbbD1_Vqi9FZW7fwQ3oFyHu5KwsOA1nhs063HeNpQl6PhVlMtOwy_sPmAFz7GE_q7_jlzwlUs"/>
+</div>
+</div>
+</header>
+<!-- Canvas -->
+<div class="p-10 flex-1">
+<div class="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
+<div>
+<h2 class="text-4xl font-extrabold tracking-tight font-headline mb-2">面试邀请记录</h2>
+<p class="text-on-surface-variant text-sm font-medium">查看并管理所有已发送的 AI 面试邀请与实时状态。</p>
+</div>
+<div class="flex gap-2">
+<button class="bg-surface-container-lowest text-on-surface-variant px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm font-semibold shadow-sm hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="filter_list">filter_list</span>
+                    筛选条件
+                </button>
+<button class="bg-surface-container-lowest text-on-surface-variant px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm font-semibold shadow-sm hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="download">download</span>
+                    导出数据
+                </button>
+</div>
+</div>
+<!-- Bento-style Data Container -->
+<div class="bg-surface-container-lowest rounded-3xl shadow-[0_12px_32px_-4px_rgba(24,28,31,0.06)] overflow-hidden">
+<table class="w-full text-left border-collapse">
+<thead>
+<tr class="bg-surface-container-low">
+<th class="py-5 px-8 text-[11px] font-bold uppercase tracking-[0.1em] text-on-surface-variant/80 font-label">候选人姓名</th>
+<th class="py-5 px-6 text-[11px] font-bold uppercase tracking-[0.1em] text-on-surface-variant/80 font-label">邀请时间</th>
+<th class="py-5 px-6 text-[11px] font-bold uppercase tracking-[0.1em] text-on-surface-variant/80 font-label">会话 ID</th>
+<th class="py-5 px-6 text-[11px] font-bold uppercase tracking-[0.1em] text-on-surface-variant/80 font-label">状态</th>
+<th class="py-5 px-8 text-[11px] font-bold uppercase tracking-[0.1em] text-on-surface-variant/80 font-label text-right">操作</th>
+</tr>
+</thead>
+<tbody class="divide-y divide-outline-variant/10">
+<!-- Row 1 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs">张伟</div>
+<div>
+<div class="font-bold text-on-surface">张伟 (Zhang Wei)</div>
+<div class="text-[11px] text-on-surface-variant">高级前端工程师</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-24</div>
+<div class="text-[11px] text-on-surface-variant">14:30:12</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-9284-AX</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700">
+<span class="w-1.5 h-1.5 rounded-full bg-blue-500 mr-1.5"></span>
+                            已发送 INVITED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 2 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-tertiary/10 flex items-center justify-center text-tertiary font-bold text-xs">李芳</div>
+<div>
+<div class="font-bold text-on-surface">李芳 (Li Fang)</div>
+<div class="text-[11px] text-on-surface-variant">产品经理</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-24</div>
+<div class="text-[11px] text-on-surface-variant">10:15:44</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-4412-BQ</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-green-50 text-green-700">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>
+                            已完成 COMPLETED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 3 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-secondary/10 flex items-center justify-center text-secondary font-bold text-xs">王强</div>
+<div>
+<div class="font-bold text-on-surface">王强 (Wang Qiang)</div>
+<div class="text-[11px] text-on-surface-variant">数据科学家</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-23</div>
+<div class="text-[11px] text-on-surface-variant">16:55:01</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-1092-LL</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-orange-50 text-orange-700">
+<span class="w-1.5 h-1.5 rounded-full bg-orange-500 mr-1.5"></span>
+                            已接受 ACCEPTED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 4 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-error/10 flex items-center justify-center text-error font-bold text-xs">赵静</div>
+<div>
+<div class="font-bold text-on-surface">赵静 (Zhao Jing)</div>
+<div class="text-[11px] text-on-surface-variant">UX 研究员</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-23</div>
+<div class="text-[11px] text-on-surface-variant">09:00:22</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-8831-ZT</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-50 text-red-700">
+<span class="w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5"></span>
+                            已拒绝 REJECTED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 5 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs">陈坤</div>
+<div>
+<div class="font-bold text-on-surface">陈坤 (Chen Kun)</div>
+<div class="text-[11px] text-on-surface-variant">DevOps 专家</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-22</div>
+<div class="text-[11px] text-on-surface-variant">11:20:15</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-5519-OP</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-green-50 text-green-700">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>
+                            已完成 COMPLETED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 6 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-tertiary/10 flex items-center justify-center text-tertiary font-bold text-xs">刘洋</div>
+<div>
+<div class="font-bold text-on-surface">刘洋 (Liu Yang)</div>
+<div class="text-[11px] text-on-surface-variant">市场经理</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-22</div>
+<div class="text-[11px] text-on-surface-variant">15:40:00</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-3321-JK</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700">
+<span class="w-1.5 h-1.5 rounded-full bg-blue-500 mr-1.5"></span>
+                            已发送 INVITED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 7 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-secondary/10 flex items-center justify-center text-secondary font-bold text-xs">周杰</div>
+<div>
+<div class="font-bold text-on-surface">周杰 (Zhou Jie)</div>
+<div class="text-[11px] text-on-surface-variant">安全架构师</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-21</div>
+<div class="text-[11px] text-on-surface-variant">13:10:55</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-7762-WE</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-green-50 text-green-700">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>
+                            已完成 COMPLETED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 8 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs">孙铭</div>
+<div>
+<div class="font-bold text-on-surface">孙铭 (Sun Ming)</div>
+<div class="text-[11px] text-on-surface-variant">QA 工程师</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-21</div>
+<div class="text-[11px] text-on-surface-variant">09:45:10</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-2105-XN</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-orange-50 text-orange-700">
+<span class="w-1.5 h-1.5 rounded-full bg-orange-500 mr-1.5"></span>
+                            已接受 ACCEPTED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 9 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-error/10 flex items-center justify-center text-error font-bold text-xs">何美</div>
+<div>
+<div class="font-bold text-on-surface">何美 (He Mei)</div>
+<div class="text-[11px] text-on-surface-variant">销售总监</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-20</div>
+<div class="text-[11px] text-on-surface-variant">17:00:30</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-6652-MN</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-50 text-red-700">
+<span class="w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5"></span>
+                            已拒绝 REJECTED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+<!-- Row 10 -->
+<tr class="hover:bg-surface-container-low/30 transition-colors group">
+<td class="py-6 px-8">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-tertiary/10 flex items-center justify-center text-tertiary font-bold text-xs">吴浩</div>
+<div>
+<div class="font-bold text-on-surface">吴浩 (Wu Hao)</div>
+<div class="text-[11px] text-on-surface-variant">移动端开发</div>
+</div>
+</div>
+</td>
+<td class="py-6 px-6">
+<div class="text-sm font-medium text-on-surface">2023-11-20</div>
+<div class="text-[11px] text-on-surface-variant">14:20:44</div>
+</td>
+<td class="py-6 px-6">
+<code class="text-xs font-mono bg-surface-container-high/50 px-2 py-1 rounded">SESS-4122-PO</code>
+</td>
+<td class="py-6 px-6">
+<span class="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold bg-green-50 text-green-700">
+<span class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></span>
+                            已完成 COMPLETED
+                        </span>
+</td>
+<td class="py-6 px-8 text-right">
+<button class="text-primary font-bold text-sm hover:underline underline-offset-4 decoration-2">查看详情</button>
+</td>
+</tr>
+</tbody>
+</table>
+<!-- Pagination -->
+<div class="py-4 px-8 bg-surface-container-low/50 flex items-center justify-between border-t border-outline-variant/10">
+<p class="text-xs text-on-surface-variant font-medium">显示第 1 至 10 条，共 245 条记录</p>
+<div class="flex items-center gap-1">
+<button class="p-2 rounded-lg hover:bg-surface-container-high transition-colors disabled:opacity-30" disabled="">
+<span class="material-symbols-outlined text-sm" data-icon="chevron_left">chevron_left</span>
+</button>
+<button class="w-8 h-8 rounded-lg bg-primary text-white text-xs font-bold shadow-sm">1</button>
+<button class="w-8 h-8 rounded-lg text-on-surface-variant hover:bg-surface-container-high text-xs font-bold transition-colors">2</button>
+<button class="w-8 h-8 rounded-lg text-on-surface-variant hover:bg-surface-container-high text-xs font-bold transition-colors">3</button>
+<span class="px-2 text-on-surface-variant">...</span>
+<button class="w-8 h-8 rounded-lg text-on-surface-variant hover:bg-surface-container-high text-xs font-bold transition-colors">25</button>
+<button class="p-2 rounded-lg hover:bg-surface-container-high transition-colors">
+<span class="material-symbols-outlined text-sm" data-icon="chevron_right">chevron_right</span>
+</button>
+</div>
+</div>
+</div>
+<!-- AI Insight Banner (Asymmetric Layout) -->
+<div class="mt-12 flex flex-col lg:flex-row gap-6">
+<div class="flex-1 bg-surface-container-lowest p-8 rounded-3xl border-l-4 border-tertiary shadow-[0_12px_32px_-4px_rgba(24,28,31,0.06)] relative overflow-hidden">
+<div class="relative z-10">
+<h3 class="text-xl font-bold font-headline mb-4 flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary" data-icon="insights">insights</span>
+                        本周招聘洞察
+                    </h3>
+<p class="text-on-surface-variant text-sm leading-relaxed mb-6 max-w-lg">
+                        根据 AI 面试记录分析，本周您的候选人接受率为 <strong>78%</strong>。相比上周提升了 12%。其中“前端工程”岗位的完成度最高。建议针对“UX 研究员”岗位的邀请文案进行微调，以提高接受度。
+                    </p>
+<button class="text-tertiary font-bold text-sm flex items-center gap-1 group">
+                        查看详细分析报告
+                        <span class="material-symbols-outlined text-sm group-hover:translate-x-1 transition-transform" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+<div class="absolute right-0 bottom-0 opacity-5 pointer-events-none translate-x-1/4 translate-y-1/4">
+<span class="material-symbols-outlined text-[200px]" data-icon="smart_toy">smart_toy</span>
+</div>
+</div>
+<div class="w-full lg:w-72 bg-gradient-to-br from-primary to-primary-container p-8 rounded-3xl text-white shadow-xl flex flex-col justify-between">
+<div>
+<div class="text-[10px] uppercase tracking-[0.2em] font-bold opacity-70 mb-2">活跃指标</div>
+<div class="text-4xl font-extrabold font-headline mb-1">12</div>
+<div class="text-sm opacity-90">场正在进行的面试</div>
+</div>
+<div class="mt-8 pt-4 border-t border-white/20">
+<p class="text-xs opacity-70 mb-4">平均每场面试用时 42 分钟，系统正在全力运行。</p>
+<button class="w-full bg-white/20 hover:bg-white/30 py-2 rounded-xl text-xs font-bold transition-colors">
+                        查看实时监控
+                    </button>
+</div>
+</div>
+</div>
+</div>
+<footer class="mt-auto py-8 px-10 flex items-center justify-between border-t border-outline-variant/10 text-[11px] text-on-surface-variant/60 font-medium">
+<div class="flex items-center gap-6">
+<span>© 2023 Synthetix AI Intelligence</span>
+<a class="hover:text-primary" href="#">服务条款</a>
+<a class="hover:text-primary" href="#">隐私政策</a>
+</div>
+<div class="flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-green-500"></span>
+            系统状态: 运行正常
+        </div>
+</footer>
+</main>
+</body></html>
