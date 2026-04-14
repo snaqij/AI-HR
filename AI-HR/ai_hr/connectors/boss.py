@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 import os
 import uuid
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 import requests
 from urllib import parse
+from urllib.parse import unquote
 
-from ..core.exceptions import ConnectorOperationError, InvalidConnectorConfigError
+from ..core.exceptions import ConnectorOperationError, InvalidConnectorConfigError, CredentialsExpiredError
 from .base import ConnectorCredentials, PublishJobResult, SyncJobStatusResult
 
 
@@ -38,7 +40,6 @@ class BossConnector:
             "base_url": self._credentials.base_url,
             "publish_path": self._credentials.publish_path,
             "status_path": self._credentials.status_path,
-            "list_jobs_path": self._credentials.list_jobs_path,
             "applicants_path": self._credentials.applicants_path,
         }
         for key, value in required_fields.items():
@@ -171,12 +172,81 @@ class BossConnector:
             return {"items": [], "next_cursor": None, "has_more": False}
 
         response_payload = self._send_list_applicants_request(job_external_id, cursor=cursor)
+        raw_items = self._extract_raw_applicant_items(response_payload)
+        current_page = self._coerce_page_number(cursor)
+        next_cursor = self._extract_next_cursor(response_payload)
+        if next_cursor is None:
+            next_cursor = str(current_page + 1) if len(raw_items) >= 100 else None
         return {
             "items": self._extract_applicant_items(response_payload, job_external_id),
-            "next_cursor": self._extract_next_cursor(response_payload),
-            "has_more": self._extract_has_more(response_payload, self._extract_next_cursor(response_payload)),
+            "next_cursor": next_cursor,
+            "has_more": self._extract_has_more(response_payload, next_cursor, raw_count=len(raw_items)),
             "raw_payload": response_payload,
         }
+
+    def list_resume_ready_candidates(
+        self,
+        job_external_id: str | None = None,
+        *,
+        label_id: int = 4,
+        sort: str = "",
+    ) -> dict[str, Any]:
+        if self._credentials.mode == "mock":
+            return {
+                "items": [
+                    {
+                        "external_candidate_id": "resume-ready-1",
+                        "name": "Mock Resume Ready",
+                        "resume_url": None,
+                        "resume_text": None,
+                        "raw_profile": {
+                            "uid": 1001,
+                            "encryptUid": "enc-1001",
+                            "encryptFriendId": "enc-1001",
+                            "encryptJobId": job_external_id or "mock-job",
+                            "resumeVisible": 1,
+                        },
+                    }
+                ],
+                "raw_payload": {"mode": "mock"},
+            }
+
+        payload = {"labelId": label_id, "encJobId": job_external_id or "", "sort": sort}
+        response_payload = self._send_live_request(
+            self._build_live_url("/wapi/zprelation/friend/filterByLabel"),
+            payload,
+            method="POST",
+            is_json=False,
+        )
+        rows = self._pick_nested_first(response_payload, [("zpData", "result")]) or []
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            geek_detail = self._fetch_boss_geek_detail(
+                {
+                    "uid": row.get("friendId"),
+                    "friendSource": row.get("friendSource", 0),
+                }
+            )
+            if job_external_id and str(geek_detail.get("toPositionId") or "") != str(job_external_id):
+                continue
+            merged_profile = dict(geek_detail or {})
+            merged_profile["friendId"] = row.get("friendId")
+            merged_profile["encryptFriendId"] = row.get("encryptFriendId")
+            merged_profile["friendSource"] = row.get("friendSource", 0)
+            merged_profile["waterLevel"] = row.get("waterLevel")
+            merged_profile["updateTime"] = row.get("updateTime")
+            items.append(
+                {
+                    "external_candidate_id": str(geek_detail.get("securityId") or row.get("encryptFriendId") or row.get("friendId")),
+                    "name": geek_detail.get("name") or "Unknown",
+                    "resume_url": None,
+                    "resume_text": None,
+                    "raw_profile": merged_profile,
+                }
+            )
+        return {"items": items, "raw_payload": response_payload}
 
     def send_greeting(self, candidate_external_id: str, template_id: str, variables: dict[str, Any]) -> dict[str, Any]:
         if self._credentials.mode == "mock":
@@ -206,8 +276,44 @@ class BossConnector:
 
     def fetch_messages(self, conversation_external_id: str, cursor: str | None = None) -> dict[str, Any]:
         if self._credentials.mode == "mock":
-            # ... (mock code stays same)
-            pass
+            if cursor is None:
+                return {
+                    "messages": [
+                        {
+                            "external_message_id": f"{conversation_external_id}-msg-1",
+                            "direction": "inbound",
+                            "sender": "candidate",
+                            "content": "您好，我对这个岗位感兴趣。",
+                            "sent_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+                            "meta": {"mode": "mock"},
+                        }
+                    ],
+                    "next_cursor": "cursor-1",
+                    "has_more": True,
+                    "raw_payload": {"mode": "mock"},
+                }
+            if cursor == "cursor-1":
+                return {
+                    "messages": [
+                        {
+                            "external_message_id": f"{conversation_external_id}-msg-2",
+                            "direction": "inbound",
+                            "sender": "candidate",
+                            "content": "这个岗位薪资范围大概是多少？",
+                            "sent_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+                            "meta": {"mode": "mock"},
+                        }
+                    ],
+                    "next_cursor": "cursor-2",
+                    "has_more": True,
+                    "raw_payload": {"mode": "mock"},
+                }
+            return {
+                "messages": [],
+                "next_cursor": None,
+                "has_more": False,
+                "raw_payload": {"mode": "mock"},
+            }
 
         fetch_messages_path = self._credentials.fetch_messages_path
         if not fetch_messages_path:
@@ -215,7 +321,7 @@ class BossConnector:
         payload: dict[str, Any] = {"conversationId": conversation_external_id}
         if cursor:
             payload["cursor"] = cursor
-        response_payload = self._send_live_request(self._build_live_url(fetch_messages_path), payload, method="GET")
+        response_payload = self._send_live_request(self._build_live_url(fetch_messages_path), payload)
         return {
             "messages": self._extract_message_items(response_payload),
             "next_cursor": self._extract_next_cursor(response_payload),
@@ -227,6 +333,18 @@ class BossConnector:
         """向候选人发送私信消息。采用 解锁 (block/v2) + 私信 (send.json) 鲁棒双保险策略。"""
         if self._credentials.mode == "mock":
             return {"status": "sent", "message_id": f"mock-{uuid.uuid4()}"}
+
+        send_message_path = self._credentials.send_message_path
+        if send_message_path and not numeric_uid and not numeric_job_id:
+            response_payload = self._send_live_request(
+                self._build_live_url(send_message_path),
+                {"conversationId": target_id, "message": message},
+            )
+            return {
+                "status": "sent",
+                "message_id": self._extract_message_id(response_payload) or f"boss-live-msg-{uuid.uuid4()}",
+                "raw_payload": response_payload,
+            }
 
         # --- 第 1 步：解锁并回复投递意向 (block/v2) ---
         print(f"[boss_connector] Step 1: Triggering block/v2 for recruitment action...", flush=True)
@@ -283,10 +401,399 @@ class BossConnector:
             "raw_payload": response_payload,
         }
 
+    def fetch_resume_attachment(self, candidate_external_id: str, raw_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._credentials.mode == "mock":
+            content = b"%PDF-1.4 mock resume content\n%%EOF"
+            return {
+                "file_name": "mock-resume.pdf",
+                "content_type": "application/pdf",
+                "source_url": "https://example.com/mock-resume.pdf",
+                "file_size_bytes": len(content),
+                "file_sha256": hashlib.sha256(content).hexdigest(),
+                "content_bytes": content,
+                "raw_payload": {"mode": "mock", "candidate_external_id": candidate_external_id},
+            }
+
+        profile = raw_profile or {}
+        geek_detail = self._fetch_boss_geek_detail(profile)
+        download_result = self._download_resume_via_docdownload(geek_detail, candidate_external_id)
+        if download_result is not None:
+            return download_result
+
+        detail_payload = self._fetch_resume_detail_payload(candidate_external_id, profile)
+        attachment = self._extract_resume_attachment(detail_payload)
+        source_url = attachment.get("source_url")
+        if not source_url:
+            raise ConnectorOperationError("BOSS resume detail response did not include a downloadable attachment URL")
+
+        file_bytes, content_type = self._download_binary(source_url)
+        file_name = attachment.get("file_name") or self._derive_filename_from_url(source_url)
+        return {
+            "file_name": file_name,
+            "content_type": attachment.get("content_type") or content_type,
+            "source_url": source_url,
+            "file_size_bytes": len(file_bytes),
+            "file_sha256": hashlib.sha256(file_bytes).hexdigest(),
+            "content_bytes": file_bytes,
+            "raw_payload": detail_payload,
+            "resume_text": attachment.get("resume_text"),
+        }
+
+    def request_resume_access(self, candidate_external_id: str, raw_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._credentials.mode == "mock":
+            profile = raw_profile or {}
+            visible = bool(profile.get("mock_resume_visible_after_request", True))
+            detail = {
+                "uid": 123,
+                "securityId": candidate_external_id,
+                "encryptUid": "mock-encrypt-uid",
+                "resumeVisible": 1 if visible else 0,
+                "friendSource": 0,
+            }
+            return {
+                "request_status": 0,
+                "request_sent": True,
+                "resume_visible": visible,
+                "security_id": candidate_external_id,
+                "detail": detail,
+                "raw_payload": {"mode": "mock", "request": {"type": 4, "securityId": candidate_external_id}},
+            }
+
+        profile = raw_profile or {}
+        geek_detail = self._fetch_boss_geek_detail(profile)
+        security_id = (
+            geek_detail.get("securityId")
+            or profile.get("securityId")
+            or candidate_external_id
+        )
+        if not security_id:
+            raise ConnectorOperationError("BOSS resume request requires candidate securityId")
+
+        if int(geek_detail.get("resumeVisible") or 0) == 1:
+            return {
+                "request_status": 4,
+                "request_sent": False,
+                "resume_visible": True,
+                "security_id": str(security_id),
+                "detail": geek_detail,
+                "raw_payload": {
+                    "request": None,
+                    "detail": geek_detail,
+                    "short_circuit": "already_resume_visible",
+                },
+            }
+
+        request_payload = {"type": 4, "securityId": security_id}
+        response = self._send_live_request(
+            self._build_live_url("/wapi/zpchat/exchange/request"),
+            request_payload,
+            method="POST",
+            is_json=False,
+        )
+        refreshed_detail = self._fetch_boss_geek_detail(
+            {
+                **profile,
+                "uid": geek_detail.get("uid") or profile.get("uid"),
+                "friendSource": geek_detail.get("friendSource", profile.get("friendSource", 0)),
+            }
+        )
+        merged_detail = dict(geek_detail or {})
+        merged_detail.update(refreshed_detail or {})
+        status = self._pick_nested_first(response, [("zpData", "status")])
+        return {
+            "request_status": int(status) if status is not None else None,
+            "request_sent": status in (0, 1),
+            "resume_visible": int(merged_detail.get("resumeVisible") or 0) == 1,
+            "security_id": str(merged_detail.get("securityId") or security_id),
+            "detail": merged_detail,
+            "raw_payload": {
+                "request": response,
+                "detail": refreshed_detail,
+            },
+        }
+
+    def check_resume_access(self, candidate_external_id: str, raw_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        if self._credentials.mode == "mock":
+            profile = raw_profile or {}
+            visible = bool(profile.get("mock_resume_retry_visible", profile.get("mock_resume_visible_after_request", True)))
+            detail = {
+                "uid": profile.get("uid", 123),
+                "securityId": candidate_external_id,
+                "encryptUid": profile.get("encryptUid", "mock-encrypt-uid"),
+                "resumeVisible": 1 if visible else 0,
+                "friendSource": profile.get("friendSource", 0),
+            }
+            return {
+                "resume_visible": visible,
+                "security_id": candidate_external_id,
+                "detail": detail,
+                "raw_payload": {"mode": "mock", "detail": detail},
+            }
+
+        profile = raw_profile or {}
+        geek_detail = self._fetch_boss_geek_detail(profile)
+        security_id = geek_detail.get("securityId") or profile.get("securityId") or candidate_external_id
+        return {
+            "resume_visible": int(geek_detail.get("resumeVisible") or 0) == 1,
+            "security_id": str(security_id) if security_id else None,
+            "detail": geek_detail,
+            "raw_payload": {"detail": geek_detail},
+        }
+
+    def _fetch_boss_geek_detail(self, raw_profile: dict[str, Any]) -> dict[str, Any]:
+        """内部方法：同步获取候选人原始详情报文。"""
+        if self._credentials.mode == "mock":
+            return raw_profile
+
+        uid = raw_profile.get("uid")
+        if not uid:
+            return raw_profile
+            
+        response = self._send_live_request(
+            self._build_live_url("/wapi/zpboss/h5/chat/geek.json"),
+            {"uid": uid, "geekSource": raw_profile.get("friendSource", 0)},
+            method="GET",
+        )
+        return self._pick_nested_first(response, [("zpData", "data")]) or {}
+
+    def fetch_candidate_detail(self, raw_profile: dict[str, Any]) -> dict[str, Any]:
+        """抓取候选人详细画像信息。"""
+        if self._credentials.mode == "mock":
+            return {
+                "school": "Mock University",
+                "degree": "Master",
+                "work_experience": "5 years",
+                "expected_salary": "20k-30k",
+                "latest_company": "Mock Corp",
+                "raw_profile": {"detail": "mock"},
+            }
+
+        data = self._fetch_boss_geek_detail(raw_profile)
+        
+        # 详情报文解析逻辑
+        detail_info = {
+            "school": self._pick_first(data, ("school", "schoolName", "university")),
+            "degree": self._pick_first(data, ("degree", "edu", "degreeName", "education")),
+            "work_experience": self._pick_first(data, ("experience", "workYears", "workExperience", "lastWorkExpr")),
+            "expected_salary": self._pick_first(data, ("salaryDesc", "expectSalary", "salary")),
+            "latest_company": self._pick_first(data, ("companyName", "company", "latestCompany", "lastCompany")),
+            "raw_profile": data,
+        }
+
+        # 深度回溯：如果关键字段缺失，尝试从列表字段中提取
+        if not detail_info["degree"]:
+            edu_list = data.get("eduExpList") or data.get("educationList")
+            if edu_list and isinstance(edu_list, list) and len(edu_list) > 0:
+                first_edu = edu_list[0]
+                detail_info["degree"] = self._pick_first(first_edu, ("degree", "education"))
+                if not detail_info["school"]:
+                    detail_info["school"] = self._pick_first(first_edu, ("school", "schoolName"))
+
+        if not detail_info["latest_company"]:
+            work_list = data.get("workExpList") or data.get("experienceList")
+            if work_list and isinstance(work_list, list) and len(work_list) > 0:
+                detail_info["latest_company"] = self._pick_first(work_list[0], ("company", "companyName"))
+
+        return detail_info
+
+    def _download_resume_via_docdownload(
+        self,
+        geek_detail: dict[str, Any],
+        candidate_external_id: str,
+    ) -> dict[str, Any] | None:
+        candidate_ids = [
+            geek_detail.get("encryptUid"),
+            geek_detail.get("encryptFriendId"),
+            geek_detail.get("encryptExpectId"),
+            geek_detail.get("uid"),
+            geek_detail.get("expectId"),
+            candidate_external_id,
+            geek_detail.get("securityId"),
+        ]
+        errors: list[str] = []
+        for candidate_id in candidate_ids:
+            if candidate_id in (None, ""):
+                continue
+            try:
+                response = self._request_docdownload(candidate_id)
+            except ConnectorOperationError as exc:
+                errors.append(f"{candidate_id}: {exc}")
+                continue
+
+            content_type = response.headers.get("Content-Type", "")
+            content_disposition = response.headers.get("Content-Disposition", "")
+            if self._looks_like_file_response(response):
+                file_name = self._filename_from_content_disposition(content_disposition) or f"boss-resume-{candidate_id}.bin"
+                return {
+                    "file_name": file_name,
+                    "content_type": content_type or "application/octet-stream",
+                    "source_url": str(response.url),
+                    "file_size_bytes": len(response.content),
+                    "file_sha256": hashlib.sha256(response.content).hexdigest(),
+                    "content_bytes": response.content,
+                    "raw_payload": {"geek_detail": geek_detail, "docdownload_candidate_id": str(candidate_id)},
+                    "resume_text": None,
+                }
+
+            html_text = response.text
+            if "抱歉，您没有权限查看该文件" in html_text:
+                errors.append(f"{candidate_id}: no permission to view attachment")
+                continue
+            if "牛人信息错误" in html_text:
+                errors.append(f"{candidate_id}: invalid candidate identifier for download4boss")
+                continue
+            errors.append(f"{candidate_id}: unexpected docdownload response content-type={content_type}")
+
+        if geek_detail:
+            raise ConnectorOperationError(
+                "BOSS attachment download is currently unavailable for this candidate. "
+                f"signals=resumeVisible:{geek_detail.get('resumeVisible')}, "
+                f"showCandidate:{geek_detail.get('showCandidate')}, "
+                f"completeType:{geek_detail.get('completeType')}. "
+                f"attempted={errors[:6]}"
+            )
+        return None
+
+    def _request_docdownload(self, candidate_id: Any) -> requests.Response:
+        headers = self._build_headers()
+        headers["Accept"] = "*/*"
+        headers["Referer"] = f"{self._credentials.base_url}/web/chat/index"
+        candidate_id_str = str(candidate_id)
+        urls = [
+            f"https://docdownload.zhipin.com/wflow/zpgeek/download/download4boss/{candidate_id_str}?id=",
+            f"https://docdownload.zhipin.com/wapi/zpgeek/resume/attachment/download4boss/{candidate_id_str}",
+        ]
+        errors: list[str] = []
+        for url in urls:
+            try:
+                response = requests.get(url, headers=headers, timeout=20, allow_redirects=True, verify=False)
+                response.raise_for_status()
+                return response
+            except requests.exceptions.RequestException as exc:
+                errors.append(f"{url}: {exc}")
+        raise ConnectorOperationError(f"BOSS docdownload failed: {errors[:2]}")
+
+    def _looks_like_file_response(self, response: requests.Response) -> bool:
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if any(token in content_type for token in ("application/pdf", "application/msword", "application/vnd", "application/octet-stream")):
+            return True
+        content_disposition = (response.headers.get("Content-Disposition") or "").lower()
+        return "attachment" in content_disposition or "filename=" in content_disposition
+
+    def _filename_from_content_disposition(self, content_disposition: str | None) -> str | None:
+        if not content_disposition:
+            return None
+        for token in content_disposition.split(";"):
+            token = token.strip()
+            if token.lower().startswith("filename*="):
+                encoded = token.split("''", 1)[-1]
+                return unquote(encoded).strip().strip('"')
+            if token.lower().startswith("filename="):
+                return unquote(token.split("=", 1)[1].strip().strip('"'))
+        return None
+
+    def _fetch_resume_detail_payload(self, candidate_external_id: str, raw_profile: dict[str, Any]) -> dict[str, Any]:
+        errors: list[str] = []
+        for request in self._iter_resume_detail_requests():
+            for payload_label, payload in self._iter_resume_detail_payloads(candidate_external_id, raw_profile):
+                try:
+                    response = self._send_live_request(
+                        self._build_live_url(request["path"]),
+                        payload,
+                        method=request["method"],
+                        is_json=request["is_json"],
+                    )
+                except ConnectorOperationError as exc:
+                    errors.append(f'{request["method"]} {request["path"]} [{payload_label}]: {exc}')
+                    continue
+
+                attachment = self._extract_resume_attachment(response)
+                if attachment.get("source_url") or attachment.get("resume_text"):
+                    response.setdefault("_matched_resume_request", {**request, "payload_label": payload_label})
+                    return response
+                errors.append(
+                    f'{request["method"]} {request["path"]} [{payload_label}]: response did not include attachment fields'
+                )
+
+        raise ConnectorOperationError(
+            "BOSS resume detail probing failed for candidate "
+            f"{candidate_external_id}. attempted={errors[:8]}"
+        )
+
+    def _iter_resume_detail_requests(self) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, bool]] = set()
+
+        def add(path: str | None, method: str, is_json: bool) -> None:
+            if not path:
+                return
+            key = (path, method, is_json)
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append({"path": path, "method": method, "is_json": is_json})
+
+        add(self._credentials.resume_detail_path, "GET", True)
+        add(self._credentials.resume_detail_path, "POST", False)
+        add(self._credentials.resume_detail_path, "POST", True)
+
+        fallback_paths = [
+            "/wapi/zprelation/resume/detail.json",
+            "/wapi/zprelation/resume/attachment/detail.json",
+            "/wapi/zprelation/resume/attachment.json",
+            "/wapi/zprelation/geek/resume/detail.json",
+            "/wapi/zprelation/geek/resume/attachment.json",
+            "/wapi/zpgeek/resume/detail.json",
+            "/wapi/zpgeek/resume/attachment/detail.json",
+            "/wapi/zpgeek/view/geek/resume/detail.json",
+            "/wapi/zpgeek/view/geek/resume/attachment.json",
+            "/wapi/zpboss/h5/geek/resume/detail",
+            "/wapi/zpboss/h5/geek/resume/attachment",
+        ]
+        for path in fallback_paths:
+            add(path, "GET", True)
+            add(path, "POST", False)
+
+        return candidates
+
+    def _iter_resume_detail_payloads(
+        self,
+        candidate_external_id: str,
+        raw_profile: dict[str, Any],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        base_payload = self._build_resume_detail_payload(candidate_external_id, raw_profile)
+        variants: list[tuple[str, dict[str, Any]]] = []
+        seen: set[str] = set()
+
+        def add(label: str, payload: dict[str, Any]) -> None:
+            normalized = {key: value for key, value in payload.items() if value not in (None, "")}
+            fingerprint = json.dumps(normalized, sort_keys=True, ensure_ascii=True)
+            if not normalized or fingerprint in seen:
+                return
+            seen.add(fingerprint)
+            variants.append((label, normalized))
+
+        add("all", base_payload)
+        add("security_only", {"securityId": candidate_external_id})
+        add("security_uid", {"securityId": candidate_external_id, "uid": raw_profile.get("uid")})
+        add("security_encrypt_uid", {"securityId": candidate_external_id, "encryptUid": raw_profile.get("encryptUid")})
+        add("security_job", {"securityId": candidate_external_id, "jobId": raw_profile.get("jobId")})
+        add("security_encrypt_job", {"securityId": candidate_external_id, "encryptJobId": raw_profile.get("encryptJobId")})
+        add("security_expect", {"securityId": candidate_external_id, "expectId": raw_profile.get("expectId")})
+        add("uid_job", {"uid": raw_profile.get("uid"), "jobId": raw_profile.get("jobId")})
+        add(
+            "encrypt_uid_job",
+            {"encryptUid": raw_profile.get("encryptUid"), "encryptJobId": raw_profile.get("encryptJobId")},
+        )
+        return variants
+
     def schedule_interview(self, candidate_external_id: str, slot: dict[str, Any]) -> dict[str, Any]:
         if self._credentials.mode == "mock":
-            # ...
-            pass
+            return {
+                "status": "scheduled",
+                "external_interview_id": f"mock-intv-{candidate_external_id}",
+                "raw_payload": {"mode": "mock", "slot": slot},
+            }
 
         schedule_path = self._credentials.interview_schedule_path
         if not schedule_path:
@@ -307,8 +814,11 @@ class BossConnector:
 
     def sync_interview_status(self, external_interview_id: str) -> dict[str, Any]:
         if self._credentials.mode == "mock":
-            # ...
-            pass
+            return {
+                "status": "scheduled",
+                "external_interview_id": external_interview_id,
+                "raw_payload": {"mode": "mock"},
+            }
 
         status_path = self._credentials.interview_status_path
         if not status_path:
@@ -356,13 +866,7 @@ class BossConnector:
 
     def _send_live_request(self, url: str, payload: dict[str, Any], method: str = "POST", is_json: bool = True) -> dict[str, Any]:
         """增强型请求处理器，支持 JSON 和 Form-Data 双模态。"""
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Cookie": self._credentials.cookie_header or "",
-            "Referer": f"{self._credentials.base_url}/web/boss/index",
-            "Origin": self._credentials.base_url
-        }
+        headers = self._build_headers()
 
         # 动态处理 Content-Type
         if is_json:
@@ -400,8 +904,102 @@ class BossConnector:
 
         code = parsed.get("code")
         if code not in (None, 0):
-            raise ConnectorOperationError(f"BOSS request failed: code={code}, message={parsed.get('message', 'Unknown error')}")
+            message = parsed.get('message', 'Unknown error')
+            # code 7 is a common session expiration code in BOSS
+            if code in (7, 401) or "未登录" in message or "会话过期" in message:
+                raise CredentialsExpiredError(f"BOSS credentials expired: {message}")
+            raise ConnectorOperationError(f"BOSS request failed: code={code}, message={message}")
         return parsed
+
+    def _build_resume_detail_payload(self, candidate_external_id: str, raw_profile: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {"securityId": candidate_external_id}
+        for field in ("uid", "encryptUid", "jobId", "encryptJobId", "expectId", "encryptExpectId"):
+            value = raw_profile.get(field)
+            if value not in (None, ""):
+                payload[field] = value
+        return payload
+
+    def _extract_resume_attachment(self, payload: dict[str, Any]) -> dict[str, Any]:
+        candidate_paths = [
+            ("zpData", "attachmentInfo"),
+            ("zpData", "resumeAttachment"),
+            ("zpData", "resumeFile"),
+            ("zpData", "resume"),
+            ("data", "attachmentInfo"),
+            ("data", "resumeAttachment"),
+            ("attachmentInfo",),
+            ("resumeAttachment",),
+        ]
+        attachment_payload: dict[str, Any] = {}
+        for path in candidate_paths:
+            value = self._pick_nested_first(payload, [path])
+            if isinstance(value, dict):
+                attachment_payload = value
+                break
+
+        source_url = self._pick_nested_first(
+            payload,
+            paths=[
+                ("zpData", "resumeUrl"),
+                ("zpData", "resumeAttachmentUrl"),
+                ("zpData", "attachmentUrl"),
+                ("zpData", "downloadUrl"),
+                ("zpData", "pdfUrl"),
+                ("zpData", "resumeFileUrl"),
+                ("zpData", "resumeFile", "url"),
+                ("zpData", "resumeAttachment", "url"),
+                ("zpData", "attachmentInfo", "url"),
+                ("data", "resumeUrl"),
+                ("data", "downloadUrl"),
+                ("resumeUrl",),
+                ("downloadUrl",),
+            ],
+        )
+        if not source_url and attachment_payload:
+            source_url = self._pick_first(attachment_payload, ("url", "downloadUrl", "resumeUrl", "attachmentUrl", "fileUrl", "pdfUrl"))
+
+        file_name = self._pick_nested_first(
+            payload,
+            paths=[
+                ("zpData", "resumeFileName"),
+                ("zpData", "fileName"),
+                ("zpData", "attachmentInfo", "fileName"),
+                ("data", "fileName"),
+                ("fileName",),
+            ],
+        )
+        if not file_name and attachment_payload:
+            file_name = self._pick_first(attachment_payload, ("fileName", "name", "attachmentName"))
+
+        content_type = None
+        if attachment_payload:
+            content_type = self._pick_first(attachment_payload, ("contentType", "mimeType", "fileType"))
+
+        resume_text = self._pick_nested_first(
+            payload,
+            paths=[("zpData", "resumeText"), ("zpData", "content"), ("data", "resumeText"), ("resumeText",), ("content",)],
+        )
+        return {
+            "source_url": str(source_url) if source_url else None,
+            "file_name": str(file_name) if file_name else None,
+            "content_type": str(content_type) if content_type else None,
+            "resume_text": str(resume_text) if resume_text else None,
+        }
+
+    def _derive_filename_from_url(self, source_url: str) -> str:
+        parsed_url = parse.urlparse(source_url)
+        name = os.path.basename(parsed_url.path or "").strip()
+        return name or f"boss-resume-{uuid.uuid4()}.bin"
+
+    def _download_binary(self, url: str) -> tuple[bytes, str | None]:
+        headers = self._build_headers()
+        resolved_url = self._build_live_url(url)
+        try:
+            response = requests.get(resolved_url, headers=headers, timeout=20)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as exc:
+            raise ConnectorOperationError(f"BOSS download failed: {exc}") from exc
+        return response.content, response.headers.get("Content-Type")
 
     def _build_live_url(self, path: str | None) -> str:
         base_url = (self._credentials.base_url or "").rstrip("/")
@@ -409,6 +1007,32 @@ class BossConnector:
         if resolved_path.startswith(("http://", "https://")):
             return resolved_path
         return parse.urljoin(base_url + "/", resolved_path.lstrip("/"))
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Cookie": self._credentials.cookie_header or "",
+            "Referer": f"{self._credentials.base_url}/web/chat/index",
+            "Origin": self._credentials.base_url or "",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        zp_token = self._extract_cookie_value("bst")
+        if zp_token:
+            headers["zp_token"] = zp_token
+        return headers
+
+    def _extract_cookie_value(self, key: str) -> str | None:
+        cookie_header = self._resolve_cookie_header() or self._credentials.cookie_header or ""
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if not part or "=" not in part:
+                continue
+            name, value = part.split("=", 1)
+            if name.strip() == key:
+                value = value.strip()
+                return value or None
+        return None
 
     def _build_live_headers(self) -> dict[str, str]:
         headers = {
@@ -467,6 +1091,60 @@ class BossConnector:
         return str(value).strip().lower() if value else "unknown"
 
     def _extract_applicant_items(self, payload: dict[str, Any], filter_job_id: str | None = None) -> list[dict[str, Any]]:
+        raw_items = self._extract_raw_applicant_items(payload)
+        if not raw_items:
+            return []
+        normalized = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            
+            # 如果提供了职位 ID，则过滤出对应岗位的候选人
+            item_job_id = self._pick_first(item, ("encryptJobId", "jobId"))
+            if filter_job_id and item_job_id and str(item_job_id) != str(filter_job_id):
+                continue
+
+            # 使用稳定 ID：优先使用 encryptUid (全局唯一且固定)
+            # securityId 在 BOSS 中是加密动态 ID，同一人在不同时间/上下文中可能不同，会导致重复抓取
+            external_candidate_id = self._pick_first(item, ("encryptUid", "uid", "encryptExpectId", "candidateId", "geekId", "userId", "id", "securityId"))
+            if not external_candidate_id:
+                continue
+            
+            normalized.append(
+                {
+                    "external_candidate_id": str(external_candidate_id),
+                    "name": self._pick_first(item, ("name", "candidateName", "geekName", "userName")),
+                    "phone_hash": self._pick_first(item, ("phone_hash", "phoneHash", "mobileHash")),
+                    "email_hash": self._pick_first(item, ("email_hash", "emailHash")),
+                    "resume_url": self._pick_first(item, ("resume_url", "resumeUrl", "cvUrl")),
+                    "resume_text": self._pick_first(item, ("resume_text", "resumeText", "cvText")),
+                    "school": self._pick_first(item, ("schoolName", "school", "university")),
+                    "degree": self._pick_first(item, ("degree", "edu", "degreeName", "education")),
+                    "work_experience": self._pick_first(item, ("experienceName", "experience", "workYears", "lastWorkExpr")),
+                    "expected_salary": self._pick_first(item, ("expectSalary", "salaryDesc", "salary")),
+                    "latest_company": self._pick_first(item, ("companyName", "company", "lastCompany")),
+                    "applied_at": self._parse_boss_timestamp(self._pick_first(item, ("applyTime", "addTime", "createTime"))),
+                    "raw_profile": item,
+                }
+            )
+            
+            # 如果元数据为空但存在摘要字段，则尝试从摘要中解包信息 (BOSS 常用模式: "公司 · 5年 · 本科")
+            summary_expr = item.get("lastWorkExpr")
+            if summary_expr and isinstance(summary_expr, str):
+                parts = [p.strip() for p in summary_expr.split("·")]
+                current_item = normalized[-1]
+                if len(parts) >= 2:
+                    if not current_item.get("latest_company"):
+                        current_item["latest_company"] = parts[0]
+                    if not current_item.get("work_experience"):
+                        current_item["work_experience"] = parts[1]
+                    if len(parts) >= 3 and not current_item.get("degree"):
+                        current_item["degree"] = parts[2]
+                elif not current_item.get("work_experience"):
+                    current_item["work_experience"] = summary_expr
+        return normalized
+
+    def _extract_raw_applicant_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw_items = self._find_first_list(
             payload,
             paths=[
@@ -481,32 +1159,7 @@ class BossConnector:
         )
         if not raw_items:
             return []
-        normalized = []
-        for item in raw_items:
-            if not isinstance(item, dict):
-                continue
-            
-            # 如果提供了职位 ID，则过滤出对应岗位的候选人
-            item_job_id = self._pick_first(item, ("encryptJobId", "jobId"))
-            if filter_job_id and item_job_id and str(item_job_id) != str(filter_job_id):
-                continue
-
-            external_candidate_id = self._pick_first(item, ("securityId", "encryptUid", "candidateId", "geekId", "userId", "id"))
-            if not external_candidate_id:
-                continue
-            
-            normalized.append(
-                {
-                    "external_candidate_id": str(external_candidate_id),
-                    "name": self._pick_first(item, ("name", "candidateName", "geekName", "userName")),
-                    "phone_hash": self._pick_first(item, ("phone_hash", "phoneHash", "mobileHash")),
-                    "email_hash": self._pick_first(item, ("email_hash", "emailHash")),
-                    "resume_url": self._pick_first(item, ("resume_url", "resumeUrl", "cvUrl")),
-                    "resume_text": self._pick_first(item, ("resume_text", "resumeText", "cvText")),
-                    "raw_profile": item,
-                }
-            )
-        return normalized
+        return [item for item in raw_items if isinstance(item, dict)]
 
     def _extract_message_items(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw_items = self._find_first_list(
@@ -543,7 +1196,7 @@ class BossConnector:
         )
         return str(value).strip() if value is not None and str(value).strip() else None
 
-    def _extract_has_more(self, payload: dict[str, Any], next_cursor: str | None) -> bool:
+    def _extract_has_more(self, payload: dict[str, Any], next_cursor: str | None, raw_count: int | None = None) -> bool:
         value = self._pick_nested_first(
             payload,
             paths=[("zpData", "has_more"), ("zpData", "hasMore"), ("data", "has_more"), ("data", "hasMore"), ("has_more",), ("hasMore",), ("more",)],
@@ -558,7 +1211,29 @@ class BossConnector:
                 return True
             if lowered in {"false", "0", "no", "n"}:
                 return False
+        if raw_count is not None:
+            return raw_count >= 100
         return next_cursor is not None
+
+    def _parse_boss_timestamp(self, ts: Any) -> str | None:
+        if ts is None:
+            return None
+        try:
+            # BOSS 经常返回 13 位毫秒级时间戳
+            val = int(ts)
+            if val > 10**11:
+                val /= 1000
+            return datetime.fromtimestamp(val, UTC).replace(tzinfo=None).isoformat()
+        except (ValueError, TypeError):
+            return str(ts) if ts else None
+
+    def _coerce_page_number(self, cursor: str | None) -> int:
+        if not cursor:
+            return 1
+        try:
+            return max(1, int(cursor))
+        except (TypeError, ValueError):
+            return 1
 
     def _extract_conversation_id(self, payload: dict[str, Any], fallback: str) -> str:
         value = self._pick_nested_first(
@@ -626,4 +1301,3 @@ class BossConnector:
             if value is not None and str(value).strip():
                 return value
         return None
-

@@ -1,21 +1,43 @@
-"""AI 简历解析与标准化服务。"""
+"""AI resume parsing and attachment sync services."""
 
 from __future__ import annotations
 
+import io
 import re
 import uuid
+import zipfile
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from xml.etree import ElementTree as ET
 
 from sqlalchemy.orm import Session
+from ..db import models as from_models
 
+from ..connectors.base import ConnectorCredentials
+from ..connectors.registry import registry
 from ..core.config import get_settings
-from ..core.exceptions import InvalidStateError, ResourceNotFoundError
+from ..core.exceptions import ConnectorOperationError, InvalidStateError, ResourceNotFoundError
 from ..repositories.ai_observability import AIObservabilityRepository
 from ..repositories.ai_runtime import AIRuntimeRepository
 from ..repositories.candidates import CandidateRepository
+from ..repositories.candidate_job_pipeline import CandidateJobPipelineRepository
+from ..repositories.job_candidates import JobCandidateRepository
+from ..repositories.resume_attachments import ResumeAttachmentRepository
+from ..repositories.resume_access_retries import ResumeAccessRetryRepository
 from ..repositories.resume_profiles import ResumeProfileRepository
 from ..schemas.ai_resume import (
     CandidateResumeProfileResult,
+    ResumeAccessBatchItemResult,
+    ResumeAccessBatchSyncRequest,
+    ResumeAccessBatchSyncResult,
+    ResumeAccessSyncRequest,
+    ResumeAccessSyncResult,
+    ResumeAttachmentBatchItemResult,
+    ResumeAttachmentBatchSyncRequest,
+    ResumeAttachmentBatchSyncResult,
+    ResumeAttachmentPayload,
+    ResumeAttachmentSyncRequest,
+    ResumeAttachmentSyncResult,
     ResumeNormalizeRequest,
     ResumeNormalizeResult,
     ResumeParseRequest,
@@ -27,16 +49,29 @@ from .llm.client import InvokeContext, LLMClient
 from .llm.guardrails import GuardrailService
 from .llm.prompts import get_prompt_template
 from .llm.router import ModelRouter
+from .credentials import get_credential_service, CredentialService
 
 PARSER_VERSION_HEURISTIC = "heuristic-v1"
 PARSER_VERSION_LLM = "llm-v1"
 
 _SKILL_KEYWORDS = [
     "python",
-    "fastapi",
-    "mysql",
-    "sqlalchemy",
     "java",
+    "juc",
+    "spring",
+    "spring boot",
+    "spring mvc",
+    "mybatis",
+    "fastapi",
+    "redis",
+    "rabbitmq",
+    "kafka",
+    "mysql",
+    "postgresql",
+    "pgvector",
+    "mcp",
+    "rag",
+    "sqlalchemy",
     "golang",
     "kubernetes",
     "docker",
@@ -47,13 +82,17 @@ _EDUCATION_LEVELS = ["博士", "硕士", "本科", "大专", "中专", "高中"]
 
 
 class AIResumeService:
-    """负责简历解析、标准化与结构化画像查询。"""
+    """Resume parsing, normalization, and BOSS attachment sync orchestration."""
 
-    def __init__(self, session: Session):
-        """注入数据库会话并初始化依赖。"""
+    def __init__(self, session: Session, credential_service: CredentialService | None = None):
         self._session = session
         self._settings = get_settings()
+        self._credential_service = credential_service or get_credential_service(session)
         self._candidate_repository = CandidateRepository(session)
+        self._candidate_job_pipeline_repository = CandidateJobPipelineRepository(session)
+        self._job_candidate_repository = JobCandidateRepository(session)
+        self._resume_attachment_repository = ResumeAttachmentRepository(session)
+        self._resume_access_retry_repository = ResumeAccessRetryRepository(session)
         self._resume_repository = ResumeProfileRepository(session)
 
         runtime_repository = AIRuntimeRepository(session)
@@ -66,9 +105,12 @@ class AIResumeService:
         )
 
     def parse_resume(self, payload: ResumeParseRequest) -> ResumeParseResult:
-        """执行简历解析并写入结构化画像。"""
         candidate = self._candidate_repository.get(payload.candidate_id)
         raw_text = (payload.resume_text or candidate.resume_text or "").strip()
+        if not raw_text:
+            raw_text = self._build_resume_text_fallback(candidate)
+            if raw_text:
+                candidate.resume_text = raw_text
         if not raw_text:
             raise InvalidStateError(f"Candidate '{payload.candidate_id}' has no resume text to parse")
 
@@ -105,10 +147,13 @@ class AIResumeService:
         return ResumeParseResult(profile=self._to_profile_payload(profile_entity, risk_entities))
 
     def normalize_resume(self, payload: ResumeNormalizeRequest) -> ResumeNormalizeResult:
-        """对已有解析结果执行标准化刷新。"""
         candidate = self._candidate_repository.get(payload.candidate_id)
         profile = self._resume_repository.get_profile(candidate.id)
         raw_text = (candidate.resume_text or "").strip()
+        if not raw_text:
+            raw_text = self._build_resume_text_fallback(candidate)
+            if raw_text:
+                candidate.resume_text = raw_text
         if profile is None:
             if not raw_text:
                 raise InvalidStateError(f"Candidate '{payload.candidate_id}' has no resume text to normalize")
@@ -120,6 +165,10 @@ class AIResumeService:
             extra_risk_tags = []
             if not raw_text:
                 raw_text = (profile.raw_text or "").strip()
+            if not raw_text:
+                raw_text = self._build_resume_text_fallback(candidate)
+                if raw_text:
+                    candidate.resume_text = raw_text
 
         normalized = self._normalize_profile(parsed)
         confidence = self._estimate_confidence(parsed, raw_text)
@@ -142,7 +191,6 @@ class AIResumeService:
         return ResumeNormalizeResult(profile=self._to_profile_payload(profile_entity, risk_entities))
 
     def get_candidate_resume_profile(self, candidate_id: str) -> CandidateResumeProfileResult:
-        """查询候选人简历画像。"""
         self._candidate_repository.get(candidate_id)
         profile = self._resume_repository.get_profile(candidate_id)
         if profile is None:
@@ -150,8 +198,596 @@ class AIResumeService:
         risks = self._resume_repository.list_risks(candidate_id)
         return CandidateResumeProfileResult(profile=self._to_profile_payload(profile, risks))
 
+    def sync_resume_attachment(self, payload: ResumeAttachmentSyncRequest) -> ResumeAttachmentSyncResult:
+        sync_result = self._sync_resume_attachment_for_candidate(payload.candidate_id)
+        return ResumeAttachmentSyncResult(
+            attachment=sync_result["attachment"],
+            candidate_resume_text_updated=sync_result["candidate_resume_text_updated"],
+        )
+
+    def sync_resume_access(self, payload: ResumeAccessSyncRequest) -> ResumeAccessSyncResult:
+        result = self._request_resume_access_for_candidate(
+            payload.candidate_id,
+            sync_attachment_when_ready=payload.sync_attachment_when_ready,
+        )
+        return ResumeAccessSyncResult(**result)
+
+    def sync_job_resume_access(
+        self,
+        job_id: str,
+        payload: ResumeAccessBatchSyncRequest,
+    ) -> ResumeAccessBatchSyncResult:
+        job_candidates, _, _ = self._job_candidate_repository.list_by_job(job_id, limit=10000)
+        selected_items = job_candidates
+        if payload.candidate_ids:
+            allowed_ids = set(payload.candidate_ids)
+            selected_items = [item for item in selected_items if item.candidate_id in allowed_ids]
+        if payload.limit is not None:
+            selected_items = selected_items[: payload.limit]
+
+        results: list[ResumeAccessBatchItemResult] = []
+        succeeded_count = 0
+        failed_count = 0
+
+        for item in selected_items:
+            try:
+                sync_result = self._request_resume_access_for_candidate(
+                    item.candidate_id,
+                    sync_attachment_when_ready=payload.sync_attachment_when_ready,
+                )
+                results.append(
+                    ResumeAccessBatchItemResult(
+                        candidate_id=item.candidate_id,
+                        external_candidate_id=item.external_candidate_id,
+                        status="synced",
+                        request_status=sync_result["request_status"],
+                        request_sent=sync_result["request_sent"],
+                        resume_visible=sync_result["resume_visible"],
+                        attachment_synced=sync_result["attachment_synced"],
+                        candidate_resume_text_updated=sync_result["candidate_resume_text_updated"],
+                        attachment=sync_result["attachment"],
+                        raw_payload=sync_result["raw_payload"],
+                    )
+                )
+                succeeded_count += 1
+            except Exception as exc:  # noqa: BLE001
+                results.append(
+                    ResumeAccessBatchItemResult(
+                        candidate_id=item.candidate_id,
+                        external_candidate_id=item.external_candidate_id,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                )
+                failed_count += 1
+                if payload.stop_on_error:
+                    break
+
+        return ResumeAccessBatchSyncResult(
+            job_id=job_id,
+            total_candidates=len(selected_items),
+            succeeded_count=succeeded_count,
+            failed_count=failed_count,
+            results=results,
+        )
+
+    def execute_due_resume_access_retries(self, limit: int | None = None) -> list[dict[str, Any]]:
+        now = self._now()
+        due_items = self._resume_access_retry_repository.list_due(
+            now=now,
+            limit=limit or self._settings.resume_access_retry_batch_size,
+        )
+        results: list[dict[str, Any]] = []
+        for item in due_items:
+            try:
+                results.append(self._process_resume_access_retry(item.id))
+            except Exception as exc:  # noqa: BLE001
+                self._session.rollback()
+                next_retry_at = self._compute_next_resume_retry_at()
+                self._resume_access_retry_repository.mark_failed(
+                    item.id,
+                    error_message=str(exc),
+                    next_retry_at=next_retry_at,
+                )
+                self._session.commit()
+                results.append(
+                    {
+                        "retry_id": item.id,
+                        "candidate_id": item.candidate_id,
+                        "status": "failed",
+                        "error_message": str(exc),
+                    }
+                )
+        return results
+
+    def execute_due_auto_resume_requests(
+        self,
+        limit: int | None = None,
+        *,
+        job_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """ Orchestrate 'Smart Bole' automated resume requests based on job thresholds. """
+        pipelines = self._candidate_job_pipeline_repository.list_pending_auto_requests(
+            limit=limit or 10,
+            job_id=job_id,
+        )
+        
+        if not pipelines:
+            print("DEBUG: [Smart Bole] No pending candidates in queue found for automation.")
+            return []
+            
+        print(f"DEBUG: [Smart Bole] Starting scan for {len(pipelines)} pending candidates...")
+        results: list[dict[str, Any]] = []
+        
+        # Cache for job settings and daily counts to avoid redundant queries
+        job_cache: dict[str, Any] = {}
+        # NEW: Keep track of jobs that hit quota in this run
+        reached_quota_job_ids = set()
+        processed_somebody = False
+        
+        for pipeline in pipelines:
+            # 即刻熔断：如果该岗位已达配额，直接跳过其后续所有候选人
+            if pipeline.job_id in reached_quota_job_ids:
+                continue
+
+            try:
+                # 1. Get Job Settings
+                if pipeline.job_id not in job_cache:
+                    job = self._session.get(from_models.Job, pipeline.job_id)
+                    if not job or not job.auto_request_resume:
+                        continue
+                    current_requests = self._candidate_job_pipeline_repository.count_requests_today(job.id)
+                    job_cache[job.id] = {
+                        "job": job,
+                        "current_requests": current_requests,
+                        "quota_remaining": job.max_daily_resume_requests - current_requests
+                    }
+                
+                cache = job_cache[pipeline.job_id]
+                job = cache["job"]
+                
+                # 2. Check Daily Quota
+                if cache["quota_remaining"] <= 0:
+                    print(f"DEBUG: [Smart Bole] Job '{job.title}' reached daily quota ({job.max_daily_resume_requests}). Skipping.")
+                    reached_quota_job_ids.add(pipeline.job_id)
+                    continue
+
+                # 3. Fetch Candidate for Threshold Check
+                candidate = self._candidate_repository.get(pipeline.candidate_id)
+                
+                # 4. Filter by Thresholds
+                threshold_result = self._meets_thresholds(candidate, job)
+                if not threshold_result["passed"]:
+                    reason = threshold_result["reason"] or "threshold_not_met"
+                    self._candidate_job_pipeline_repository.mark_resume_request_skipped(
+                        pipeline.id,
+                        reason=reason,
+                        payload_patch={
+                            "skip_reason_code": threshold_result["code"],
+                            "skip_reason_message": reason,
+                        },
+                    )
+                    self._session.commit()
+                    continue
+                
+                # 5. Execute Request
+                print(f"DEBUG: [Smart Bole] >>> SUCCESS: Requesting resume for {candidate.name} (Job: {job.title})")
+                
+                res = self._request_resume_access_for_candidate(
+                    candidate.id,
+                    sync_attachment_when_ready=True
+                )
+                
+                cache["quota_remaining"] -= 1
+                results.append(res)
+                processed_somebody = True
+                
+            except Exception as exc:
+                self._session.rollback()
+                print(f"DEBUG: [Smart Bole] ERROR: Unexpected failure for candidate {pipeline.candidate_id}: {exc}")
+                continue
+        
+        if not processed_somebody and pipelines:
+            print("DEBUG: [Smart Bole] Scan finished. No candidates in this batch met the current job thresholds.")
+                
+        return results
+
+    def _get_degree_rank(self, degree_str: str | None) -> int:
+        """ Convert degree string to a numerical rank for comparison. """
+        if not degree_str:
+            return -1
+        
+        d = degree_str.strip()
+        if "博士" in d or "PhD" in d.upper():
+            return 5
+        if "硕士" in d or "研究生" in d:
+            return 4
+        if "本科" in d or "学士" in d:
+            return 3
+        if "大专" in d or "专科" in d:
+            return 2
+        if "中专" in d:
+            return 1
+        if "高中" in d:
+            return 0
+        return -1
+
+    def _meets_thresholds(self, candidate: from_models.Candidate, job: from_models.Job) -> dict[str, Any]:
+        """Check if candidate meets the automated request thresholds."""
+        # 1. Degree Check (Fuzzy match)
+        if job.min_degree:
+            target_rank = self._get_degree_rank(job.min_degree)
+            candidate_rank = self._get_degree_rank(candidate.degree)
+            if candidate_rank < target_rank:
+                message = f"Degree {candidate.degree} < {job.min_degree}"
+                print(f"DEBUG: Candidate {candidate.name} skipped ({message})")
+                return {
+                    "passed": False,
+                    "code": "degree_not_meet",
+                    "reason": message,
+                }
+        
+        # 2. Experience Check
+        if job.min_experience_years is not None and job.min_experience_years > 0:
+            exp_str = candidate.work_experience or ""
+            years = 0
+            match = re.search(r"(\d+)", exp_str)
+            if match:
+                val = int(match.group(1))
+                if val > 2000: # Graduation year hint
+                    years = 0
+                else:
+                    years = val
+            
+            if years < job.min_experience_years:
+                message = f"Experience {years}y < {job.min_experience_years}y"
+                print(f"DEBUG: Candidate {candidate.name} skipped ({message})")
+                return {
+                    "passed": False,
+                    "code": "experience_not_meet",
+                    "reason": message,
+                }
+                
+        return {
+            "passed": True,
+            "code": None,
+            "reason": None,
+        }
+
+    def sync_job_resume_attachments(
+        self,
+        job_id: str,
+        payload: ResumeAttachmentBatchSyncRequest,
+    ) -> ResumeAttachmentBatchSyncResult:
+        job_candidates, _, _ = self._job_candidate_repository.list_by_job(job_id, limit=10000)
+        selected_items = job_candidates
+        if payload.candidate_ids:
+            allowed_ids = set(payload.candidate_ids)
+            selected_items = [item for item in selected_items if item.candidate_id in allowed_ids]
+        if payload.limit is not None:
+            selected_items = selected_items[: payload.limit]
+
+        results: list[ResumeAttachmentBatchItemResult] = []
+        succeeded_count = 0
+        failed_count = 0
+
+        for item in selected_items:
+            try:
+                sync_result = self._sync_resume_attachment_for_candidate(item.candidate_id)
+                results.append(
+                    ResumeAttachmentBatchItemResult(
+                        candidate_id=item.candidate_id,
+                        external_candidate_id=item.external_candidate_id,
+                        status="synced",
+                        attachment=sync_result["attachment"],
+                        candidate_resume_text_updated=sync_result["candidate_resume_text_updated"],
+                    )
+                )
+                succeeded_count += 1
+            except Exception as exc:  # noqa: BLE001
+                results.append(
+                    ResumeAttachmentBatchItemResult(
+                        candidate_id=item.candidate_id,
+                        external_candidate_id=item.external_candidate_id,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                )
+                failed_count += 1
+                if payload.stop_on_error:
+                    break
+
+        return ResumeAttachmentBatchSyncResult(
+            job_id=job_id,
+            total_candidates=len(selected_items),
+            succeeded_count=succeeded_count,
+            failed_count=failed_count,
+            results=results,
+        )
+
+    def _sync_resume_attachment_for_candidate(self, candidate_id: str) -> dict[str, Any]:
+        candidate = self._candidate_repository.get(candidate_id)
+        connector = self._build_connector(candidate.source_channel)
+        result = connector.fetch_resume_attachment(candidate.external_candidate_id, raw_profile=candidate.raw_profile or {})
+        attachment = self._resume_attachment_repository.upsert(
+            candidate_id=candidate.id,
+            source_channel=candidate.source_channel,
+            external_candidate_id=candidate.external_candidate_id,
+            file_name=result["file_name"],
+            content_type=result.get("content_type"),
+            source_url=result.get("source_url"),
+            file_size_bytes=int(result["file_size_bytes"]),
+            file_sha256=result["file_sha256"],
+            content_bytes=result["content_bytes"],
+            raw_payload=result.get("raw_payload", {}),
+        )
+
+        updated_resume_text = False
+        resume_text = str(result.get("resume_text") or "").strip()
+        if not resume_text:
+            resume_text = self._extract_resume_text_from_attachment(
+                file_name=str(result.get("file_name") or ""),
+                content_type=str(result.get("content_type") or ""),
+                content_bytes=result.get("content_bytes") or b"",
+            ) or ""
+        if result.get("resume_text") or result.get("source_url"):
+            current_profile = dict(candidate.raw_profile or {})
+            current_profile.update(
+                {
+                    "resume_attachment_synced": True,
+                    "resume_attachment_file_name": result["file_name"],
+                }
+            )
+            if result.get("source_url"):
+                candidate.resume_url = result["source_url"]
+            if resume_text:
+                candidate.resume_text = resume_text
+                updated_resume_text = True
+                current_profile["resume_text_source"] = "attachment"
+            parsed_email = self._resolve_candidate_email_from_resume(
+                resume_text=resume_text,
+                raw_profile=current_profile,
+            )
+            if parsed_email:
+                candidate.email = parsed_email
+                current_profile["email"] = parsed_email
+            candidate.raw_profile = current_profile
+        elif resume_text:
+            # Even if source_url is absent, preserve extracted text for downstream parse/evaluation.
+            candidate.resume_text = resume_text
+            updated_resume_text = True
+            parsed_email = self._resolve_candidate_email_from_resume(
+                resume_text=resume_text,
+                raw_profile=candidate.raw_profile or {},
+            )
+            if parsed_email:
+                candidate.email = parsed_email
+                profile_patch = dict(candidate.raw_profile or {})
+                profile_patch["email"] = parsed_email
+                candidate.raw_profile = profile_patch
+
+        for link in self._job_candidate_repository.list_by_candidate(candidate.id):
+            pipeline = self._candidate_job_pipeline_repository.ensure(
+                candidate_id=candidate.id,
+                job_id=link.job_id,
+                source_channel=link.channel,
+                external_candidate_id=link.external_candidate_id,
+                payload={"job_candidate_id": link.id},
+            )
+            self._candidate_job_pipeline_repository.mark_resume_downloaded(
+                pipeline.id,
+                resume_attachment_id=attachment.id,
+                payload_patch={"resume_attachment_file_name": result["file_name"]},
+            )
+
+        self._session.commit()
+        self._session.refresh(attachment)
+        return {
+            "attachment": self._to_attachment_payload(attachment),
+            "candidate_resume_text_updated": updated_resume_text,
+        }
+
+    def hydrate_resume_text_from_latest_attachment(self, candidate_id: str, *, force_refresh: bool = False) -> bool:
+        """Backfill candidate.resume_text/email from latest attachment.
+
+        When force_refresh=True, always prefer latest attachment text for downstream evaluation consistency.
+        """
+        candidate = self._candidate_repository.get(candidate_id)
+        existing_text = (candidate.resume_text or "").strip()
+        if existing_text and not force_refresh:
+            return False
+        attachment = self._resume_attachment_repository.get_latest(candidate_id)
+        if attachment is None:
+            return False
+        extracted = self._extract_resume_text_from_attachment(
+            file_name=str(attachment.file_name or ""),
+            content_type=str(attachment.content_type or ""),
+            content_bytes=attachment.content_bytes or b"",
+        )
+        if not extracted:
+            return False
+        updated = False
+        if force_refresh or extracted != existing_text:
+            candidate.resume_text = extracted
+            updated = True
+        current_profile = dict(candidate.raw_profile or {})
+        current_profile["resume_text_source"] = "attachment_refresh" if force_refresh else "attachment_backfill"
+        parsed_email = self._resolve_candidate_email_from_resume(
+            resume_text=extracted,
+            raw_profile=current_profile,
+        )
+        if parsed_email:
+            if candidate.email != parsed_email:
+                candidate.email = parsed_email
+                updated = True
+            current_profile["email"] = parsed_email
+        candidate.raw_profile = current_profile
+        self._session.flush()
+        return updated
+
+    def _request_resume_access_for_candidate(
+        self,
+        candidate_id: str,
+        *,
+        sync_attachment_when_ready: bool,
+    ) -> dict[str, Any]:
+        candidate = self._candidate_repository.get(candidate_id)
+        connector = self._build_connector(candidate.source_channel)
+        request_result = connector.request_resume_access(
+            candidate.external_candidate_id,
+            raw_profile=candidate.raw_profile or {},
+        )
+
+        detail = dict(request_result.get("detail") or {})
+        raw_payload = dict(request_result.get("raw_payload") or {})
+        current_profile = dict(candidate.raw_profile or {})
+        current_profile.update(detail)
+        current_profile["resume_access_request_status"] = request_result.get("request_status")
+        current_profile["resume_access_request_sent"] = request_result.get("request_sent", False)
+        current_profile["resume_access_resume_visible"] = request_result.get("resume_visible", False)
+        candidate.raw_profile = current_profile
+
+        security_id = request_result.get("security_id")
+        if security_id:
+            candidate.external_candidate_id = str(security_id)
+
+        attachment_payload = None
+        attachment_synced = False
+        candidate_resume_text_updated = False
+        links = self._job_candidate_repository.list_by_candidate(candidate.id)
+        request_sent = bool(request_result.get("request_sent", False))
+        resume_visible = bool(request_result.get("resume_visible", False))
+        next_retry_at = self._compute_next_resume_retry_at() if request_sent and not attachment_synced else None
+
+        if request_sent:
+            self._resume_access_retry_repository.upsert_pending(
+                candidate_id=candidate.id,
+                source_channel=candidate.source_channel,
+                external_candidate_id=candidate.external_candidate_id,
+                request_status=request_result.get("request_status"),
+                request_sent=request_sent,
+                resume_visible=resume_visible,
+                next_retry_at=next_retry_at,
+                raw_payload=raw_payload,
+            )
+
+        for link in links:
+            pipeline = self._candidate_job_pipeline_repository.ensure(
+                candidate_id=candidate.id,
+                job_id=link.job_id,
+                source_channel=link.channel,
+                external_candidate_id=link.external_candidate_id,
+                payload={"job_candidate_id": link.id},
+            )
+            if request_sent:
+                self._candidate_job_pipeline_repository.mark_resume_requested(
+                    pipeline.id,
+                    next_retry_at=next_retry_at,
+                    payload_patch={
+                        "resume_access_request_status": request_result.get("request_status"),
+                        "resume_visible": resume_visible,
+                    },
+                )
+        self._session.commit()
+
+        if sync_attachment_when_ready and resume_visible:
+            try:
+                sync_result = self._sync_resume_attachment_for_candidate(candidate_id)
+                attachment_payload = sync_result["attachment"]
+                attachment_synced = True
+                candidate_resume_text_updated = sync_result["candidate_resume_text_updated"]
+            except Exception:
+                retry_entity = self._resume_access_retry_repository.get_by_candidate(candidate.id, candidate.source_channel)
+                retry_at = self._compute_next_resume_retry_at()
+                if retry_entity is not None:
+                    retry_entity.next_retry_at = retry_at
+                    retry_entity.resume_visible = True
+                    retry_entity.last_error = "resume_attachment_sync_failed"
+                    self._session.flush()
+                    self._session.commit()
+                raise
+
+        if attachment_synced:
+            retry_entity = self._resume_access_retry_repository.get_by_candidate(candidate.id, candidate.source_channel)
+            if retry_entity is not None:
+                self._resume_access_retry_repository.mark_downloaded(
+                    retry_entity.id,
+                    raw_payload={
+                        "request": raw_payload,
+                        "downloaded": True,
+                    },
+                )
+                self._session.commit()
+
+        return {
+            "candidate_id": candidate_id,
+            "external_candidate_id": candidate.external_candidate_id,
+            "request_status": request_result.get("request_status"),
+            "request_sent": request_sent,
+            "resume_visible": resume_visible,
+            "attachment_synced": attachment_synced,
+            "candidate_resume_text_updated": candidate_resume_text_updated,
+            "attachment": attachment_payload,
+            "raw_payload": raw_payload,
+        }
+
+    def _process_resume_access_retry(self, retry_id: str) -> dict[str, Any]:
+        retry_entity = self._resume_access_retry_repository.get(retry_id)
+        if retry_entity is None:
+            return {"retry_id": retry_id, "status": "missing"}
+        candidate = self._candidate_repository.get(retry_entity.candidate_id)
+        connector = self._build_connector(candidate.source_channel)
+        check_result = connector.check_resume_access(
+            candidate.external_candidate_id,
+            raw_profile=candidate.raw_profile or {},
+        )
+
+        detail = dict(check_result.get("detail") or {})
+        current_profile = dict(candidate.raw_profile or {})
+        current_profile.update(detail)
+        current_profile["resume_access_resume_visible"] = check_result.get("resume_visible", False)
+        candidate.raw_profile = current_profile
+        security_id = check_result.get("security_id")
+        if security_id:
+            candidate.external_candidate_id = str(security_id)
+
+        attachment_payload = None
+        downloaded = False
+        if check_result.get("resume_visible"):
+            sync_result = self._sync_resume_attachment_for_candidate(candidate.id)
+            attachment_payload = sync_result["attachment"]
+            downloaded = True
+            self._resume_access_retry_repository.mark_downloaded(
+                retry_entity.id,
+                raw_payload={
+                    "check": check_result.get("raw_payload", {}),
+                    "downloaded": True,
+                },
+            )
+        else:
+            self._resume_access_retry_repository.mark_checked(
+                retry_entity.id,
+                resume_visible=False,
+                next_retry_at=self._compute_next_resume_retry_at(),
+                raw_payload=check_result.get("raw_payload", {}),
+            )
+        self._session.commit()
+        return {
+            "retry_id": retry_id,
+            "candidate_id": candidate.id,
+            "status": "downloaded" if downloaded else "pending",
+            "resume_visible": bool(check_result.get("resume_visible", False)),
+            "attachment_synced": downloaded,
+            "attachment": attachment_payload,
+        }
+
+    def _compute_next_resume_retry_at(self):
+        return self._now() + timedelta(minutes=max(1, self._settings.resume_access_retry_interval_minutes))
+
+    def _now(self):
+        return datetime.now(UTC).replace(tzinfo=None)
+
     def _parse_with_llm(self, *, candidate_id: str, raw_text: str, raw_profile: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
-        """调用 LLM 执行简历解析，失败时返回空结果并打标。"""
         template = get_prompt_template("resume_parse", "v1")
         prompt = "\n".join([template.system_prompt, template.render(resume_text=raw_text)])
         result = self._llm_client.invoke_json(
@@ -187,7 +823,6 @@ class AIResumeService:
         return parsed, [str(item) for item in content.get("risk_tags", [])]
 
     def _parse_with_heuristic(self, *, raw_text: str, raw_profile: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-        """基于文本与 raw_profile 执行启发式解析。"""
         lower_text = raw_text.lower()
         parsed: dict[str, Any] = {}
 
@@ -223,7 +858,6 @@ class AIResumeService:
         return parsed, []
 
     def _normalize_profile(self, parsed: dict[str, Any]) -> dict[str, Any]:
-        """对解析结果执行字段标准化。"""
         normalized: dict[str, Any] = dict(parsed)
 
         skills = []
@@ -258,7 +892,6 @@ class AIResumeService:
         return normalized
 
     def _detect_risks(self, normalized: dict[str, Any], raw_text: str, extra_risk_tags: list[str] | None = None) -> list[dict[str, str]]:
-        """识别简历风险标签。"""
         risk_map: dict[str, dict[str, str]] = {}
 
         def add_risk(code: str, level: str, detail: str) -> None:
@@ -266,23 +899,22 @@ class AIResumeService:
 
         skills = normalized.get("skills", [])
         if not skills:
-            add_risk("skills_missing", "medium", "未识别到可用技能字段，需人工复核简历。")
+            add_risk("skills_missing", "medium", "No obvious skill keywords were extracted from the resume.")
         years = normalized.get("experience_years")
         if years is None:
-            add_risk("experience_missing", "low", "未提取到明确工作年限。")
+            add_risk("experience_missing", "low", "No clear work experience duration was extracted.")
         job_hops = normalized.get("job_hops")
         if isinstance(job_hops, int) and job_hops >= 4:
-            add_risk("job_hops_high", "medium", "候选人历史跳槽频次偏高。")
+            add_risk("job_hops_high", "medium", "Candidate appears to have frequent job changes.")
         if len(raw_text) < 80:
-            add_risk("resume_too_short", "low", "简历文本较短，信息完整度可能不足。")
+            add_risk("resume_too_short", "low", "Resume text is short and may be incomplete.")
 
         for tag in extra_risk_tags or []:
             if tag not in risk_map:
-                add_risk(tag, "low", f"模型风险标签：{tag}")
+                add_risk(tag, "low", f"Model-generated risk tag: {tag}")
         return list(risk_map.values())
 
     def _estimate_confidence(self, parsed: dict[str, Any], raw_text: str) -> float:
-        """估算解析置信度。"""
         score = 0.35
         if parsed.get("skills"):
             score += 0.25
@@ -294,18 +926,211 @@ class AIResumeService:
             score += 0.1
         return round(min(score, 0.98), 2)
 
-    def _extract_years(self, raw_text: str) -> float | None:
-        """从简历文本中提取年限。"""
-        match = re.search(r"(\d+(?:\.\d+)?)\s*(?:年|years?)", raw_text, re.IGNORECASE)
-        if not match:
+    def _extract_resume_text_from_attachment(self, *, file_name: str, content_type: str, content_bytes: bytes) -> str | None:
+        if not content_bytes:
+            return None
+        ext = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+        ctype = (content_type or "").lower()
+
+        text: str | None = None
+        if ext == "pdf" or "pdf" in ctype:
+            text = self._extract_pdf_text(content_bytes)
+        elif ext == "docx" or "wordprocessingml.document" in ctype:
+            text = self._extract_docx_text(content_bytes)
+        elif ext in {"txt", "md", "rtf"} or ctype.startswith("text/"):
+            text = self._decode_text_bytes(content_bytes)
+        else:
+            # Best-effort fallback for unknown binary types.
+            text = self._extract_pdf_text(content_bytes) or self._extract_docx_text(content_bytes) or self._decode_text_bytes(content_bytes)
+
+        if not text:
+            return None
+        sanitized = text.replace("\x00", " ").replace("\r", "\n")
+        lines = [line.strip() for line in sanitized.split("\n") if line and line.strip()]
+        filtered: list[str] = []
+        for line in lines:
+            # Drop noisy encrypted/token lines that often appear in downloaded PDFs.
+            if re.fullmatch(r"[A-Za-z0-9_-]{20,}~{2,}", line):
+                continue
+            if filtered and filtered[-1] == line:
+                continue
+            filtered.append(line)
+        normalized = "\n".join(filtered)
+        return normalized[:120000] if normalized else None
+
+    def _extract_pdf_text(self, data: bytes) -> str | None:
+        try:
+            import pypdf  # type: ignore
+        except Exception:
             return None
         try:
-            return float(match.group(1))
-        except ValueError:
+            reader = pypdf.PdfReader(io.BytesIO(data))
+            parts = [str(page.extract_text() or "").strip() for page in reader.pages]
+            text = "\n".join(part for part in parts if part)
+            return text or None
+        except Exception:
             return None
 
+    def _extract_docx_text(self, data: bytes) -> str | None:
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                xml_bytes = zf.read("word/document.xml")
+            root = ET.fromstring(xml_bytes)
+            text = "\n".join(chunk.strip() for chunk in root.itertext() if chunk and chunk.strip())
+            return text or None
+        except Exception:
+            return None
+
+    def _decode_text_bytes(self, data: bytes) -> str | None:
+        for encoding in ("utf-8", "gb18030", "gbk", "latin-1"):
+            try:
+                text = data.decode(encoding, errors="ignore").strip()
+                if len(text) >= 20:
+                    return text
+            except Exception:
+                continue
+        return None
+
+    def _resolve_candidate_email_from_resume(self, *, resume_text: str, raw_profile: dict[str, Any]) -> str | None:
+        # 1. 优先从三方画像中提取
+        email = self._extract_email_from_profile(raw_profile)
+        if email:
+            return email
+            
+        # 2. 启发式正则提取 (快速且高频)
+        email = self._extract_email_from_text(resume_text)
+        if email:
+            return email
+            
+        # 3. LLM 兜底解析 (处理混淆、错位或非标准格式)
+        if self._is_llm_enabled() and resume_text.strip():
+            # 仅取简历开头和结尾，联系方式通常出现在该位置
+            sample = resume_text[:2000] + "\n...\n" + resume_text[-1000:] if len(resume_text) > 3000 else resume_text
+            try:
+                from .llm.prompts import PromptTaskKey, get_prompt_template
+                from .llm.client import InvokeContext
+                import uuid
+                template = get_prompt_template(PromptTaskKey.CONTACT_EXTRACT, "v1")
+                prompt = "\n".join([template.system_prompt, template.render(text_context=sample)])
+                result = self._llm_client.invoke_json(
+                    InvokeContext(
+                        task_key=PromptTaskKey.CONTACT_EXTRACT,
+                        trace_id=str(uuid.uuid4()),
+                        prompt=prompt,
+                    )
+                )
+                if not result.fallback_used and result.content.get("email"):
+                    llm_email = str(result.content["email"]).strip().lower()
+                    if self._looks_like_email(llm_email):
+                        return llm_email
+            except Exception:
+                pass
+
+        return None
+
+    def _extract_email_from_profile(self, raw_profile: dict[str, Any]) -> str | None:
+        if not isinstance(raw_profile, dict):
+            return None
+        # 增加对常见中文标签的支持
+        for key in ("email", "mail", "contact_email", "邮箱", "电子邮箱"):
+            value = raw_profile.get(key)
+            if isinstance(value, str):
+                parsed = self._extract_email_from_text(value)
+                if parsed:
+                    return parsed
+        return None
+        for key in ("email", "mail", "contact_email", "閭", "鐢靛瓙閭"):
+            value = raw_profile.get(key)
+            if isinstance(value, str):
+                parsed = self._extract_email_from_text(value)
+                if parsed:
+                    return parsed
+        return None
+
+    def _extract_email_from_text(self, text: str) -> str | None:
+        if not text:
+            return None
+        # 优化正则：支持更多后缀，处理某些混淆情况
+        pattern = r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[A-Za-z]{2,6}\b"
+        match = re.search(pattern, text)
+        if match:
+            return match.group(0).strip().lower()
+        
+        # 处理 (at) 等混淆格式
+        confused = re.search(r"\b[a-zA-Z0-9._%+\-]+(?:\(at\)|@)[a-zA-Z0-9.\-]+\.(?:[A-Za-z]{2,6})\b", text, re.IGNORECASE)
+        if confused:
+            return confused.group(0).replace("(at)", "@").strip().lower()
+
+        return None
+
+    def _looks_like_email(self, value: str) -> bool:
+        return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value.strip()))
+
+    def _build_resume_text_fallback(self, candidate: from_models.Candidate) -> str:
+        """Build minimal resume-like text from candidate metadata when resume text is missing."""
+        lines: list[str] = []
+
+        def add_line(label: str, value: Any) -> None:
+            text = str(value or "").strip()
+            if text:
+                lines.append(f"{label}: {text}")
+
+        add_line("name", candidate.name)
+        add_line("school", candidate.school)
+        add_line("degree", candidate.degree)
+        add_line("work_experience", candidate.work_experience)
+        add_line("latest_company", candidate.latest_company)
+        add_line("expected_salary", candidate.expected_salary)
+
+        raw_profile = candidate.raw_profile if isinstance(candidate.raw_profile, dict) else {}
+        for key in (
+            "skills",
+            "skillList",
+            "workExperience",
+            "education",
+            "projectExperience",
+            "selfDescription",
+            "advantage",
+            "positionName",
+            "industry",
+        ):
+            value = raw_profile.get(key)
+            if isinstance(value, list):
+                joined = "; ".join(str(item).strip() for item in value if str(item).strip())
+                add_line(key, joined)
+            elif isinstance(value, dict):
+                flattened = "; ".join(f"{k}={v}" for k, v in value.items() if str(v).strip())
+                add_line(key, flattened)
+            else:
+                add_line(key, value)
+        return "\n".join(lines).strip()
+
+    def _extract_years(self, raw_text: str) -> float | None:
+        text = str(raw_text or "")
+        lower = text.lower()
+        # Fresh graduates/in-school profiles should not be treated as many years of work experience.
+        if any(token in text for token in ("应届", "在校", "届生")):
+            return 0.0
+
+        patterns = [
+            r"(\d+(?:\.\d+)?)\s*年(?:工作)?经验",
+            r"工作经验\s*(\d+(?:\.\d+)?)\s*年",
+            r"(\d+(?:\.\d+)?)\s*years?\s*(?:of)?\s*experience",
+            r"experience\s*[:：]?\s*(\d+(?:\.\d+)?)\s*years?",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, lower, re.IGNORECASE)
+            if not match:
+                continue
+            try:
+                years = float(match.group(1))
+            except ValueError:
+                continue
+            if 0.0 <= years <= 20.0:
+                return years
+        return None
+
     def _extract_education(self, raw_text: str, raw_profile: dict[str, Any]) -> str | None:
-        """提取最高学历关键词。"""
         for key in ("education", "education_level"):
             value = raw_profile.get(key)
             if value:
@@ -319,13 +1144,47 @@ class AIResumeService:
         return None
 
     def _extract_project_hints(self, raw_text: str) -> list[dict[str, str]]:
-        """从文本中抽取简化项目提示。"""
-        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-        project_lines = [line for line in lines if "项目" in line or "project" in line.lower()]
-        return [{"name": f"project-{idx}", "summary": line[:120]} for idx, line in enumerate(project_lines[:3], start=1)]
+        lines = [line.strip() for line in str(raw_text or "").splitlines() if line and line.strip()]
+        if not lines:
+            return []
+
+        project_markers = ("项目经验", "项⽬经验", "project experience")
+        section_start = -1
+        for idx, line in enumerate(lines):
+            if any(marker in line.lower() for marker in project_markers):
+                section_start = idx
+                break
+
+        candidates = lines if section_start < 0 else lines[section_start : min(len(lines), section_start + 80)]
+        stop_markers = ("专业技能", "自我评价", "教育背景", "skills", "summary")
+        collected: list[str] = []
+        for line in candidates:
+            lower = line.lower()
+            if collected and any(marker in lower for marker in stop_markers):
+                break
+            if "项目" in line or "项⽬" in line or "project" in lower or "|" in line:
+                collected.append(line)
+
+        projects: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for line in collected:
+            name = line.split("|", 1)[0].strip() if "|" in line else line[:40].strip()
+            summary = line[:160].strip()
+            key = f"{name}|{summary}"
+            if not name or key in seen:
+                continue
+            seen.add(key)
+            projects.append({"name": name, "summary": summary})
+            if len(projects) >= 5:
+                break
+        return projects
+    def _build_connector(self, channel: str):
+        if channel == "boss":
+            credentials = self._credential_service.resolve_boss_credentials()
+            return registry.create(channel, credentials)
+        raise ConnectorOperationError(f"Connector '{channel}' is not configured")
 
     def _to_profile_payload(self, profile, risks) -> ResumeProfilePayload:
-        """将 ORM 对象转换为 API 响应模型。"""
         return ResumeProfilePayload(
             candidate_id=profile.candidate_id,
             raw_text=profile.raw_text or "",
@@ -339,8 +1198,22 @@ class AIResumeService:
             updated_at=profile.updated_at,
         )
 
+    def _to_attachment_payload(self, attachment) -> ResumeAttachmentPayload:
+        return ResumeAttachmentPayload(
+            candidate_id=attachment.candidate_id,
+            source_channel=attachment.source_channel,
+            external_candidate_id=attachment.external_candidate_id,
+            file_name=attachment.file_name,
+            content_type=attachment.content_type,
+            source_url=attachment.source_url,
+            file_size_bytes=attachment.file_size_bytes,
+            file_sha256=attachment.file_sha256,
+            last_synced_at=attachment.last_synced_at,
+            created_at=attachment.created_at,
+            updated_at=attachment.updated_at,
+        )
+
     def _is_llm_enabled(self) -> bool:
-        """判定简历解析链路是否启用 LLM。"""
         return self._runtime_repository.is_feature_enabled(
             feature_key="ai_resume_llm",
             default_enabled=self._settings.ai_resume_llm_enabled,
@@ -348,5 +1221,4 @@ class AIResumeService:
 
 
 def get_ai_resume_service(session: Session) -> AIResumeService:
-    """返回绑定当前数据库会话的 AIResumeService。"""
-    return AIResumeService(session)
+    return AIResumeService(session, get_credential_service(session))

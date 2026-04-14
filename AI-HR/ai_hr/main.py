@@ -30,6 +30,7 @@ if __package__ in {None, ""}:
     from ai_hr.core.responses import Envelope
     from ai_hr.db.base import Base
     from ai_hr.db.session import engine
+    from ai_hr.services.job_sync import create_job_sync_scheduler
     from ai_hr.services.providers.circuit_breaker import ProviderCircuitBreaker
     from ai_hr.services.providers.health import ProviderHealthService
 else:
@@ -41,6 +42,7 @@ else:
     from .core.responses import Envelope
     from .db.base import Base
     from .db.session import engine
+    from .services.job_sync import create_job_sync_scheduler
     from .services.providers.circuit_breaker import ProviderCircuitBreaker
     from .services.providers.health import ProviderHealthService
 
@@ -80,10 +82,16 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestObservabilityMiddleware)
     app.add_middleware(IdempotencyMiddleware)
     register_exception_handlers(app)
+    app.state.job_sync_scheduler = create_job_sync_scheduler()
 
     @app.on_event("startup")
     def on_startup() -> None:
         init_database(settings)
+        app.state.job_sync_scheduler.start()
+
+    @app.on_event("shutdown")
+    def on_shutdown() -> None:
+        app.state.job_sync_scheduler.stop()
 
     @app.get("/health", tags=["system"], response_model=Envelope[dict[str, str]])
     async def healthcheck() -> Envelope[dict[str, str]]:

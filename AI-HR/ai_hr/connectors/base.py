@@ -19,6 +19,7 @@ class ConnectorCredentials:
     greet_path: str | None = None
     fetch_messages_path: str | None = None
     send_message_path: str | None = None
+    resume_detail_path: str | None = None
     interview_schedule_path: str | None = None
     interview_status_path: str | None = None
     cookie_header: str | None = None
@@ -57,6 +58,15 @@ class RecruitingConnector(Protocol):
     def list_applicants(self, job_external_id: str, cursor: str | None = None) -> dict[str, Any]:
         """Fetch job applicants with optional incremental cursor."""
 
+    def list_resume_ready_candidates(
+        self,
+        job_external_id: str | None = None,
+        *,
+        label_id: int = 4,
+        sort: str = "",
+    ) -> dict[str, Any]:
+        """Fetch candidates from the acquired-resume pool."""
+
     def send_greeting(
         self,
         candidate_external_id: str,
@@ -70,6 +80,15 @@ class RecruitingConnector(Protocol):
 
     def send_message(self, conversation_external_id: str, message: str) -> dict[str, Any]:
         """Send a direct message to a candidate."""
+
+    def fetch_resume_attachment(self, candidate_external_id: str, raw_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Fetch candidate resume attachment metadata and content."""
+
+    def request_resume_access(self, candidate_external_id: str, raw_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Trigger the platform-side action that makes the candidate attachment resume obtainable."""
+
+    def check_resume_access(self, candidate_external_id: str, raw_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Check whether the candidate attachment resume has become obtainable."""
 
     def schedule_interview(self, candidate_external_id: str, slot: dict[str, Any]) -> dict[str, Any]:
         """Schedule an interview or trigger a scheduling flow."""

@@ -1,4 +1,4 @@
-﻿"""候选人外部身份映射模型。"""
+"""候选人外部身份映射模型。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,6 @@ class CandidateIdentity(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     candidate_id: Mapped[str] = mapped_column(String(36), ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False, index=True)
     source_channel: Mapped[str] = mapped_column(String(64), nullable=False)
-    external_candidate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    external_candidate_id: Mapped[str] = mapped_column(String(512), nullable=False)
 
     candidate = relationship("Candidate", back_populates="identities")

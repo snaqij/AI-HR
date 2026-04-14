@@ -21,6 +21,7 @@ from ..schemas.interviews import (
     InterviewSendRequest,
     InterviewSyncStatusRequest,
 )
+from .credentials import get_credential_service, CredentialService
 
 
 class InterviewService:
@@ -32,12 +33,14 @@ class InterviewService:
         candidate_repository: CandidateRepository,
         job_repository: JobRepository,
         event_repository: EventRepository,
+        credential_service: CredentialService,
     ):
         """注入依赖仓储并读取配置。"""
         self._interview_repository = interview_repository
         self._candidate_repository = candidate_repository
         self._job_repository = job_repository
         self._event_repository = event_repository
+        self._credential_service = credential_service
         self._settings = get_settings()
 
     def schedule_interview(self, payload: InterviewScheduleRequest) -> dict:
@@ -286,23 +289,7 @@ class InterviewService:
     def _build_connector(self, channel: str):
         """根据渠道构建连接器实例。"""
         if channel == "boss":
-            credentials = ConnectorCredentials(
-                account=self._settings.boss_account,
-                secret=self._settings.boss_secret,
-                mode=self._settings.boss_mode,
-                base_url=self._settings.boss_base_url,
-                publish_path=self._settings.boss_publish_path,
-                status_path=self._settings.boss_status_path,
-                applicants_path=self._settings.boss_applicants_path,
-                greet_path=self._settings.boss_greet_path,
-                fetch_messages_path=self._settings.boss_fetch_messages_path,
-                send_message_path=self._settings.boss_send_message_path,
-                interview_schedule_path=self._settings.boss_interview_schedule_path,
-                interview_status_path=self._settings.boss_interview_status_path,
-                cookie_header=self._settings.boss_cookie_header,
-                credential_file=self._settings.boss_credential_file,
-                timeout_seconds=self._settings.boss_timeout_seconds,
-            )
+            credentials = self._credential_service.resolve_boss_credentials()
             return registry.create(channel, credentials)
         raise ConnectorOperationError(f"Connector '{channel}' is not configured")
 
@@ -314,4 +301,5 @@ def get_interview_service(session: Session) -> InterviewService:
         candidate_repository=CandidateRepository(session),
         job_repository=JobRepository(session),
         event_repository=EventRepository(session),
+        credential_service=get_credential_service(session),
     )

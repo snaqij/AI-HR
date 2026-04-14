@@ -1,4 +1,4 @@
-﻿"""岗位发布记录持久化模型。"""
+"""岗位发布记录持久化模型。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class JobPublication(TimestampMixin, Base):
     job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
     channel: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
-    external_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    external_job_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     response_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -30,3 +30,4 @@ class JobPublication(TimestampMixin, Base):
     applicant_sync_cursor: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     job: Mapped["Job"] = relationship(back_populates="publications")
+    job_candidates: Mapped[list["JobCandidate"]] = relationship("JobCandidate", back_populates="publication")

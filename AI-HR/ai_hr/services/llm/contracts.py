@@ -25,6 +25,23 @@ class CandidateScoreLLMOutput(BaseModel):
     risk_tags: list[str] = Field(default_factory=list)
 
 
+class CandidateEvaluationLLMOutput(BaseModel):
+    """Detailed candidate evaluation output contract."""
+
+    match_score: float = 0.0
+    competitiveness_score: float = 0.0
+    final_score: float = 0.0
+    confidence_score: float = 0.0
+    dimension_scores: dict[str, float] = Field(default_factory=dict)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    highlights: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+    recommendation: str = "review"
+    summary: str = ""
+    job_requirement_coverage: dict[str, str] = Field(default_factory=dict)
+
+
 class IntentClassifyLLMOutput(BaseModel):
     """意图分类输出契约。"""
 

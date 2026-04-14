@@ -687,9 +687,11 @@ class AIInterviewService:
             )
             if existing:
                 return AIInterviewQuestionGenerateResult(
+                    session_id=context_id,
                     version=existing.version,
                     question_count=len(existing.questions_json),
-                    source=existing.source
+                    source=existing.source,
+                    questions=existing.questions_json or [],
                 )
 
         # 2. 获取业务基础数据
@@ -729,9 +731,11 @@ class AIInterviewService:
         )
 
         return AIInterviewQuestionGenerateResult(
+            session_id=context_id,
             version=entity.version,
             question_count=len(entity.questions_json),
-            source=entity.source
+            source=entity.source,
+            questions=entity.questions_json or [],
         )
 
     def prebuild_question_pack(self, payload: AIInterviewQuestionPackPrebuildRequest) -> dict:

@@ -384,14 +384,16 @@ CREATE TABLE ai_interview_handoffs (
 
 CREATE TABLE ai_interview_question_sets (
 	id VARCHAR(36) NOT NULL, 
-	session_id VARCHAR(36) NOT NULL, 
+	session_id VARCHAR(36), 
+	invitation_id VARCHAR(36), 
 	version INTEGER NOT NULL, 
 	source VARCHAR(64) NOT NULL, 
 	questions_json JSON NOT NULL, 
 	created_at DATETIME NOT NULL DEFAULT now(), 
 	updated_at DATETIME NOT NULL DEFAULT now(), 
 	PRIMARY KEY (id), 
-	FOREIGN KEY(session_id) REFERENCES ai_interview_sessions (id) ON DELETE CASCADE
+	FOREIGN KEY(session_id) REFERENCES ai_interview_sessions (id) ON DELETE CASCADE,
+	FOREIGN KEY(invitation_id) REFERENCES ai_interview_invitations (id) ON DELETE CASCADE
 );
 
 
@@ -487,6 +489,7 @@ CREATE INDEX ix_job_shortlists_job_id ON job_shortlists (job_id);
 CREATE INDEX ix_ai_interview_handoffs_session_id ON ai_interview_handoffs (session_id);
 
 CREATE INDEX ix_ai_interview_question_sets_session_id ON ai_interview_question_sets (session_id);
+CREATE INDEX ix_ai_interview_question_sets_invitation_id ON ai_interview_question_sets (invitation_id);
 
 CREATE INDEX ix_ai_interview_reports_session_id ON ai_interview_reports (session_id);
 

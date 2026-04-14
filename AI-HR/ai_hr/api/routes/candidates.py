@@ -7,7 +7,13 @@ from sqlalchemy.orm import Session
 
 from ...core.responses import Envelope
 from ...db.session import get_db_session
-from ...schemas.ai_resume import CandidateResumeProfileResult
+from ...schemas.ai_resume import (
+    CandidateResumeProfileResult,
+    ResumeAccessSyncRequest,
+    ResumeAccessSyncResult,
+    ResumeAttachmentSyncRequest,
+    ResumeAttachmentSyncResult,
+)
 from ...schemas.candidates import (
     CandidateImportRequest,
     CandidateImportResult,
@@ -63,4 +69,26 @@ def get_candidate_resume_profile(
     """查询候选人的结构化简历画像。"""
     service = get_ai_resume_service(session)
     result = service.get_candidate_resume_profile(candidate_id)
+    return Envelope.success(result)
+
+
+@router.post("/{candidate_id}/resume-attachment/sync", response_model=Envelope[ResumeAttachmentSyncResult])
+def sync_candidate_resume_attachment(
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[ResumeAttachmentSyncResult]:
+    """从 BOSS 拉取候选人附件简历并保存到本地。"""
+    service = get_ai_resume_service(session)
+    result = service.sync_resume_attachment(ResumeAttachmentSyncRequest(candidate_id=candidate_id))
+    return Envelope.success(result)
+
+
+@router.post("/{candidate_id}/resume-access/sync", response_model=Envelope[ResumeAccessSyncResult])
+def sync_candidate_resume_access(
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[ResumeAccessSyncResult]:
+    """向 BOSS 申请候选人附件简历，并在可用时立即下载。"""
+    service = get_ai_resume_service(session)
+    result = service.sync_resume_access(ResumeAccessSyncRequest(candidate_id=candidate_id))
     return Envelope.success(result)

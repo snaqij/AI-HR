@@ -1,4 +1,4 @@
-﻿"""岗位管理路由。"""
+"""岗位管理路由。"""
 
 from __future__ import annotations
 
@@ -7,18 +7,58 @@ from sqlalchemy.orm import Session
 
 from ...core.responses import Envelope
 from ...db.session import get_db_session
+from ...schemas.ai_resume import (
+    ResumeAccessBatchSyncRequest,
+    ResumeAccessBatchSyncResult,
+    ResumeAttachmentBatchSyncRequest,
+    ResumeAttachmentBatchSyncResult,
+)
 from ...schemas.ai_scoring import JobShortlistResult
+from ...schemas.candidate_evaluations import (
+    CandidateEvaluationDetailResult,
+    CandidateEvaluationListResult,
+    CandidateEvaluationRequest,
+    CandidateEvaluationUpdateRequest,
+)
+from ...schemas.interview_invitation_email import (
+    CandidateEmailDeliveryListResult,
+    InterviewInvitationEmailSendRequest,
+    InterviewInvitationEmailSendResult,
+)
+from ...schemas.job_sync import (
+    JobSyncRunListResult,
+    JobSyncRunResponse,
+    JobSyncTaskExecuteResult,
+    JobSyncTaskListResult,
+    JobSyncTaskResponse,
+    JobSyncTaskUpsertRequest,
+)
 from ...schemas.jobs import (
+    JobCandidateItem,
+    JobCandidateListResult,
+    JobCandidateStageUpdateRequest,
     JobCandidateSyncRequest,
     JobCandidateSyncResult,
     JobCreateRequest,
+    JobListResult,
     JobPublishRequest,
     JobPublishResult,
     JobPublishStatusResponse,
+    JobResumeReadySyncRequest,
+    JobResumeReadySyncResult,
     JobResponse,
+    JobUpdateSettingsRequest,
+    RemoteJobImportRequest,
+    RemoteJobImportResult,
+    RemoteJobListItem,
+    RemoteJobListResult,
 )
-from ...services.jobs import get_job_service
 from ...services.ai_scoring import get_ai_scoring_service
+from ...services.ai_resume import get_ai_resume_service
+from ...services.candidate_evaluations import get_candidate_evaluation_service
+from ...services.interview_invitation_email import get_interview_invitation_email_service
+from ...services.job_sync import get_job_sync_service
+from ...services.jobs import get_job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -43,6 +83,35 @@ def get_job(
     service = get_job_service(session)
     job = service.get_job(job_id)
     return Envelope.success(JobResponse.model_validate(job))
+
+
+@router.patch("/{job_id}/settings", response_model=Envelope[JobResponse])
+def update_job_settings(
+    job_id: str,
+    payload: JobUpdateSettingsRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobResponse]:
+    """更新岗位自动化配置（如学历、经验门槛）。"""
+    service = get_job_service(session)
+    job = service.update_job_settings(job_id, payload)
+    return Envelope.success(JobResponse.model_validate(job))
+
+
+@router.get("", response_model=Envelope[JobListResult])
+def list_jobs(
+    limit: int = 20,
+    offset: int = 0,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobListResult]:
+    """列出全量已创建/同步的岗位。"""
+    service = get_job_service(session)
+    jobs = service.list_jobs(limit=limit, offset=offset)
+    return Envelope.success(
+        JobListResult(
+            total=len(jobs),  # Simple count for demo
+            items=[JobResponse.model_validate(item) for item in jobs],
+        )
+    )
 
 
 @router.post("/{job_id}/publish", response_model=Envelope[JobPublishResult])
@@ -83,14 +152,347 @@ def sync_job_candidates(
     session: Session = Depends(get_db_session),
 ) -> Envelope[JobCandidateSyncResult]:
     """按岗位从渠道拉取候选人并增量同步。"""
-    service = get_job_service(session)
-    result = service.sync_candidates(job_id, payload)
+    service = get_job_sync_service(session)
+    result = service.run_manual_sync(job_id, payload)
     response = JobCandidateSyncResult(
         job_id=result["job_id"],
         total_pulled=result["total_pulled"],
         total_created=result["total_created"],
         total_updated=result["total_updated"],
         channels=result["channels"],
+        resume_access=result.get("resume_access"),
+    )
+    return Envelope.success(response)
+
+
+@router.post("/{job_id}/resume-ready-candidates/sync", response_model=Envelope[JobResumeReadySyncResult])
+def sync_job_resume_ready_candidates(
+    job_id: str,
+    payload: JobResumeReadySyncRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobResumeReadySyncResult]:
+    """同步岗位下已获得简历的候选人池。"""
+    service = get_job_service(session)
+    result = service.sync_resume_ready_candidates(job_id, payload)
+    return Envelope.success(result)
+
+
+@router.put("/{job_id}/sync-task", response_model=Envelope[JobSyncTaskResponse])
+def upsert_job_sync_task(
+    job_id: str,
+    payload: JobSyncTaskUpsertRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobSyncTaskResponse]:
+    """创建或更新岗位定时同步任务。"""
+    service = get_job_sync_service(session)
+    task = service.upsert_task(job_id, payload)
+    return Envelope.success(JobSyncTaskResponse.model_validate(task))
+
+
+@router.get("/{job_id}/sync-tasks", response_model=Envelope[JobSyncTaskListResult])
+def list_job_sync_tasks(
+    job_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobSyncTaskListResult]:
+    """查询岗位定时同步任务。"""
+    service = get_job_sync_service(session)
+    tasks = service.list_tasks(job_id)
+    return Envelope.success(
+        JobSyncTaskListResult(
+            job_id=job_id,
+            tasks=[JobSyncTaskResponse.model_validate(item) for item in tasks],
+        )
+    )
+
+
+@router.get("/{job_id}/sync-runs", response_model=Envelope[JobSyncRunListResult])
+def list_job_sync_runs(
+    job_id: str,
+    limit: int = 20,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobSyncRunListResult]:
+    """查询岗位同步执行流水。"""
+    service = get_job_sync_service(session)
+    runs = service.list_runs(job_id, limit=limit)
+    return Envelope.success(
+        JobSyncRunListResult(
+            job_id=job_id,
+            runs=[JobSyncRunResponse.model_validate(item) for item in runs],
+        )
+    )
+
+
+@router.post("/sync-tasks/{task_id}/run", response_model=Envelope[JobSyncTaskExecuteResult])
+def run_job_sync_task(
+    task_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobSyncTaskExecuteResult]:
+    """手动触发一次定时同步任务。"""
+    service = get_job_sync_service(session)
+    result = service.execute_task(task_id)
+    response = JobSyncTaskExecuteResult(
+        task=JobSyncTaskResponse.model_validate(result["task"]),
+        run=JobSyncRunResponse.model_validate(result["run"]),
+        summary=result["summary"],
+    )
+    return Envelope.success(response)
+
+
+@router.get("/{job_id}/candidates", response_model=Envelope[JobCandidateListResult])
+def list_job_candidates(
+    job_id: str,
+    limit: int = 30,
+    cursor: str | None = None,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobCandidateListResult]:
+    """查看岗位下已同步的候选人。"""
+    service = get_job_service(session)
+    result = service.list_job_candidates(job_id, limit=limit, cursor=cursor)
+    response = JobCandidateListResult(
+        job_id=result["job_id"],
+        total=result["total"],
+        limit=result["limit"],
+        next_cursor=result["next_cursor"],
+        has_more=result["has_more"],
+        candidates=[
+            JobCandidateItem(
+                candidate=item["candidate"],
+                channel=item["channel"],
+                external_candidate_id=item["external_candidate_id"],
+                external_job_id=item["external_job_id"],
+                stage=item["stage"],
+                source_status=item["source_status"],
+                applied_at=item.get("applied_at"),
+                first_synced_at=item["first_synced_at"],
+                last_synced_at=item["last_synced_at"],
+                source_payload=item["source_payload"],
+                resume_request_status=item.get("resume_request_status"),
+                resume_download_status=item.get("resume_download_status"),
+                last_resume_requested_at=item.get("last_resume_requested_at"),
+                evaluation=item.get("evaluation"),
+                latest_delivery=item.get("latest_delivery"),
+            )
+            for item in result["candidates"]
+        ],
+    )
+    return Envelope.success(response)
+
+
+@router.get("/{job_id}/candidates/{candidate_id}", response_model=Envelope[JobCandidateItem])
+def get_job_candidate(
+    job_id: str,
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobCandidateItem]:
+    """Get one candidate under a job."""
+    service = get_job_service(session)
+    item = service.get_job_candidate(job_id, candidate_id)
+    response = JobCandidateItem(
+        candidate=item.candidate,
+        channel=item.channel,
+        external_candidate_id=item.external_candidate_id,
+        external_job_id=item.external_job_id,
+        stage=item.stage,
+        source_status=item.source_status,
+        applied_at=item.applied_at,
+        first_synced_at=item.first_synced_at,
+        last_synced_at=item.last_synced_at,
+        source_payload={},
+        resume_request_status=item.pipeline.resume_request_status if item.pipeline else None,
+        resume_download_status=item.pipeline.resume_download_status if item.pipeline else None,
+        last_resume_requested_at=item.pipeline.last_resume_requested_at if item.pipeline else None,
+        evaluation=item.evaluation,
+        latest_delivery=item.latest_delivery,
+    )
+    return Envelope.success(response)
+
+
+@router.patch("/{job_id}/candidates/{candidate_id}", response_model=Envelope[JobCandidateItem])
+def update_job_candidate_stage(
+    job_id: str,
+    candidate_id: str,
+    payload: JobCandidateStageUpdateRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobCandidateItem]:
+    """更新岗位下候选人的招聘阶段。"""
+    service = get_job_service(session)
+    item = service.update_candidate_stage(job_id, candidate_id, payload.stage)
+    response = JobCandidateItem(
+        candidate=item.candidate,
+        channel=item.channel,
+        external_candidate_id=item.external_candidate_id,
+        external_job_id=item.external_job_id,
+        stage=item.stage,
+        source_status=item.source_status,
+        first_synced_at=item.first_synced_at,
+        last_synced_at=item.last_synced_at,
+        source_payload=item.source_payload,
+    )
+    return Envelope.success(response)
+
+
+@router.post("/{job_id}/resume-attachments/sync", response_model=Envelope[ResumeAttachmentBatchSyncResult])
+def sync_job_resume_attachments(
+    job_id: str,
+    payload: ResumeAttachmentBatchSyncRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[ResumeAttachmentBatchSyncResult]:
+    """批量同步岗位下候选人的附件简历。"""
+    service = get_ai_resume_service(session)
+    result = service.sync_job_resume_attachments(job_id, payload)
+    return Envelope.success(result)
+
+
+@router.post("/{job_id}/resume-access/sync", response_model=Envelope[ResumeAccessBatchSyncResult])
+def sync_job_resume_access(
+    job_id: str,
+    payload: ResumeAccessBatchSyncRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[ResumeAccessBatchSyncResult]:
+    """批量申请岗位下候选人的附件简历，并在可用时下载。"""
+    service = get_ai_resume_service(session)
+    result = service.sync_job_resume_access(job_id, payload)
+    return Envelope.success(result)
+
+
+@router.post(
+    "/{job_id}/candidates/{candidate_id}/evaluate",
+    response_model=Envelope[CandidateEvaluationDetailResult],
+)
+def evaluate_job_candidate(
+    job_id: str,
+    candidate_id: str,
+    payload: CandidateEvaluationRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[CandidateEvaluationDetailResult]:
+    """Evaluate a candidate in detail against a specific job."""
+    service = get_candidate_evaluation_service(session)
+    result = service.evaluate_candidate(job_id=job_id, candidate_id=candidate_id, payload=payload)
+    return Envelope.success(result)
+
+
+@router.get("/{job_id}/evaluations", response_model=Envelope[CandidateEvaluationListResult])
+def list_job_evaluations(
+    job_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    candidate_ids: str | None = None,
+    session: Session = Depends(get_db_session),
+) -> Envelope[CandidateEvaluationListResult]:
+    """List detailed candidate evaluations under a job."""
+    service = get_candidate_evaluation_service(session)
+    ids = [item.strip() for item in (candidate_ids or "").split(",") if item.strip()]
+    result = service.list_job_evaluations(
+        job_id=job_id,
+        limit=limit,
+        offset=offset,
+        candidate_ids=ids or None,
+    )
+    return Envelope.success(result)
+
+
+@router.get(
+    "/{job_id}/candidates/{candidate_id}/evaluation-latest",
+    response_model=Envelope[CandidateEvaluationDetailResult],
+)
+def get_latest_job_candidate_evaluation(
+    job_id: str,
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[CandidateEvaluationDetailResult]:
+    """Get the latest detailed evaluation for a candidate under a job."""
+    service = get_candidate_evaluation_service(session)
+    result = service.get_latest_job_candidate_evaluation(job_id=job_id, candidate_id=candidate_id)
+    return Envelope.success(result)
+
+
+@router.patch(
+    "/{job_id}/candidates/{candidate_id}/evaluation-latest",
+    response_model=Envelope[CandidateEvaluationDetailResult],
+)
+def update_latest_job_candidate_evaluation(
+    job_id: str,
+    candidate_id: str,
+    payload: CandidateEvaluationUpdateRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[CandidateEvaluationDetailResult]:
+    """Manually update the latest detailed evaluation for a candidate under a job."""
+    service = get_candidate_evaluation_service(session)
+    result = service.update_latest_job_candidate_evaluation(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        payload=payload,
+    )
+    return Envelope.success(result)
+
+
+@router.post(
+    "/{job_id}/candidates/{candidate_id}/invite-email",
+    response_model=Envelope[InterviewInvitationEmailSendResult],
+)
+def send_candidate_invitation_email(
+    job_id: str,
+    candidate_id: str,
+    payload: InterviewInvitationEmailSendRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[InterviewInvitationEmailSendResult]:
+    """Manually send an interview invitation email to a candidate."""
+    service = get_interview_invitation_email_service(session)
+    result = service.send_manual_invitation(
+        job_id=job_id,
+        candidate_id=candidate_id,
+        evaluation_id=payload.evaluation_id,
+        template_code=payload.template_code,
+        note=payload.note,
+    )
+    return Envelope.success(InterviewInvitationEmailSendResult(**result))
+
+
+@router.get("/{job_id}/email-deliveries", response_model=Envelope[CandidateEmailDeliveryListResult])
+def list_job_email_deliveries(
+    job_id: str,
+    candidate_id: str | None = None,
+    limit: int = 100,
+    session: Session = Depends(get_db_session),
+) -> Envelope[CandidateEmailDeliveryListResult]:
+    """List invitation email delivery records for a job."""
+    service = get_interview_invitation_email_service(session)
+    result = service.list_job_email_deliveries(job_id=job_id, candidate_id=candidate_id, limit=limit)
+    return Envelope.success(result)
+
+
+@router.get("/remote/{channel}", response_model=Envelope[RemoteJobListResult])
+def list_remote_jobs(
+    channel: str,
+    page: int = 1,
+    page_size: int = 20,
+    session: Session = Depends(get_db_session),
+) -> Envelope[RemoteJobListResult]:
+    """查看渠道侧已发布岗位。"""
+    service = get_job_service(session)
+    result = service.list_remote_jobs(channel=channel, page=page, page_size=page_size)
+    response = RemoteJobListResult(
+        channel=result["channel"],
+        page=result["page"],
+        page_size=result["page_size"],
+        jobs=[RemoteJobListItem(**item) for item in result["jobs"]],
+    )
+    return Envelope.success(response)
+
+
+@router.post("/remote/import", response_model=Envelope[RemoteJobImportResult])
+def import_remote_jobs(
+    payload: RemoteJobImportRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[RemoteJobImportResult]:
+    """将渠道侧已发布岗位导入本地。"""
+    service = get_job_service(session)
+    result = service.import_remote_jobs(channel=payload.channel, page=payload.page, page_size=payload.page_size)
+    response = RemoteJobImportResult(
+        channel=result["channel"],
+        created_count=result["created_count"],
+        updated_count=result["updated_count"],
+        jobs=[JobResponse.model_validate(item) for item in result["jobs"]],
     )
     return Envelope.success(response)
 

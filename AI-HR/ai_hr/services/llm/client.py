@@ -1,4 +1,4 @@
-"""统一 LLM 调用客户端。"""
+﻿"""Unified LLM client."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from ...repositories.ai_observability import AIObservabilityRepository
 from ...core.config import get_settings
 from ...schemas.ai_llm import LLMInvokeResult
 from .contracts import (
+    CandidateEvaluationLLMOutput,
     CandidateScoreLLMOutput,
     IntentClassifyLLMOutput,
     InterviewFollowupLLMOutput,
@@ -37,7 +38,7 @@ from .router import ModelRoute, ModelRouter
 
 @dataclass(slots=True)
 class InvokeContext:
-    """LLM 调用上下文。"""
+    """LLM invocation context."""
 
     task_key: str
     trace_id: str
@@ -48,7 +49,7 @@ class InvokeContext:
 
 
 class LLMClient:
-    """提供统一 LLM 调用、校验与追踪能力。"""
+    """Provides unified LLM invocation, validation, and observability."""
 
     def __init__(
         self,
@@ -57,7 +58,7 @@ class LLMClient:
         guardrail_service: GuardrailService | None = None,
         observability_repository: AIObservabilityRepository | None = None,
     ):
-        """初始化依赖组件。"""
+        """Initialize dependencies."""
         self._router = router
         self._guardrail = guardrail_service or GuardrailService()
         self._observability = observability_repository
@@ -83,7 +84,7 @@ class LLMClient:
         on_text_delta: Callable[[str], None] | None = None,
         write_observability: bool = True,
     ) -> LLMInvokeResult:
-        """按任务调用模型并返回结构化结果。"""
+        """Invoke model and return structured JSON content."""
         return self._invoke_core(context, on_text_delta=on_text_delta, write_observability=write_observability, mode="json")
 
     def invoke(
@@ -93,7 +94,7 @@ class LLMClient:
         on_text_delta: Callable[[str], None] | None = None,
         write_observability: bool = True,
     ) -> LLMInvokeResult:
-        """调用模型并返回纯文本结果。"""
+        """Invoke model and return plain text content."""
         return self._invoke_core(context, on_text_delta=on_text_delta, write_observability=write_observability, mode="text")
 
     async def async_stream_invoke(
@@ -103,7 +104,7 @@ class LLMClient:
         on_text_delta: Callable[[str], None] | None = None,
         write_observability: bool = True,
     ) -> AsyncIterator[str]:
-        """异步流式调用模型并返回 delta 迭代器。"""
+        """Invoke model in async streaming mode and yield text deltas."""
         route = self._router.resolve_route(context.task_key)
         sanitized_prompt = self._guardrail.sanitize_input(context.prompt)
         request_hash = hashlib.sha256(sanitized_prompt.encode("utf-8")).hexdigest()
@@ -210,7 +211,7 @@ class LLMClient:
         write_observability: bool = True,
         mode: str = "json",
     ) -> LLMInvokeResult:
-        """核心调用逻辑。"""
+        """Core invocation flow."""
         route = self._router.resolve_route(context.task_key)
         sanitized_prompt = self._guardrail.sanitize_input(context.prompt)
         request_hash = hashlib.sha256(sanitized_prompt.encode("utf-8")).hexdigest()
@@ -300,7 +301,7 @@ class LLMClient:
         on_text_delta: Callable[[str], None] | None = None,
         mode: str = "json",
     ) -> Any:
-        """调用具体 provider。当前默认 mock。"""
+        """Invoke concrete provider."""
         if route.provider == "mock":
             return self._invoke_mock(task_key=task_key, prompt=prompt)
         if route.provider == "openai":
@@ -328,11 +329,14 @@ class LLMClient:
         return str(raw_payload)
 
     def _validate_contract(self, task_key: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """根据任务类型执行契约校验。"""
+        """Validate payload by task contract."""
         if task_key == "resume_parse":
             return ResumeParseLLMOutput.model_validate(payload).model_dump()
         if task_key == "candidate_score":
             return CandidateScoreLLMOutput.model_validate(payload).model_dump()
+        if task_key == "candidate_evaluation":
+            sanitized = self._sanitize_candidate_evaluation_payload(payload)
+            return CandidateEvaluationLLMOutput.model_validate(sanitized).model_dump()
         if task_key == "intent_classify":
             return IntentClassifyLLMOutput.model_validate(payload).model_dump()
         if task_key == "reply_generate":
@@ -343,21 +347,91 @@ class LLMClient:
             return InterviewFollowupLLMOutput.model_validate(payload).model_dump()
         return payload
 
+    def _sanitize_candidate_evaluation_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Best-effort normalization for candidate evaluation payload."""
+        data = dict(payload or {})
+
+        def _num(value: Any, default: float = 0.0) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
+        def _list_str(value: Any) -> list[str]:
+            if isinstance(value, list):
+                return [str(item).strip() for item in value if str(item).strip()]
+            if isinstance(value, str) and value.strip():
+                return [value.strip()]
+            return []
+
+        def _dict_float(value: Any) -> dict[str, float]:
+            if not isinstance(value, dict):
+                return {}
+            normalized: dict[str, float] = {}
+            for k, v in value.items():
+                key = str(k).strip()
+                if not key:
+                    continue
+                try:
+                    normalized[key] = float(v)
+                except (TypeError, ValueError):
+                    continue
+            return normalized
+
+        def _dict_str(value: Any) -> dict[str, str]:
+            if not isinstance(value, dict):
+                return {}
+            normalized: dict[str, str] = {}
+            for k, v in value.items():
+                key = str(k).strip()
+                if not key:
+                    continue
+                text = str(v).strip()
+                if not text:
+                    continue
+                normalized[key] = text
+            return normalized
+
+        data["match_score"] = _num(data.get("match_score"))
+        data["competitiveness_score"] = _num(data.get("competitiveness_score"))
+        data["final_score"] = _num(data.get("final_score"))
+
+        confidence = _num(data.get("confidence_score"))
+        # If model returned a percent-like value (e.g. 82), normalize to 0-1.
+        if confidence > 1.0:
+            confidence = confidence / 100.0
+        data["confidence_score"] = max(0.0, min(confidence, 1.0))
+
+        data["dimension_scores"] = _dict_float(data.get("dimension_scores"))
+        data["job_requirement_coverage"] = _dict_str(data.get("job_requirement_coverage"))
+
+        data["strengths"] = _list_str(data.get("strengths"))
+        data["weaknesses"] = _list_str(data.get("weaknesses"))
+        data["highlights"] = _list_str(data.get("highlights"))
+        data["risk_flags"] = _list_str(data.get("risk_flags"))
+        data["summary"] = str(data.get("summary") or "").strip()
+
+        recommendation = str(data.get("recommendation") or "").strip().lower()
+        if recommendation not in {"strong_recommend", "recommend", "review", "reject"}:
+            recommendation = "review"
+        data["recommendation"] = recommendation
+        return data
+
     def _invoke_mock(self, *, task_key: str, prompt: str) -> dict[str, Any]:
-        """Mock Provider：离线测试场景下提供确定性输出。"""
+        """Mock provider for offline deterministic outputs."""
         lower = prompt.lower()
         if task_key == "resume_parse":
             skills = []
             for token in ("python", "fastapi", "mysql", "java", "golang", "kubernetes"):
                 if token in lower:
                     skills.append(token)
-            years_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:年|years?)", prompt, re.IGNORECASE)
+            years_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:骞磡years?)", prompt, re.IGNORECASE)
             years = float(years_match.group(1)) if years_match else None
             education = None
-            if "本科" in prompt or "bachelor" in lower:
-                education = "本科"
-            elif "硕士" in prompt or "master" in lower:
-                education = "硕士"
+            if "鏈" in prompt or "bachelor" in lower:
+                education = "鏈"
+            elif "纭曞＋" in prompt or "master" in lower:
+                education = "纭曞＋"
             risks = []
             if not skills:
                 risks.append("skills_missing")
@@ -389,15 +463,116 @@ class LLMClient:
                 "explanation": "mock llm scoring output",
                 "risk_tags": [] if total_score >= 75 else ["skills_match_low"],
             }
+        if task_key == "candidate_evaluation":
+            skill_hits = sum(1 for token in ("python", "java", "golang", "fastapi", "spring", "mysql", "redis", "docker", "kubernetes") if token in lower)
+            education_hits = sum(1 for token in ("博士", "phd", "硕士", "master", "本科", "bachelor") if token in lower)
+            work_hits = sum(1 for token in ("负责", "owner", "lead", "上线", "deliver", "performance", "优化", "架构") if token in lower)
+            project_hits = sum(1 for token in ("项目", "project", "重构", "系统", "平台", "服务") if token in lower)
+            contest_hits = sum(1 for token in ("竞赛", "比赛", "获奖", "award", "acm", "hackathon") if token in lower)
+            academic_hits = sum(1 for token in ("gpa", "绩点", "成绩", "排名", "奖学金") if token in lower)
+            risk_hits = sum(1 for token in ("风险", "gap", "缺失", "空窗", "短期", "低匹配") if token in lower)
+
+            evidence_signal = skill_hits + work_hits + project_hits + contest_hits + academic_hits
+            education_score = min(100.0, 40.0 + education_hits * 18.0)
+            work_experience_score = min(100.0, 35.0 + work_hits * 11.0 + skill_hits * 3.0)
+            project_experience_score = min(100.0, 35.0 + project_hits * 11.0 + work_hits * 4.0)
+            contest_score = min(100.0, 30.0 + contest_hits * 15.0)
+            academic_score = min(100.0, 30.0 + academic_hits * 14.0 + education_hits * 4.0)
+            skill_match = min(100.0, 32.0 + skill_hits * 7.0)
+            evidence_quality = max(20.0, min(100.0, 28.0 + evidence_signal * 4.5 - risk_hits * 6.0))
+
+            match_score = round(
+                education_score * 0.14
+                + work_experience_score * 0.22
+                + project_experience_score * 0.22
+                + contest_score * 0.08
+                + academic_score * 0.10
+                + skill_match * 0.24,
+                2,
+            )
+            competitiveness_score = round(
+                work_experience_score * 0.25
+                + project_experience_score * 0.27
+                + contest_score * 0.10
+                + academic_score * 0.10
+                + evidence_quality * 0.28,
+                2,
+            )
+            final_score = round(
+                max(0.0, min(100.0, match_score * 0.60 + competitiveness_score * 0.40 - risk_hits * 2.0)),
+                2,
+            )
+            recommendation = (
+                "strong_recommend"
+                if final_score >= 88
+                else "recommend"
+                if final_score >= 75
+                else "review"
+                if final_score >= 60
+                else "reject"
+            )
+            confidence = round(max(0.35, min(0.95, 0.38 + evidence_signal * 0.03 - risk_hits * 0.03)), 2)
+            weaknesses: list[str] = []
+            if work_experience_score < 65:
+                weaknesses.append("工作经验与岗位要求匹配度不足")
+            if project_experience_score < 65:
+                weaknesses.append("项目经历深度或结果证据不足")
+            if contest_score < 55:
+                weaknesses.append("竞赛或奖项证据较弱")
+            if academic_score < 60:
+                weaknesses.append("成绩/GPA 证据不充分")
+            if evidence_quality < 60:
+                weaknesses.append("简历证据完整性不足")
+            risk_flags = []
+            if evidence_quality < 58:
+                risk_flags.append("evidence_quality_low")
+            if skill_match < 60:
+                risk_flags.append("skill_match_low")
+            if risk_hits > 0:
+                risk_flags.append("resume_risk_signal")
+            return {
+                "match_score": match_score,
+                "competitiveness_score": competitiveness_score,
+                "final_score": final_score,
+                "confidence_score": confidence,
+                "dimension_scores": {
+                    "education_score": round(education_score, 2),
+                    "work_experience_score": round(work_experience_score, 2),
+                    "project_experience_score": round(project_experience_score, 2),
+                    "contest_score": round(contest_score, 2),
+                    "academic_score": round(academic_score, 2),
+                    "skill_match": round(skill_match, 2),
+                    "evidence_quality": round(evidence_quality, 2),
+                },
+                "strengths": [
+                    "核心技能和岗位要求存在较高重合",
+                    "简历中有可识别的项目与交付证据",
+                ],
+                "weaknesses": weaknesses,
+                "highlights": [
+                    f"学历/工作/项目/竞赛/成绩综合评分为 {final_score}",
+                    f"证据充分性评分为 {evidence_quality}",
+                ],
+                "risk_flags": risk_flags,
+                "recommendation": recommendation,
+                "summary": "模拟评估：已按学历、工作经验、项目经验、竞赛与成绩等多维度完成评分，分数已做拉开用于筛选。",
+                "job_requirement_coverage": {
+                    "education": "matched" if education_score >= 75 else "partial",
+                    "work_experience": "matched" if work_experience_score >= 75 else "partial",
+                    "project_experience": "matched" if project_experience_score >= 75 else "partial",
+                    "contest": "matched" if contest_score >= 65 else "partial",
+                    "academic": "matched" if academic_score >= 70 else "partial",
+                },
+            }
         if task_key == "intent_classify":
-            if any(keyword in lower for keyword in ("薪资", "salary", "package")):
+            if any(keyword in lower for keyword in ("salary", "package", "薪资", "薪酬")):
                 return {"intent": "salary", "confidence": 0.58, "policy_flags": ["need_human_review"]}
             if any(keyword in lower for keyword in ("你好", "hello", "hi")):
                 return {"intent": "greeting", "confidence": 0.94, "policy_flags": []}
             return {"intent": "general", "confidence": 0.75, "policy_flags": []}
         if task_key == "reply_generate":
             samples = [
-                "收到你的消息，我们会尽快和你确认后续安排。",
+                "收到你的消息，我们会尽快确认后续安排。",
                 "感谢反馈，下一步流程我这边先为你登记。",
                 "好的，相关信息已记录，稍后会同步具体时间。",
             ]

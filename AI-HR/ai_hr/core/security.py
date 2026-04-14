@@ -90,3 +90,44 @@ async def require_ai_interview_ws_auth(websocket: WebSocket) -> bool:
         return False
     return True
 
+
+import base64
+import os
+
+from cryptography.fernet import Fernet
+
+
+def get_encryption_key() -> bytes:
+    """Resolve the encryption key from settings or environment."""
+    settings = get_settings()
+    # Priority: Settings -> Env -> Fallback (only for dev, but strongly discouraged)
+    key = os.getenv("AI_HR_ENCRYPTION_KEY") or getattr(settings, "encryption_key", None)
+    
+    if not key:
+        # In a real production system, this should raise an error.
+        # For now, we'll use a deterministic fallback for demo purposes if not set,
+        # but we should warn the user.
+        return base64.urlsafe_b64encode(b"aihr-default-static-key-00000032")
+        
+    if isinstance(key, str):
+        return key.encode()
+    return key
+
+
+def encrypt_data(data: str) -> str:
+    """Encrypt a string using AES (Fernet)."""
+    if not data:
+        return ""
+    key = get_encryption_key()
+    f = Fernet(key)
+    return f.encrypt(data.encode()).decode()
+
+
+def decrypt_data(token: str) -> str:
+    """Decrypt a string using AES (Fernet)."""
+    if not token:
+        return ""
+    key = get_encryption_key()
+    f = Fernet(key)
+    return f.decrypt(token.encode()).decode()
+

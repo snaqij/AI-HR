@@ -51,7 +51,7 @@
         </div>
         <div class="h-4 w-px bg-outline-variant/20"></div>
         <div class="flex items-center gap-2">
-          <span class="text-on-surface font-black">{{ candidates.length }}</span>
+          <span class="text-on-surface font-black">{{ syncedTotalCandidates }}</span>
           <span class="text-[11px] opacity-60">已同步候选人</span>
         </div>
         <div class="flex items-center gap-2">
@@ -204,6 +204,18 @@
           </div>
         </div>
       </div>
+      <div
+        v-if="!isLoading && hasMoreCandidates && keyword.trim() === ''"
+        class="px-8 py-5 border-t border-outline-variant/5 flex justify-center"
+      >
+        <button
+          class="px-6 py-2.5 rounded-xl bg-surface-container-low text-on-surface-variant text-xs font-black uppercase tracking-widest disabled:opacity-50"
+          :disabled="isLoadingMoreCandidates"
+          @click="loadMoreCandidates"
+        >
+          {{ isLoadingMoreCandidates ? "加载中..." : "加载更多候选人" }}
+        </button>
+      </div>
 
       <div v-else-if="jobId && !isLoading && filteredCandidates.length === 0" class="p-40 text-center">
         <div class="w-24 h-24 bg-surface-container-low rounded-full flex items-center justify-center mx-auto mb-6">
@@ -268,6 +280,13 @@ const activeTab = ref("all");
 const isLoading = ref(false);
 const isSyncing = ref(false);
 const sendingCandidateId = ref("");
+const candidatesNextCursor = ref<string | null>(null);
+const hasMoreCandidates = ref(false);
+const isLoadingMoreCandidates = ref(false);
+const syncedTotalCandidates = ref(0);
+const evaluatedCount = ref(0);
+const sentDeliveryCount = ref(0);
+const pageSize = 30;
 
 const tabs = [
   { key: "all", label: "全部候选人" },
@@ -294,8 +313,7 @@ const latestDeliveryByCandidateId = computed<Record<string, CandidateEmailDelive
   return map;
 });
 
-const evaluatedCount = computed(() => evaluations.value.length);
-const sentDeliveryCount = computed(() => deliveries.value.filter((item) => item.status === "sent").length);
+// Stats are now ref-based and updated from API response
 
 const filteredCandidates = computed(() => {
   let result = [...candidates.value];
@@ -333,18 +351,91 @@ async function fetchJobDetails() {
 async function fetchCandidates() {
   if (!jobId.value) {
     candidates.value = [];
+    candidatesNextCursor.value = null;
+    hasMoreCandidates.value = false;
+    syncedTotalCandidates.value = 0;
     return;
   }
-  candidates.value = await listJobCandidates(jobId.value);
+  const result = await listJobCandidates(jobId.value, { limit: pageSize });
+  candidates.value = result.candidates;
+  candidatesNextCursor.value = result.next_cursor || null;
+  hasMoreCandidates.value = result.has_more;
+  
+  syncedTotalCandidates.value = result.total || 0;
+  evaluatedCount.value = result.evaluated_count || 0;
+  sentDeliveryCount.value = result.sent_count || 0;
+
+  // Sync evaluations and deliveries from embedded data to maintain local maps for filtering/UI
+  evaluations.value = result.candidates
+    .filter((c) => c.evaluation)
+    .map((c) => c.evaluation!);
+  deliveries.value = result.candidates
+    .filter((c) => c.latest_delivery)
+    .map((c) => c.latest_delivery!);
 }
 
-async function fetchEvaluations() {
-  if (!jobId.value) {
-    evaluations.value = [];
+async function loadMoreCandidates() {
+  if (!jobId.value || !hasMoreCandidates.value || !candidatesNextCursor.value || isLoadingMoreCandidates.value) {
     return;
   }
-  const result = await fetchJobEvaluations(jobId.value);
-  evaluations.value = result.items.map((item) => item.evaluation);
+  isLoadingMoreCandidates.value = true;
+  try {
+    const result = await listJobCandidates(jobId.value, {
+      limit: pageSize,
+      cursor: candidatesNextCursor.value,
+    });
+    const appendedCandidates = result.candidates;
+    candidates.value = [...candidates.value, ...appendedCandidates];
+    candidatesNextCursor.value = result.next_cursor || null;
+    hasMoreCandidates.value = result.has_more;
+    syncedTotalCandidates.value = result.total;
+    sentDeliveryCount.value = result.sent_count || 0;
+    evaluatedCount.value = result.evaluated_count || 0;
+
+    // Sync evaluations and deliveries from embedded data
+    const newEvals = result.candidates
+      .filter((c) => c.evaluation)
+      .map((c) => c.evaluation!);
+    const newDeliveries = result.candidates
+      .filter((c) => c.latest_delivery)
+      .map((c) => c.latest_delivery!);
+
+    evaluations.value = [...evaluations.value, ...newEvals];
+    deliveries.value = [...deliveries.value, ...newDeliveries];
+
+    // const appendedIds = appendedCandidates.map((item) => item.candidate.id);
+    // await fetchEvaluations(appendedIds, true);
+  } catch (error) {
+    console.error("Failed to load more candidates", error);
+  } finally {
+    isLoadingMoreCandidates.value = false;
+  }
+}
+
+async function fetchEvaluations(candidateIds?: string[], append = false) {
+  if (!jobId.value || !candidateIds?.length) {
+    if (!append) {
+      evaluations.value = [];
+    }
+    return;
+  }
+  const result = await fetchJobEvaluations(jobId.value, {
+    limit: Math.max(200, candidateIds.length),
+    candidateIds,
+  });
+  const newEvals = result.items.map((item) => item.evaluation);
+  if (!append) {
+    evaluations.value = newEvals;
+    return;
+  }
+  const merged = new Map<string, CandidateEvaluation>();
+  for (const item of evaluations.value) {
+    merged.set(item.candidate_id, item);
+  }
+  for (const item of newEvals) {
+    merged.set(item.candidate_id, item);
+  }
+  evaluations.value = Array.from(merged.values());
 }
 
 async function fetchDeliveries() {
@@ -362,7 +453,7 @@ async function refreshData() {
   }
   isLoading.value = true;
   try {
-    await Promise.all([fetchJobDetails(), fetchCandidates(), fetchEvaluations(), fetchDeliveries()]);
+    await Promise.all([fetchJobDetails(), fetchCandidates()]);
   } catch (error) {
     console.error("Failed to refresh candidates page", error);
   } finally {
@@ -403,7 +494,7 @@ async function handleManualInvite(item: JobCandidate) {
   try {
     await sendCandidateInvitationEmail(jobId.value, candidateId, { evaluation_id: evaluation.id });
     await fetchDeliveries();
-    await fetchEvaluations();
+    await fetchEvaluations(candidates.value.map((entry) => entry.candidate.id));
   } catch (error) {
     console.error("Failed to send invitation email", error);
   } finally {
@@ -412,7 +503,7 @@ async function handleManualInvite(item: JobCandidate) {
 }
 
 function handleViewDetails(item: JobCandidate) {
-  router.push(`/admin/interview-history?jobId=${jobId.value}&candidateId=${item.candidate.id}`);
+  router.push(`/admin/candidate-detail?jobId=${jobId.value}&candidateId=${item.candidate.id}`);
 }
 
 function buildEducationLine(item: JobCandidate) {

@@ -345,3 +345,27 @@ class AIInterviewInvitationRepository:
         self._session.commit()
         self._session.refresh(entity)
         return entity
+
+    def update_delivery(
+        self,
+        invitation_id: str,
+        *,
+        email_delivery_id: str | None = None,
+        invitation_channel: str | None = None,
+        payload_patch: dict[str, Any] | None = None,
+    ) -> AIInterviewInvitation:
+        stmt = select(AIInterviewInvitation).where(AIInterviewInvitation.id == invitation_id)
+        entity = self._session.execute(stmt).scalar_one_or_none()
+        if entity is None:
+            raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
+        if email_delivery_id is not None:
+            entity.email_delivery_id = email_delivery_id
+        if invitation_channel is not None:
+            entity.invitation_channel = invitation_channel
+        if payload_patch:
+            merged = dict(entity.payload or {})
+            merged.update(payload_patch)
+            entity.payload = merged
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity

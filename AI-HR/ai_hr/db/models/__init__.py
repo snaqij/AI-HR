@@ -13,17 +13,28 @@ from .ai_model_config import AIModelConfig
 from .ai_prompt_version import AIPromptVersion
 from .ai_request_trace import AIRequestTrace
 from .approval import Approval
+from .automation_task_log import AutomationTaskLog
 from .candidate import Candidate
+from .candidate_email_delivery import CandidateEmailDelivery
 from .candidate_identity import CandidateIdentity
+from .candidate_job_evaluation import CandidateJobEvaluation
+from .candidate_job_pipeline import CandidateJobPipeline
+from .candidate_resume_access_retry import CandidateResumeAccessRetry
+from .candidate_resume_attachment import CandidateResumeAttachment
 from .candidate_job_score import CandidateJobScore
 from .candidate_resume_profile import CandidateResumeProfile
 from .candidate_resume_risk import CandidateResumeRisk
 from .conversation import Conversation
+from .email_template import EmailTemplate
 from .event import Event
 from .interview import Interview
 from .job import Job
+from .job_candidate import JobCandidate
 from .job_publication import JobPublication
+from .job_sync_run import JobSyncRun
+from .job_sync_task import JobSyncTask
 from .job_shortlist import JobShortlist
+from .credential import ChannelCredential
 
 __all__ = [
     "AIDecisionLog",
@@ -39,15 +50,26 @@ __all__ = [
     "AIPromptVersion",
     "AIRequestTrace",
     "Approval",
+    "AutomationTaskLog",
     "Candidate",
+    "CandidateEmailDelivery",
     "CandidateIdentity",
+    "CandidateJobEvaluation",
+    "CandidateJobPipeline",
+    "CandidateResumeAccessRetry",
+    "CandidateResumeAttachment",
     "CandidateJobScore",
     "CandidateResumeProfile",
     "CandidateResumeRisk",
     "Conversation",
+    "EmailTemplate",
     "Event",
     "Interview",
     "Job",
+    "JobCandidate",
     "JobPublication",
+    "JobSyncRun",
+    "JobSyncTask",
     "JobShortlist",
+    "ChannelCredential",
 ]

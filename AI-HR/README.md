@@ -146,6 +146,20 @@ uv run --project AI-HR python AI-HR/scripts/tech_question_quality_baseline.py --
   - `AI_HR_BOSS_CREDENTIAL_FILE` (defaults to `~/.config/boss-cli/credential.json`)
 - Optional token header: `AI_HR_BOSS_SECRET` will be sent as `Authorization: Bearer <secret>`
 
+## Job Sync Scheduler
+- Enable scheduler: `AI_HR_JOB_SYNC_SCHEDULER_ENABLED=true`
+- Poll interval: `AI_HR_JOB_SYNC_SCHEDULER_POLL_SECONDS=30`
+- Batch size per polling round: `AI_HR_JOB_SYNC_SCHEDULER_BATCH_SIZE=10`
+- Default task interval: `AI_HR_JOB_SYNC_DEFAULT_INTERVAL_MINUTES=30`
+- Default pages per run: `AI_HR_JOB_SYNC_DEFAULT_MAX_PAGES=2`
+
+Key APIs:
+- `PUT /api/v1/jobs/{job_id}/sync-task`: create or update a scheduled sync task
+- `GET /api/v1/jobs/{job_id}/sync-tasks`: list scheduled sync tasks for a job
+- `POST /api/v1/jobs/sync-tasks/{task_id}/run`: trigger a scheduled task immediately
+- `GET /api/v1/jobs/{job_id}/sync-runs`: inspect sync audit history
+- `POST /api/v1/jobs/{job_id}/candidates/sync`: manual sync, now with audit logging
+
 ## Structure
 - `ai_hr/`: backend service code
 - `tests/`: backend tests

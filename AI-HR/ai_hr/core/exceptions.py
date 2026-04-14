@@ -1,4 +1,4 @@
-﻿"""领域与基础设施异常定义。"""
+"""领域与基础设施异常定义。"""
 
 from __future__ import annotations
 
@@ -25,3 +25,7 @@ class InvalidConnectorConfigError(AIHRException):
 
 class ConnectorOperationError(AIHRException):
     """连接器执行动作失败时抛出。"""
+
+
+class CredentialsExpiredError(ConnectorOperationError):
+    """连接器凭据（如Cookie）已过期或无效时抛出。"""

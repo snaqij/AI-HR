@@ -1,4 +1,4 @@
-﻿"""候选人仓储实现。"""
+"""候选人仓储实现。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import or_
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from ..db.models import Candidate, CandidateIdentity
 from ..core.exceptions import ResourceNotFoundError
@@ -39,8 +39,14 @@ class CandidateRepository:
                         external_candidate_id=item.external_candidate_id,
                         phone_hash=item.phone_hash,
                         email_hash=item.email_hash,
+                        email=item.email,
                         resume_url=item.resume_url,
                         resume_text=item.resume_text,
+                        school=item.school,
+                        degree=item.degree,
+                        work_experience=item.work_experience,
+                        expected_salary=item.expected_salary,
+                        latest_company=item.latest_company,
                         raw_profile=item.raw_profile,
                         current_stage="new",
                     )
@@ -72,6 +78,30 @@ class CandidateRepository:
             raise ResourceNotFoundError(f"Candidate '{candidate_id}' was not found")
         return candidate
 
+    def list_by_ids(self, candidate_ids: list[str], *, summary_only: bool = False) -> list[Candidate]:
+        """Batch query candidates by ids, optionally loading only summary fields."""
+        ids = [item for item in dict.fromkeys(candidate_ids) if item]
+        if not ids:
+            return []
+        stmt = select(Candidate).where(Candidate.id.in_(ids))
+        if summary_only:
+            stmt = stmt.options(
+                load_only(
+                    Candidate.id,
+                    Candidate.name,
+                    Candidate.email,
+                    Candidate.current_stage,
+                    Candidate.school,
+                    Candidate.degree,
+                    Candidate.work_experience,
+                    Candidate.expected_salary,
+                    Candidate.latest_company,
+                    Candidate.created_at,
+                    Candidate.updated_at,
+                )
+            )
+        return list(self._session.execute(stmt).scalars().all())
+
     def update_score(
         self,
         candidate_id: str,
@@ -94,10 +124,55 @@ class CandidateRepository:
         self._session.refresh(candidate)
         return candidate
 
+    def list_pending_metadata_enrichment(self, limit: int = 10) -> list[Candidate]:
+        """拉取需要后台补全元数据的候选人列表。
+        条件：BOSS 渠道且 (学校为空 或 薪资为空) 且 尚未同步过详情。
+        """
+        stmt = (
+            select(Candidate)
+            .where(
+                Candidate.source_channel == "boss",
+                Candidate.metadata_synced_at.is_(None),
+                or_(
+                    Candidate.school.is_(None),
+                    Candidate.expected_salary.is_(None)
+                )
+            )
+            .order_by(Candidate.created_at.desc())
+            .limit(limit)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def mark_metadata_synced(self, candidate_id: str) -> None:
+        """标记候选人元数据已同步完成。"""
+        candidate = self.get(candidate_id)
+        candidate.metadata_synced_at = datetime.now(UTC).replace(tzinfo=None)
+        self._session.commit()
+
     def update_stage(self, candidate_id: str, stage: str) -> Candidate:
         """更新候选人当前阶段。"""
         candidate = self.get(candidate_id)
         candidate.current_stage = stage
+        self._session.commit()
+        self._session.refresh(candidate)
+        return candidate
+
+    def update_resume_fields(
+        self,
+        candidate_id: str,
+        *,
+        resume_url: str | None = None,
+        resume_text: str | None = None,
+        raw_profile_patch: dict[str, Any] | None = None,
+    ) -> Candidate:
+        """更新候选人简历相关字段。"""
+        candidate = self.get(candidate_id)
+        if resume_url:
+            candidate.resume_url = resume_url
+        if resume_text:
+            candidate.resume_text = resume_text
+        if raw_profile_patch:
+            candidate.raw_profile = self._merge_raw_profile(candidate.raw_profile, raw_profile_patch)
         self._session.commit()
         self._session.refresh(candidate)
         return candidate
@@ -164,10 +239,22 @@ class CandidateRepository:
             candidate.phone_hash = item.phone_hash
         if item.email_hash:
             candidate.email_hash = item.email_hash
+        if item.email:
+            candidate.email = item.email
         if item.resume_url:
             candidate.resume_url = item.resume_url
         if item.resume_text:
             candidate.resume_text = item.resume_text
+        if item.school:
+            candidate.school = item.school
+        if item.degree:
+            candidate.degree = item.degree
+        if item.work_experience:
+            candidate.work_experience = item.work_experience
+        if item.expected_salary:
+            candidate.expected_salary = item.expected_salary
+        if item.latest_company:
+            candidate.latest_company = item.latest_company
         candidate.raw_profile = self._merge_raw_profile(candidate.raw_profile, item.raw_profile)
 
     def _merge_raw_profile(self, existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:

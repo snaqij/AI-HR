@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+
+os.environ["AI_HR_BOSS_MODE"] = "mock"
+os.environ["AI_HR_ENV_FILE"] = ""
+
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine
@@ -11,10 +16,11 @@ from ai_hr.connectors.base import ConnectorCredentials
 from ai_hr.connectors.boss import BossConnector
 from ai_hr.core.exceptions import ConnectorOperationError
 from ai_hr.db.base import Base
-from ai_hr.db.models import Candidate, CandidateIdentity
+from ai_hr.db.models import Candidate, CandidateIdentity, JobCandidate, JobSyncRun, JobSyncTask
 from ai_hr.db.session import get_db_session
 from ai_hr.main import app
-
+from ai_hr.schemas.job_sync import JobSyncTaskUpsertRequest
+from ai_hr.services.job_sync import get_job_sync_service
 
 engine = create_engine(
     "sqlite://",
@@ -35,6 +41,13 @@ def override_get_db_session():
 
 app.dependency_overrides[get_db_session] = override_get_db_session
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def reset_db_override():
+    app.dependency_overrides[get_db_session] = override_get_db_session
+    yield
+    app.dependency_overrides[get_db_session] = override_get_db_session
 
 
 def test_create_job_returns_envelope() -> None:
@@ -265,6 +278,325 @@ def test_sync_candidates_supports_incremental_cursor_pull() -> None:
     assert third_payload["total_updated"] == 0
     assert third_payload["channels"][0]["next_cursor"] is None
     assert third_payload["channels"][0]["has_more"] is False
+
+
+def test_list_job_candidates_returns_job_scoped_candidates() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Data Engineer",
+            "department": "Data",
+            "city": "Shanghai",
+            "salary_range": "25k-40k",
+            "requirements": "Python, SQL, Airflow",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+
+    publish_response = client.post(
+        f"/api/v1/jobs/{job_id}/publish",
+        json={"channels": ["boss"]},
+    )
+    assert publish_response.status_code == 200
+
+    sync_response = client.post(
+        f"/api/v1/jobs/{job_id}/candidates/sync",
+        json={"channels": ["boss"], "max_pages": 2},
+    )
+    assert sync_response.status_code == 200
+    assert sync_response.json()["data"]["total_pulled"] == 2
+
+    list_response = client.get(f"/api/v1/jobs/{job_id}/candidates")
+    assert list_response.status_code == 200
+    payload = list_response.json()["data"]
+    assert payload["job_id"] == job_id
+    assert payload["total"] == 2
+    assert payload["candidates"][0]["candidate"]["source_channel"] == "boss"
+    assert payload["candidates"][0]["external_job_id"] is not None
+
+    with TestingSessionLocal() as session:
+        links = session.execute(select(JobCandidate).where(JobCandidate.job_id == job_id)).scalars().all()
+        assert len(links) == 2
+
+
+def test_sync_resume_ready_candidates_imports_label_pool_candidates() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Resume Ready Java",
+            "department": "Engineering",
+            "city": "Beijing",
+            "salary_range": "30k-45k",
+            "requirements": "Java",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+
+    publish_response = client.post(
+        f"/api/v1/jobs/{job_id}/publish",
+        json={"channels": ["boss"]},
+    )
+    assert publish_response.status_code == 200
+
+    sync_response = client.post(
+        f"/api/v1/jobs/{job_id}/resume-ready-candidates/sync",
+        json={"channel": "boss", "label_id": 4, "sort": ""},
+    )
+    assert sync_response.status_code == 200
+    payload = sync_response.json()["data"]
+    assert payload["job_id"] == job_id
+    assert payload["channel"] == "boss"
+    assert payload["label_id"] == 4
+    assert payload["pulled_count"] == 1
+    assert payload["created_count"] == 1
+    assert payload["updated_count"] == 0
+
+
+def test_sync_candidates_supports_cursor_reset_for_backfill() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "QA Engineer",
+            "department": "QA",
+            "city": "Suzhou",
+            "salary_range": "18k-28k",
+            "requirements": "Automation, Python",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+
+    client.post(
+        f"/api/v1/jobs/{job_id}/publish",
+        json={"channels": ["boss"]},
+    )
+
+    first_sync = client.post(
+        f"/api/v1/jobs/{job_id}/candidates/sync",
+        json={"channels": ["boss"], "max_pages": 1},
+    )
+    assert first_sync.status_code == 200
+    assert first_sync.json()["data"]["total_created"] == 1
+
+    second_sync = client.post(
+        f"/api/v1/jobs/{job_id}/candidates/sync",
+        json={"channels": ["boss"], "max_pages": 1, "reset_cursor": True},
+    )
+    assert second_sync.status_code == 200
+    payload = second_sync.json()["data"]
+    assert payload["total_created"] == 0
+    assert payload["total_updated"] == 1
+    assert payload["channels"][0]["next_cursor"] == "cursor-1"
+
+
+def test_sync_candidates_can_auto_request_and_download_resumes() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Auto Resume Engineer",
+            "department": "Platform",
+            "city": "Shanghai",
+            "salary_range": "25k-35k",
+            "requirements": "Python",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+
+    client.post(
+        f"/api/v1/jobs/{job_id}/publish",
+        json={"channels": ["boss"]},
+    )
+
+    sync_response = client.post(
+        f"/api/v1/jobs/{job_id}/candidates/sync",
+        json={
+            "channels": ["boss"],
+            "max_pages": 1,
+            "auto_request_resume": True,
+            "auto_sync_resume_attachment": True,
+        },
+    )
+    assert sync_response.status_code == 200
+    payload = sync_response.json()["data"]
+    assert payload["resume_access"]["total_candidates"] == 1
+    assert payload["resume_access"]["succeeded_count"] == 1
+    assert payload["resume_access"]["results"][0]["resume_visible"] is True
+    assert payload["resume_access"]["results"][0]["attachment_synced"] is True
+
+
+def test_remote_job_endpoints_support_listing_and_import() -> None:
+    list_response = client.get("/api/v1/jobs/remote/boss?page=1&page_size=10")
+    assert list_response.status_code == 200
+    list_payload = list_response.json()["data"]
+    assert list_payload["channel"] == "boss"
+    assert len(list_payload["jobs"]) == 2
+
+    first_import = client.post(
+        "/api/v1/jobs/remote/import",
+        json={"channel": "boss", "page": 1, "page_size": 10},
+    )
+    assert first_import.status_code == 200
+    first_payload = first_import.json()["data"]
+    assert first_payload["created_count"] == 2
+    assert first_payload["updated_count"] == 0
+
+    second_import = client.post(
+        "/api/v1/jobs/remote/import",
+        json={"channel": "boss", "page": 1, "page_size": 10},
+    )
+    assert second_import.status_code == 200
+    second_payload = second_import.json()["data"]
+    assert second_payload["created_count"] == 0
+    assert second_payload["updated_count"] == 2
+
+
+def test_manual_job_sync_creates_audit_run() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Ops Engineer",
+            "department": "Ops",
+            "city": "Shanghai",
+            "salary_range": "20k-30k",
+            "requirements": "Linux, Python",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+    client.post(f"/api/v1/jobs/{job_id}/publish", json={"channels": ["boss"]})
+
+    sync_response = client.post(
+        f"/api/v1/jobs/{job_id}/candidates/sync",
+        json={"channels": ["boss"], "max_pages": 1},
+    )
+    assert sync_response.status_code == 200
+
+    runs_response = client.get(f"/api/v1/jobs/{job_id}/sync-runs")
+    assert runs_response.status_code == 200
+    runs_payload = runs_response.json()["data"]
+    assert len(runs_payload["runs"]) == 1
+    assert runs_payload["runs"][0]["trigger_type"] == "manual"
+    assert runs_payload["runs"][0]["status"] == "success"
+
+
+def test_sync_task_endpoints_support_configure_and_run() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Scheduler Engineer",
+            "department": "Platform",
+            "city": "Beijing",
+            "salary_range": "30k-45k",
+            "requirements": "Python, scheduler",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+    client.post(f"/api/v1/jobs/{job_id}/publish", json={"channels": ["boss"]})
+
+    upsert_response = client.put(
+        f"/api/v1/jobs/{job_id}/sync-task",
+        json={
+            "channel": "boss",
+            "enabled": True,
+            "interval_minutes": 15,
+            "max_pages": 1,
+            "run_immediately": False,
+        },
+    )
+    assert upsert_response.status_code == 200
+    task_id = upsert_response.json()["data"]["id"]
+
+    list_response = client.get(f"/api/v1/jobs/{job_id}/sync-tasks")
+    assert list_response.status_code == 200
+    assert len(list_response.json()["data"]["tasks"]) == 1
+
+    run_response = client.post(f"/api/v1/jobs/sync-tasks/{task_id}/run")
+    assert run_response.status_code == 200
+    run_payload = run_response.json()["data"]
+    assert run_payload["task"]["last_status"] == "success"
+    assert run_payload["run"]["trigger_type"] == "scheduled"
+    assert run_payload["summary"]["total_pulled"] == 1
+
+
+def test_execute_due_tasks_runs_enabled_task() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Batch Engineer",
+            "department": "Platform",
+            "city": "Hangzhou",
+            "salary_range": "25k-35k",
+            "requirements": "Batch jobs",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+    client.post(f"/api/v1/jobs/{job_id}/publish", json={"channels": ["boss"]})
+
+    with TestingSessionLocal() as session:
+        service = get_job_sync_service(session)
+        task = service.upsert_task(
+            job_id,
+            JobSyncTaskUpsertRequest(
+                channel="boss",
+                enabled=True,
+                interval_minutes=10,
+                max_pages=1,
+                reset_cursor_on_next_run=False,
+                run_immediately=True,
+            ),
+        )
+        results = service.execute_due_tasks(limit=5)
+        assert len(results) == 1
+        assert results[0]["task"].id == task.id
+        assert results[0]["run"].status == "success"
+
+    with TestingSessionLocal() as session:
+        task_row = session.get(JobSyncTask, task.id)
+        assert task_row is not None
+        assert task_row.last_status == "success"
+        runs = session.execute(select(JobSyncRun).where(JobSyncRun.task_id == task.id)).scalars().all()
+        assert len(runs) == 1
+
+
+def test_execute_due_tasks_can_auto_request_and_download_resumes() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Scheduled Resume Engineer",
+            "department": "Platform",
+            "city": "Hangzhou",
+            "salary_range": "25k-35k",
+            "requirements": "Batch jobs",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+    client.post(f"/api/v1/jobs/{job_id}/publish", json={"channels": ["boss"]})
+
+    with TestingSessionLocal() as session:
+        service = get_job_sync_service(session)
+        task = service.upsert_task(
+            job_id,
+            JobSyncTaskUpsertRequest(
+                channel="boss",
+                enabled=True,
+                interval_minutes=10,
+                max_pages=1,
+                reset_cursor_on_next_run=False,
+                auto_request_resume=True,
+                auto_sync_resume_attachment=True,
+                run_immediately=True,
+            ),
+        )
+        results = service.execute_due_tasks(limit=5)
+        assert len(results) == 1
+        assert results[0]["task"].id == task.id
+        assert results[0]["run"].status == "success"
+        assert results[0]["summary"]["resume_access"]["total_candidates"] == 1
+        assert results[0]["summary"]["resume_access"]["results"][0]["attachment_synced"] is True
+
+    tasks_response = client.get(f"/api/v1/jobs/{job_id}/sync-tasks")
+    assert tasks_response.status_code == 200
+    task_payload = tasks_response.json()["data"]["tasks"][0]
+    assert task_payload["auto_request_resume"] is True
+    assert task_payload["auto_sync_resume_attachment"] is True
 
 
 def test_greet_sync_and_reply_workflow() -> None:
@@ -669,5 +1001,17 @@ def test_create_job_rejects_different_payload_with_same_key() -> None:
 
 
 def test_core_tables_are_registered() -> None:
-    expected_tables = {"jobs", "candidates", "candidate_identities", "job_publications", "conversations", "interviews", "events"}
+    expected_tables = {
+        "jobs",
+        "candidates",
+        "candidate_identities",
+        "candidate_resume_attachments",
+        "job_publications",
+        "job_candidates",
+        "job_sync_tasks",
+        "job_sync_runs",
+        "conversations",
+        "interviews",
+        "events",
+    }
     assert expected_tables.issubset(set(Base.metadata.tables.keys()))
