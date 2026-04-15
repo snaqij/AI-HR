@@ -215,7 +215,7 @@ DEFAULT_PROMPT_LIBRARY: dict[tuple[str, str], PromptTemplate] = {
     (PromptTaskKey.INTERVIEW_QUESTION_SET, "v4"): PromptTemplate(
         task_key=PromptTaskKey.INTERVIEW_QUESTION_SET,
         version="v4",
-        system_prompt="你是高质量面试题生成助手，输出 JSON，问题需贴合项目证据。",
+        system_prompt="你是高质量面试题生成助手，要求严格输出包含 'questions' 数组字段的 JSON 对象，问题需贴合项目证据。",
         user_template="语言：{language}\n岗位要求：{job_requirements}\n简历：{resume_text}\n技能：{skills}\n题量：{question_count}",
     ),
     (PromptTaskKey.INTERVIEW_FOLLOWUP, "v1"): PromptTemplate(

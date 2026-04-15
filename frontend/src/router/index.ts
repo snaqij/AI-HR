@@ -62,6 +62,11 @@ const router = createRouter({
       path: '/interview/:id',
       name: 'InterviewRoom',
       component: () => import('../views/interview/InterviewRoom.vue')
+    },
+    {
+      path: '/interview/invitation/:token',
+      name: 'InterviewInvitationEntry',
+      component: () => import('../views/interview/InterviewInvitationEntry.vue')
     }
   ]
 })

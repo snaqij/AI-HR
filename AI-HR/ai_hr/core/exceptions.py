@@ -1,31 +1,36 @@
-"""领域与基础设施异常定义。"""
+"""Domain and infrastructure exceptions."""
 
 from __future__ import annotations
 
 
 class AIHRException(Exception):
-    """服务侧基础异常类型。"""
+    """Base service exception."""
 
 
 class ResourceNotFoundError(AIHRException):
-    """资源不存在时抛出。"""
+    """Raised when resource is missing."""
 
 
 class InvalidStateError(AIHRException):
-    """资源状态不满足执行条件时抛出。"""
+    """Raised when state does not satisfy preconditions."""
 
 
 class ConnectorNotFoundError(AIHRException):
-    """连接器未注册时抛出。"""
+    """Raised when connector is not registered."""
 
 
 class InvalidConnectorConfigError(AIHRException):
-    """连接器配置不完整时抛出。"""
+    """Raised when connector configuration is invalid."""
 
 
 class ConnectorOperationError(AIHRException):
-    """连接器执行动作失败时抛出。"""
+    """Raised when connector operation fails."""
 
 
 class CredentialsExpiredError(ConnectorOperationError):
-    """连接器凭据（如Cookie）已过期或无效时抛出。"""
+    """Raised when connector credentials are expired or invalid."""
+
+
+class ObjectStorageError(AIHRException):
+    """Raised when object storage operation fails."""
+

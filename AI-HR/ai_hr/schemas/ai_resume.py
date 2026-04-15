@@ -72,6 +72,10 @@ class ResumeAttachmentPayload(BaseModel):
     source_url: str | None = None
     file_size_bytes: int
     file_sha256: str
+    object_storage_provider: str | None = None
+    object_storage_bucket: str | None = None
+    object_storage_key: str | None = None
+    object_storage_url: str | None = None
     last_synced_at: datetime
     created_at: datetime
     updated_at: datetime

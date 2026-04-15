@@ -36,7 +36,7 @@ from ..schemas.candidates import CandidateResponse, CandidateSummaryResponse
 from .ai_resume import AIResumeService
 from .llm.client import InvokeContext, LLMClient
 from .llm.guardrails import GuardrailService
-from .llm.prompts import get_prompt_template
+from .llm.prompts import PromptTemplate, get_prompt_template
 from .llm.router import ModelRouter
 from .policy.decision import PolicyDecisionService
 
@@ -230,6 +230,8 @@ class CandidateEvaluationService:
             confidence=float(merged["confidence_score"] or 0.0),
             decision_action=decision.action,
             risk_flags=list(merged["risk_flags"]),
+            dimension_scores=dict(merged["dimension_scores"]),
+            job_requirement_coverage=dict(merged["job_requirement_coverage"]),
         )
 
         evaluation = self._evaluation_repository.create(
@@ -467,7 +469,26 @@ class CandidateEvaluationService:
             + academic_score * 0.07,
             2,
         )
-        final_score = round(match_score * 0.65 + competitiveness_score * 0.35, 2)
+        learning_agility = self._calculate_learning_agility(
+            internship_score=internship_score,
+            contest_score=contest_score,
+            academic_score=academic_score,
+            project_relevance=project_relevance,
+            resume_completeness=resume_completeness,
+            candidate_years=candidate_years,
+            requirement_signals=requirement_signals,
+        )
+        engineering_ability = self._calculate_engineering_ability(
+            skill_match=skill_match,
+            experience_match=experience_match,
+            project_relevance=project_relevance,
+            stability_score=stability_score,
+            jd_coverage=jd_coverage,
+        )
+        final_score = round(
+            match_score * 0.45 + competitiveness_score * 0.15 + learning_agility * 0.20 + engineering_ability * 0.20,
+            2,
+        )
         requirement_strictness = self._estimate_requirement_strictness(
             required_skills=required_skills,
             min_years=requirement_signals.min_years,
@@ -509,6 +530,10 @@ class CandidateEvaluationService:
             risk_flags.append("academic_performance_weak")
         if resume_completeness < 65:
             risk_flags.append("resume_completeness_low")
+        if learning_agility < 60:
+            risk_flags.append("learning_agility_low")
+        if engineering_ability < 60:
+            risk_flags.append("engineering_ability_low")
         risk_penalty = self._estimate_risk_penalty(
             risk_flags=risk_flags,
             resume_risks=resume_risks,
@@ -588,6 +613,8 @@ class CandidateEvaluationService:
                 "stability_score": round(stability_score, 2),
                 "resume_completeness": round(resume_completeness, 2),
                 "jd_coverage": round(jd_coverage, 2),
+                "learning_agility": round(learning_agility, 2),
+                "engineering_ability": round(engineering_ability, 2),
                 "requirement_strictness": round(requirement_strictness, 2),
                 "evidence_quality": round(evidence_quality, 2),
                 "risk_penalty": round(risk_penalty, 2),
@@ -613,27 +640,44 @@ class CandidateEvaluationService:
         raw_profile: dict[str, Any],
         resume_risks: list[Any],
     ) -> dict[str, Any] | None:
-        template = get_prompt_template(PromptTaskKey.CANDIDATE_EVALUATION, "v1")
+        active_prompt = self._runtime_repository.get_active_prompt(PromptTaskKey.CANDIDATE_EVALUATION)
+        if active_prompt is not None:
+            template = PromptTemplate(
+                task_key=PromptTaskKey.CANDIDATE_EVALUATION,
+                version=active_prompt.version,
+                system_prompt=active_prompt.system_prompt,
+                user_template=active_prompt.user_template,
+            )
+        else:
+            template = get_prompt_template(PromptTaskKey.CANDIDATE_EVALUATION, "v1")
         compact_profile = self._compact_raw_profile_for_llm(raw_profile)
-        prompt = "\n".join(
-            [
-                template.system_prompt,
-                template.render(
-                    job_title=job_title,
-                    salary_range=salary_range,
-                    job_requirements=job_requirements,
-                    resume_text=resume_text,
-                    normalized_profile=normalized_profile,
-                    raw_profile=compact_profile,
-                    resume_risks=[
-                        {"risk_code": str(item.risk_code), "risk_level": str(item.risk_level), "detail": str(item.detail)}
-                        for item in resume_risks
-                    ],
-                ),
-            ]
+        requirement_signals = self._extract_job_requirement_signals(job_requirements)
+        strict_directive = self._build_candidate_matching_directive(
+            requirement_signals=requirement_signals,
+            resume_risk_count=len(resume_risks),
         )
+        render_payload = dict(
+            job_title=job_title,
+            salary_range=salary_range,
+            job_requirements=job_requirements,
+            resume_text=resume_text,
+            normalized_profile=normalized_profile,
+            raw_profile=compact_profile,
+            resume_risks=[
+                {"risk_code": str(item.risk_code), "risk_level": str(item.risk_level), "detail": str(item.detail)}
+                for item in resume_risks
+            ],
+        )
+        try:
+            user_prompt = template.render(**render_payload)
+        except KeyError:
+            # Runtime prompt template may miss required placeholders; fallback to built-in safe template.
+            fallback = get_prompt_template(PromptTaskKey.CANDIDATE_EVALUATION, "v1")
+            user_prompt = fallback.render(**render_payload)
+
+        prompt = "\n".join([user_prompt, strict_directive])
         header = (
-            f"[AI-HR][candidate_evaluation] prompt(candidate_id={candidate_id}, chars={len(prompt)})\n"
+            f"[AI-HR][candidate_evaluation] prompt(candidate_id={candidate_id}, version={template.version}, chars={len(prompt)})\n"
             f"{'-' * 32}\n"
         )
         trailer = f"\n{'-' * 32}"
@@ -647,6 +691,7 @@ class CandidateEvaluationService:
                 task_key=PromptTaskKey.CANDIDATE_EVALUATION,
                 trace_id=str(uuid.uuid4()),
                 prompt=prompt,
+                system_prompt=template.system_prompt,
                 entity_type="candidate",
                 entity_id=candidate_id,
             )
@@ -704,8 +749,15 @@ class CandidateEvaluationService:
             if not isinstance(value, (int, float)):
                 continue
             merged_dimensions[str(key)] = round(max(0.0, min(float(value), 100.0)), 2)
-        # Keep a few deterministic heuristic-only dimensions as supplementary signals.
-        for key in ("requirement_strictness", "evidence_quality", "risk_penalty"):
+        # Keep deterministic heuristic-only dimensions as supplementary signals.
+        for key in (
+            "jd_coverage",
+            "learning_agility",
+            "engineering_ability",
+            "requirement_strictness",
+            "evidence_quality",
+            "risk_penalty",
+        ):
             if key in merged_dimensions:
                 continue
             value = heuristic.get("dimension_scores", {}).get(key)
@@ -728,6 +780,25 @@ class CandidateEvaluationService:
             max(0.0, min(float(llm_output.get("confidence_score", heuristic["confidence_score"])), 1.0)),
             2,
         )
+        coverage = {
+            **dict(heuristic["job_requirement_coverage"]),
+            **dict(llm_output.get("job_requirement_coverage") or {}),
+        }
+        learning_agility = self._extract_dimension_score(
+            merged_dimensions=merged_dimensions,
+            heuristic=heuristic,
+            key="learning_agility",
+        )
+        engineering_ability = self._extract_dimension_score(
+            merged_dimensions=merged_dimensions,
+            heuristic=heuristic,
+            key="engineering_ability",
+        )
+        skill_coverage_ratio = self._coverage_to_ratio(coverage)
+        if learning_agility < 60 or engineering_ability < 60:
+            final_score = min(final_score, 69.0)
+        elif skill_coverage_ratio < 0.5:
+            final_score = min(final_score, 74.0)
         # 增加市场对标点评
         summary_raw = str(llm_output.get("summary") or heuristic["summary"])
         market_benchmark = llm_output.get("market_benchmark")
@@ -752,10 +823,7 @@ class CandidateEvaluationService:
             "risk_flags": self._dedupe_strings(list(heuristic["risk_flags"]) + list(llm_output.get("risk_flags") or [])),
             "recommendation": llm_output.get("recommendation") or heuristic["recommendation"],
             "summary": self._localize_text(summary_raw),
-            "job_requirement_coverage": {
-                **dict(heuristic["job_requirement_coverage"]),
-                **dict(llm_output.get("job_requirement_coverage") or {}),
-            },
+            "job_requirement_coverage": coverage,
         }
 
     def _resolve_recommendation(
@@ -765,13 +833,32 @@ class CandidateEvaluationService:
         confidence: float,
         decision_action: str,
         risk_flags: list[str],
+        dimension_scores: dict[str, Any],
+        job_requirement_coverage: dict[str, Any],
     ) -> str:
+        learning_agility = self._safe_float(dimension_scores.get("learning_agility")) or 0.0
+        engineering_ability = self._safe_float(dimension_scores.get("engineering_ability")) or 0.0
+        coverage_ratio = self._coverage_to_ratio(job_requirement_coverage)
         if decision_action == "manual_review":
             return "review"
+        if learning_agility < 60 or engineering_ability < 60:
+            return "review" if final_score >= 60 else "reject"
+        if coverage_ratio < 0.35:
+            return "reject"
         if any(flag in {"skills_missing", "project_evidence_weak"} for flag in risk_flags):
             return "review"
-        if final_score >= self._settings.ai_candidate_evaluation_strong_recommend_score and confidence >= 0.75:
+        if confidence < 0.55 and final_score >= self._settings.ai_candidate_evaluation_recommend_score:
+            return "review"
+        if (
+            final_score >= self._settings.ai_candidate_evaluation_strong_recommend_score
+            and confidence >= 0.80
+            and coverage_ratio >= 0.75
+            and learning_agility >= 80
+            and engineering_ability >= 80
+        ):
             return "strong_recommend"
+        if final_score >= self._settings.ai_candidate_evaluation_strong_recommend_score and confidence >= 0.75:
+            return "recommend"
         if final_score >= self._settings.ai_candidate_evaluation_recommend_score:
             return "recommend"
         return "reject"
@@ -912,6 +999,49 @@ class CandidateEvaluationService:
             score += 12.0
         return min(score, 95.0)
 
+    def _calculate_learning_agility(
+        self,
+        *,
+        internship_score: float,
+        contest_score: float,
+        academic_score: float,
+        project_relevance: float,
+        resume_completeness: float,
+        candidate_years: float | None,
+        requirement_signals: _JobRequirementSignals,
+    ) -> float:
+        score = (
+            internship_score * 0.20
+            + contest_score * 0.12
+            + academic_score * 0.18
+            + project_relevance * 0.22
+            + resume_completeness * 0.12
+            + 66.0 * 0.16
+        )
+        if candidate_years is not None and candidate_years <= 2.0:
+            score += 4.0
+        if requirement_signals.min_years and candidate_years is not None and candidate_years >= requirement_signals.min_years:
+            score += 2.0
+        return round(max(35.0, min(score, 96.0)), 2)
+
+    def _calculate_engineering_ability(
+        self,
+        *,
+        skill_match: float,
+        experience_match: float,
+        project_relevance: float,
+        stability_score: float,
+        jd_coverage: float,
+    ) -> float:
+        score = (
+            skill_match * 0.34
+            + experience_match * 0.18
+            + project_relevance * 0.30
+            + jd_coverage * 0.12
+            + stability_score * 0.06
+        )
+        return round(max(30.0, min(score, 97.0)), 2)
+
     def _estimate_requirement_strictness(
         self,
         *,
@@ -979,6 +1109,8 @@ class CandidateEvaluationService:
             "resume_completeness_low",
             "academic_performance_weak",
             "contest_evidence_weak",
+            "learning_agility_low",
+            "engineering_ability_low",
         }
         penalty += sum(3.0 for flag in set(risk_flags) if flag in high_impact_flags)
         for risk in resume_risks:
@@ -1146,6 +1278,50 @@ class CandidateEvaluationService:
             if lower.startswith(prefix):
                 return zh_prefix + normalized[len(prefix):].strip()
         return normalized
+
+    def _build_candidate_matching_directive(
+        self,
+        *,
+        requirement_signals: _JobRequirementSignals,
+        resume_risk_count: int,
+    ) -> str:
+        required_skills = ", ".join(requirement_signals.skills[:8]) if requirement_signals.skills else "none"
+        min_years = str(requirement_signals.min_years) if requirement_signals.min_years is not None else "not_specified"
+        education = requirement_signals.education_level or "not_specified"
+        return (
+            "Strict evaluation policy:\n"
+            "1) Prioritize mismatch detection before strengths.\n"
+            "2) Evidence-first: without concrete engineering evidence (trade-off, debugging, performance, delivery), engineering_ability must be <= 60.\n"
+            "3) Without rapid-learning evidence (new domain ramp-up, compressed learning cycle, measurable learning output), learning_agility must be <= 65.\n"
+            "4) Keep score distribution realistic for competitive market; reserve 85+ for clearly exceptional candidates.\n"
+            "5) recommendation must align with dimensions and risk flags; do not over-recommend.\n"
+            f"JD hard signals: required_skills={required_skills}; min_years={min_years}; education={education}; resume_risk_count={resume_risk_count}.\n"
+            "Output JSON only."
+        )
+
+    def _extract_dimension_score(self, *, merged_dimensions: dict[str, float], heuristic: dict[str, Any], key: str) -> float:
+        value = merged_dimensions.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+        heuristic_value = heuristic.get("dimension_scores", {}).get(key)
+        if isinstance(heuristic_value, (int, float)):
+            return float(heuristic_value)
+        return 0.0
+
+    def _coverage_to_ratio(self, coverage: dict[str, Any]) -> float:
+        if not coverage:
+            return 1.0
+        non_skill_keys = {"education_requirement", "internship_signal", "project_signal", "contest_signal", "grade_signal"}
+        skill_values = [
+            str(value).strip().lower()
+            for key, value in coverage.items()
+            if str(key).strip().lower() not in non_skill_keys
+        ]
+        if not skill_values:
+            return 1.0
+        matched = sum(1 for value in skill_values if value == "matched")
+        partial = sum(1 for value in skill_values if value == "partial")
+        return max(0.0, min((matched + partial * 0.5) / len(skill_values), 1.0))
 
 
 def get_candidate_evaluation_service(session: Session) -> CandidateEvaluationService:

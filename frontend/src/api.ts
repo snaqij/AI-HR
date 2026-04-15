@@ -34,6 +34,52 @@ export interface InterviewSession {
   payload: Record<string, unknown>;
 }
 
+export interface InterviewRTCJoinInfo {
+  session_id: string;
+  provider: string;
+  room_id: string;
+  channel_name: string;
+  join_token: string;
+  app_id: string | null;
+  uid: string | null;
+  expire_at: string | null;
+  reconnectable: boolean;
+  transport: string;
+}
+
+export interface InterviewTENRuntimeConfig {
+  session_id: string;
+  enabled: boolean;
+  room_id: string;
+  provider: string;
+  app_id: string | null;
+  channel_name: string | null;
+  agent_user_id: string | null;
+  remote_user_id: string | null;
+  property_file: string | null;
+  launch_status: string;
+  launch_command: string | null;
+  process_pid: number | null;
+}
+
+export interface ReplayItem {
+  turn_id: string;
+  turn_no: number;
+  speaker: string;
+  transcript?: string | null;
+  audio_uri?: string | null;
+  confidence?: number | null;
+  latency_ms?: number | null;
+  policy_flags?: string[];
+  occurred_at?: string | null;
+}
+
+export interface InterviewRealtimeEvent {
+  event_type: string;
+  session_id?: string;
+  payload?: Record<string, any>;
+}
+
 export interface Job {
   id: string;
   title: string;
@@ -414,4 +460,98 @@ export async function createInterviewSession(candidateId: string, jobId: string)
     })
   });
   return data.session;
+}
+
+export async function activateInterviewInvitation(token: string): Promise<InterviewSession> {
+  return request<InterviewSession>(`/ai-interviews/invitations/token/${encodeURIComponent(token)}/activate`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export async function getInterviewSession(sessionId: string): Promise<InterviewSession> {
+  return request<InterviewSession>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export async function startInterviewSession(sessionId: string, operator = "system"): Promise<InterviewSession> {
+  return request<InterviewSession>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/start`, {
+    method: "POST",
+    body: JSON.stringify({ operator })
+  });
+}
+
+export async function finishInterviewSession(
+  sessionId: string,
+  payload: { result_status?: "completed" | "failed"; operator?: string; note?: string } = {}
+): Promise<InterviewSession> {
+  return request<InterviewSession>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/finish`, {
+    method: "POST",
+    body: JSON.stringify({
+      result_status: payload.result_status || "completed",
+      operator: payload.operator || "system",
+      note: payload.note || null,
+    })
+  });
+}
+
+export async function joinInterviewRTC(
+  sessionId: string,
+  candidateId: string,
+  clientId = "web"
+): Promise<InterviewRTCJoinInfo> {
+  return request<InterviewRTCJoinInfo>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/rtc/join`, {
+    method: "POST",
+    body: JSON.stringify({
+      candidate_id: candidateId,
+      client_id: clientId,
+    }),
+  });
+}
+
+export async function joinInterviewRTCPreflight(
+  sessionId: string,
+  candidateId: string,
+  clientId = "web"
+): Promise<InterviewRTCJoinInfo> {
+  return joinInterviewRTC(sessionId, candidateId, clientId);
+}
+
+export async function getTenRuntimeConfig(sessionId: string): Promise<InterviewTENRuntimeConfig> {
+  return request<InterviewTENRuntimeConfig>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/ten/runtime-config`);
+}
+
+export async function launchTenSession(sessionId: string): Promise<InterviewTENRuntimeConfig> {
+  return request<InterviewTENRuntimeConfig>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/ten/launch`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function buildInterviewEventsWsUrl(sessionId: string): string {
+  const apiUrl = new URL(API_BASE_URL);
+  const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+  const wsPath = `${apiUrl.pathname.replace(/\/$/, "")}/ai/interviews/sessions/${encodeURIComponent(sessionId)}/events/ws`;
+  return `${protocol}//${apiUrl.host}${wsPath}`;
+}
+
+export async function bootstrapDemoSession(): Promise<InterviewSession> {
+  const jobs = await listJobs(20);
+  if (!jobs.length) {
+    throw new Error("No jobs found. Please create a job first.");
+  }
+
+  const targetJob = jobs[0];
+  const candidateList = await listJobCandidates(targetJob.id, { limit: 20 });
+  const targetCandidate = candidateList.candidates?.[0]?.candidate;
+  if (!targetCandidate?.id) {
+    throw new Error(`No candidates found for job ${targetJob.id}.`);
+  }
+
+  const session = await createInterviewSession(targetCandidate.id, targetJob.id);
+  try {
+    await startInterviewSession(session.id);
+  } catch {
+    // Session might already be started by invitation/runtime path.
+  }
+  return getInterviewSession(session.id);
 }

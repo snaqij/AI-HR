@@ -393,13 +393,34 @@ class InterviewQuestionFlowEngine:
             completed_with_gap = True
             completion_reason = "followup_limit_reached"
 
-        # Anti-Jump Safeguard: Never complete on noise or insufficient detail during technical stages
-        # unless we've truly hit the hard turn limit of the stage.
-        if should_complete and current_stage in ("S3", "S4", "S5"):
-            if evaluation.get("reason") in ("too_short_or_noise", "insufficient_detail") and not stage_turn_limit_reached:
+        # Anti-Jump Safeguard: Prevent premature completion of technical questions.
+        # Technical stages (S3/S4/S5) require both adequate content AND no hard turn limit hit.
+        # This guards against candidates being cut off mid-thought during pauses.
+        if should_complete and current_stage in ("S3", "S4", "S5") and not stage_turn_limit_reached:
+            normalized_answer = " ".join(str(evaluation.get("normalized_len") and
+                                          transcript if False else "").split())
+            answer_char_count = int(evaluation.get("normalized_len") or 0)
+
+            # Block completion if answer quality signals are weak
+            if evaluation.get("reason") in ("too_short_or_noise", "insufficient_detail"):
                 should_complete = False
                 completion_reason = ""
                 completed_with_gap = False
+
+            # Block completion even for "sufficient" answers that are too brief for technical depth.
+            # A 60-character floor gives candidates room to think without being rushed.
+            # candidate_requested_move_on explicitly bypasses this guard (they chose to skip).
+            elif (
+                not candidate_requested_move_on
+                and answer_char_count < 60
+                and evaluation.get("reason") not in ("too_short_or_noise", "insufficient_detail")
+                and followup_count < followup_limit
+            ):
+                should_complete = False
+                completion_reason = ""
+                completed_with_gap = False
+                # Rewrite evaluation reason so LLM knows to prompt for more depth
+                evaluation = {**evaluation, "need_followup": True, "reason": "tech_answer_too_brief"}
 
         if should_complete:
             statuses[idx] = "completed_with_gap" if completed_with_gap else "completed"

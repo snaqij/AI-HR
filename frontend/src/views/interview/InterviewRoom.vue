@@ -208,6 +208,10 @@ function readPreferredSessionId(): string {
   const fromQuery = String(url.searchParams.get("session_id") || "").trim();
   if (fromQuery) return fromQuery;
   const pathParts = url.pathname.split("/");
+  const interviewIdx = pathParts.indexOf("interview");
+  if (interviewIdx !== -1 && pathParts[interviewIdx + 1] && pathParts[interviewIdx + 1] !== "invitation") {
+    return pathParts[interviewIdx + 1].trim();
+  }
   const sessionIdx = pathParts.indexOf("session");
   if (sessionIdx !== -1 && pathParts[sessionIdx + 1]) return pathParts[sessionIdx + 1].trim();
   return "";
@@ -246,33 +250,104 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
   eventsSocket = ws;
   ws.onmessage = (event) => {
     const parsed = JSON.parse(event.data) as InterviewRealtimeEvent;
-    const payload = parsed.payload || {};
-    if (parsed.event_type === "connected") return;
-    if (parsed.event_type === "agent.state") {
+    // Events from the simple /events/ws bus come with top-level event_type
+    // Events bridged from TEN duplex bus wrap the payload under a nested key
+    const eventType = parsed.event_type;
+    const payload = parsed.payload || (parsed as any).data || {};
+    if (eventType === "connected" || eventType === "ping") return;
+
+    // --- TEN / Aliyun ASR transcript ---
+    if (eventType === "asr.turn") {
+        const isFinal = Boolean(payload.is_final);
+        const text = String(payload.transcript || payload.text || "").trim();
+        if (!isFinal) {
+            // partial — show as draft
+            if (text) candidateDraft.value = text;
+        } else {
+            // final — commit to transcript
+            if (text) {
+                appendTranscript(text, "候选人", String(payload.occurred_at || ""));
+                candidateDraft.value = "";
+            }
+        }
+        return;
+    }
+
+    // --- Interviewer question / followup published as session.event ---
+    if (eventType === "session.event") {
+        const transcript = String(payload.transcript || "").trim();
+        const speaker = String(payload.speaker || "候选人");
+        if (transcript) appendTranscript(transcript, speaker, String(payload.occurred_at || ""));
+        const next = String(payload.followup_question || payload.question || "").trim();
+        if (next) { followupQuestion.value = next; currentQuestion.value = next; }
+        return;
+    }
+
+    if (eventType === "agent.state") {
         const state = String(payload.state || "").toLowerCase();
         if (state === "listening") ttsStatus.value = "面试官正在聆听";
         else if (state === "thinking") ttsStatus.value = "面试官正在思考";
         else if (state === "speaking") ttsStatus.value = "面试官正在发问";
         return;
     }
-    if (parsed.event_type === "question.update" || parsed.event_type === "question.final") {
+    if (eventType === "question.update" || eventType === "question.final") {
         const text = String(payload.text || payload.spoken_text || "");
         if (text) { followupQuestion.value = ""; currentQuestion.value = text; }
         return;
     }
-    if (parsed.event_type === "candidate.partial") { candidateDraft.value = String(payload.text || ""); return; }
-    if (parsed.event_type === "candidate.final") {
+    if (eventType === "candidate.partial") { candidateDraft.value = String(payload.text || ""); return; }
+    if (eventType === "candidate.final") {
         const text = String(payload.text || payload.transcript || "");
         if (text) { appendTranscript(text, "候选人", String(payload.occurred_at || "")); candidateDraft.value = ""; }
         return;
     }
-    if (parsed.event_type === "session.event") {
-        const text = String(payload.transcript || "");
-        if (text) appendTranscript(text, String(payload.speaker || "候选人"), String(payload.occurred_at || ""));
-        const next = String(payload.followup_question || "");
-        if (next) { followupQuestion.value = next; currentQuestion.value = next; }
-    }
   };
+}
+
+async function ensureTenLaunchCommand(sessionIdValue: string): Promise<void> {
+  const publishCommand = (command: string, source: string): void => {
+    tenLaunchCommand.value = command;
+    (window as any).__TEN_LAUNCH_COMMAND__ = command;
+    (window as any).__TEN_LAUNCH_COMMAND_SOURCE__ = source;
+    console.warn(`[TEN] launch command (${source}) for session ${sessionIdValue}:`);
+    console.warn(command);
+  };
+  try {
+    const runtime = await getTenRuntimeConfig(sessionIdValue);
+    if (runtime.launch_command) {
+      publishCommand(runtime.launch_command, "runtime-config");
+      return;
+    }
+    if (!runtime.enabled) return;
+
+    const launched = await launchTenSession(sessionIdValue);
+    if (launched.launch_command) {
+      publishCommand(launched.launch_command, "launch-session");
+    }
+  } catch (err) {
+    console.warn(`[TEN] failed to fetch launch command for session ${sessionIdValue}`, err);
+  }
+}
+
+async function toggleMic(): Promise<void> {
+  const next = !micEnabled.value;
+  try {
+    await rtcGateway.setMicrophoneEnabled(next);
+    micEnabled.value = next;
+    micStatus.value = next ? "候选人音频已接入" : "候选人已静音";
+  } catch (err: any) {
+    errorText.value = err?.message || "切换麦克风失败";
+  }
+}
+
+async function toggleCamera(): Promise<void> {
+  const next = !cameraEnabled.value;
+  try {
+    await rtcGateway.setCameraEnabled(next);
+    cameraEnabled.value = next;
+  } catch (err: any) {
+    errorText.value = err?.message || "切换摄像头失败";
+  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -286,9 +361,11 @@ async function bootstrap(): Promise<void> {
     }
     const rtc = await joinInterviewRTC(session.value!.id, session.value!.candidate_id);
     await rtcGateway.connect({ appId: rtc.app_id!, channel: rtc.channel_name, token: rtc.join_token, uid: Number(rtc.uid) });
+    await ensureTenLaunchCommand(session.value!.id);
     if (candidateVideoMount.value) rtcGateway.playLocalVideo(candidateVideoMount.value);
     const replay = await loadReplayItems(session.value!.id);
     hydrateReplay(replay);
+    await connectEventBus(session.value!.id);
     tickerTimer = window.setInterval(() => { elapsedSeconds.value += 1; const mins = Math.floor(elapsedSeconds.value / 60).toString().padStart(2, "0"); const secs = Math.floor(elapsedSeconds.value % 60).toString().padStart(2, "0"); meetingTimeText.value = `${mins}:${secs}`; }, 1000);
   } catch (err: any) {
     errorText.value = err.message;
@@ -334,6 +411,26 @@ watch(() => transcriptView.value.length, () => scrollTranscriptToLatest());
           <div v-if="!loading && !errorText" class="absolute top-6 left-6 flex items-center gap-2 bg-slate-900/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
             <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
             <span class="text-xs text-white font-medium">{{ interviewerBannerText }}</span>
+          </div>
+          <div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3">
+            <button
+              class="w-12 h-12 rounded-full border border-white/20 backdrop-blur-md text-white flex items-center justify-center transition"
+              :class="micEnabled ? 'bg-black/40 hover:bg-black/55' : 'bg-red-600/85 hover:bg-red-600'"
+              :disabled="loading"
+              @click="toggleMic"
+              :title="micEnabled ? '关闭麦克风' : '开启麦克风'"
+            >
+              <span class="text-[10px] font-bold">{{ micEnabled ? '麦克风' : '静音' }}</span>
+            </button>
+            <button
+              class="w-12 h-12 rounded-full border border-white/20 backdrop-blur-md text-white flex items-center justify-center transition"
+              :class="cameraEnabled ? 'bg-black/40 hover:bg-black/55' : 'bg-red-600/85 hover:bg-red-600'"
+              :disabled="loading"
+              @click="toggleCamera"
+              :title="cameraEnabled ? '关闭视频' : '开启视频'"
+            >
+              <span class="text-[10px] font-bold">{{ cameraEnabled ? '视频' : '关闭' }}</span>
+            </button>
           </div>
         </div>
       </section>

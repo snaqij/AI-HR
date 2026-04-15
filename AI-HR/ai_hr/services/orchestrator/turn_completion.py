@@ -37,23 +37,50 @@ class TurnCompletionJudge:
         "\u57fa\u672c\u4e0a\u662f\u8fd9\u6837",
     )
     _STRONG_CONTINUATIONS = (
-        "\u7136\u540e",
-        "\u8fd8\u6709",
-        "\u53e6\u5916",
-        "\u5176\u6b21",
-        "\u540e\u9762\u7684\u8bdd",
-        "\u6211\u518d\u8865\u5145\u4e00\u4e0b",
-        "\u6211\u60f3\u4e00\u4e0b",
-        "\u8fd8\u6709\u4e00\u4e2a\u70b9",
-        "\u6bd4\u5982\u8bf4",
-        "\u50cf\u521a\u624d\u90a3\u4e2a",
+        "然后",
+        "还有",
+        "另外",
+        "其次",
+        "后面的话",
+        "我再补充一下",
+        "我想一下",
+        "还有一个点",
+        "比如说",
+        "像刚才那个",
     )
     _WEAK_CONTINUATIONS = (
-        "\u55ef",
-        "\u5443",
-        "\u5c31\u662f",
-        "\u8fd9\u4e2a",
-        "\u90a3\u4e2a",
+        "嗯",
+        "啊",
+        "就是",
+        "这个",
+        "那个",
+    )
+    # Thinking-pause phrases: candidate is mid-thought, NOT done speaking.
+    # These must strongly suppress finalization to avoid cutting off technical answers.
+    _THINKING_PAUSE_STRONG = (
+        "让我想想",
+        "让我想一下",
+        "我想想",
+        "我想一想",
+        "我想一下",
+        "稍等一下",
+        "稍等",
+        "等一下",
+        "怎么说呢",
+        "怎么讲呢",
+        "嗯这个",
+        "嗯那个",
+        "就是说",
+        "我回忆一下",
+        "让我回想一下",
+        "我看看",
+    )
+    _THINKING_PAUSE_WEAK = (
+        "嗯嗯",
+        "啊这个",
+        "然后这个",
+        "就是那个",
+        "应该是",
     )
 
     def judge(
@@ -149,7 +176,7 @@ class TurnCompletionJudge:
         if not text:
             return 0.0
 
-        score = 0.25 if text.endswith(("\u3002", "\uff01", "\uff1f", ".", "!", "?")) else 0.10
+        score = 0.25 if text.endswith(("。", "！", "？", ".", "!", "?")) else 0.10
 
         if any(phrase in text for phrase in self._STRONG_ENDINGS):
             score += 0.55
@@ -161,9 +188,25 @@ class TurnCompletionJudge:
         elif any(phrase in text for phrase in self._WEAK_CONTINUATIONS):
             score -= 0.18
 
-        if len(text) >= 40:
-            score += 0.08
-        if text.endswith(("\u7136\u540e", "\u8fd8\u6709", "\u53e6\u5916")):
+        # Suppress finalization when candidate shows clear thinking / hesitation signals.
+        # These commonly appear mid-answer during technical questions and must not trigger
+        # early completion even if the sentence superficially sounds finished.
+        if any(phrase in text for phrase in self._THINKING_PAUSE_STRONG):
+            score -= 0.55
+        elif any(phrase in text for phrase in self._THINKING_PAUSE_WEAK):
             score -= 0.25
+
+        if text.endswith(("然后", "还有", "另外")):
+            score -= 0.25
+
+        # Length bonuses: reward substantive answers so they reach completion naturally.
+        # This also prevents very short answers from accidentally scoring high.
+        n = len(text)
+        if n >= 200:
+            score += 0.18
+        elif n >= 100:
+            score += 0.12
+        elif n >= 40:
+            score += 0.08
 
         return max(0.0, min(1.0, score))

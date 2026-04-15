@@ -805,8 +805,16 @@ class AIInterviewService:
     ) -> tuple[list[dict], str]:
         """优先使用 LLM 生成题目，仅在 LLM 异常或题目不足时回退到规则驱动。"""
         llm_questions = []
-        
-        if self._is_interview_llm_enabled():
+        llm_enabled = self._is_interview_llm_enabled()
+        logger.info(
+            "ai_interview.question_generation_start session_id=%s llm_enabled=%s question_count=%s language=%s",
+            session_id,
+            llm_enabled,
+            question_count,
+            language,
+        )
+
+        if llm_enabled:
             try:
                 llm_questions = self._build_questions_with_llm(
                     session_id=session_id,
@@ -817,11 +825,22 @@ class AIInterviewService:
                     question_count=question_count,
                     language=language,
                 )
+                logger.info(
+                    "ai_interview.llm_question_generation_result session_id=%s llm_question_count=%s threshold=%s",
+                    session_id,
+                    len(llm_questions),
+                    max(3, question_count // 2),
+                )
                 # 如果 LLM 生成了足够的题目，直接使用 LLM 结果
                 if len(llm_questions) >= max(3, question_count // 2):
                     return list(llm_questions), "llm"
             except Exception as e:
                 logger.error(f"ai_interview.llm_question_generation_failed session_id={session_id} error={e}", exc_info=True)
+        else:
+            logger.info(
+                "ai_interview.llm_question_generation_skipped session_id=%s reason=llm_disabled",
+                session_id,
+            )
 
         # 回退逻辑：生成规则题目
         rule_questions = self._build_questions(
@@ -850,6 +869,12 @@ class AIInterviewService:
                 return list(llm_questions) if len(llm_questions) >= 3 else list(rule_questions), "llm_hybrid_fallback"
 
         # 完全规则回退
+        logger.warning(
+            "ai_interview.question_generation_fallback_rule session_id=%s llm_enabled=%s llm_question_count=%s",
+            session_id,
+            llm_enabled,
+            len(llm_questions),
+        )
         return list(rule_questions), "rule_fallback"
 
     def _build_questions_with_llm(
@@ -864,6 +889,15 @@ class AIInterviewService:
         language: str = "zh-CN",
     ) -> list[dict]:
         """使用 LLM (v4) 生成结构化面试题目，采用更稳建的正则解析方式。"""
+        route = self._llm_client._router.resolve_route(PromptTaskKey.INTERVIEW_QUESTION_SET)
+        logger.info(
+            "ai_interview.llm_question_generation_route session_id=%s provider=%s model=%s timeout=%s retries=%s",
+            session_id,
+            route.provider,
+            route.model_name,
+            route.timeout_seconds,
+            route.max_retries,
+        )
         template = self._resolve_prompt_template(
             task_key=PromptTaskKey.INTERVIEW_QUESTION_SET,
             default_version="v4"
@@ -893,18 +927,13 @@ class AIInterviewService:
             logger.warning(f"ai_interview.llm_questions_empty_response session_id={session_id}")
             return []
 
-        # 手动解析 JSON (参考 demo 脚本逻辑)
-        try:
-            json_match = re.search(r"\{[\s\S]*\}", raw_text)
-            if json_match:
-                data = json.loads(json_match.group(0))
-            else:
-                data = json.loads(raw_text)
-            
-            questions = data.get("questions", [])
-        except Exception as e:
-            logger.error(f"ai_interview.llm_questions_parse_failed session_id={session_id} error={e}")
-            logger.debug(f"Raw LLM output: {raw_text}")
+        questions = self._parse_questions_from_llm_text(raw_text=raw_text, session_id=session_id)
+        if not questions:
+            logger.warning(
+                "ai_interview.llm_questions_parse_empty session_id=%s raw_preview=%s",
+                session_id,
+                raw_text[:300].replace("\n", "\\n"),
+            )
             return []
 
         # 标准化题目格式，保留 LLM 生成的额外业务字段
@@ -925,8 +954,81 @@ class AIInterviewService:
         )
 
         return normalized
+
+    def _parse_questions_from_llm_text(self, *, raw_text: str, session_id: str) -> list[dict]:
+        """Parse question candidates from LLM free-form text."""
+        text = str(raw_text or "").strip()
+        if not text:
+            return []
+
+        candidates: list[str] = [text]
+        fence_matches = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+        for block in fence_matches:
+            block_text = str(block or "").strip()
+            if block_text:
+                candidates.append(block_text)
+
+        first_obj = text.find("{")
+        last_obj = text.rfind("}")
+        if first_obj >= 0 and last_obj > first_obj:
+            candidates.append(text[first_obj : last_obj + 1])
+
+        first_arr = text.find("[")
+        last_arr = text.rfind("]")
+        if first_arr >= 0 and last_arr > first_arr:
+            candidates.append(text[first_arr : last_arr + 1])
+
+        seen: set[str] = set()
+        for candidate in candidates:
+            payload = candidate.strip()
+            if not payload or payload in seen:
+                continue
+            seen.add(payload)
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                questions = parsed.get("questions")
+                if not questions:
+                    for v in parsed.values():
+                        if isinstance(v, list) and v and all(isinstance(item, dict) for item in v):
+                            questions = v
+                            break
+                if isinstance(questions, list):
+                    return [item for item in questions if isinstance(item, dict)]
+            elif isinstance(parsed, list):
+                if parsed and all(isinstance(item, dict) for item in parsed):
+                    return [item for item in parsed if isinstance(item, dict)]
+
+        line_questions: list[dict] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            match = re.match(r"^(?:\d+[\).、]\s*|[-*]\s+)(.+)$", stripped)
+            if not match:
+                continue
+            question_text = match.group(1).strip()
+            if len(question_text) < 6:
+                continue
+            line_questions.append({"question": question_text})
+            if len(line_questions) >= 14:
+                break
+
+        if line_questions:
+            logger.info(
+                "ai_interview.llm_questions_parsed_from_lines session_id=%s count=%s",
+                session_id,
+                len(line_questions),
+            )
+        else:
+            logger.error("ai_interview.llm_questions_parse_failed session_id=%s", session_id)
+        return line_questions
     def _is_interview_llm_enabled(self) -> bool:
         """Determine whether the interview LLM flow is enabled."""
+        if bool(self._settings.ai_interview_llm_enabled):
+            return True
         return self._runtime_repository.is_feature_enabled(
             feature_key="ai_interview_llm",
             default_enabled=self._settings.ai_interview_llm_enabled,
@@ -1244,7 +1346,18 @@ class AIInterviewService:
     def get_ten_runtime_config(self, session_id: str) -> AIInterviewTENRuntimeResponse:
         entity = self._session_repository.get(session_id)
         self._ensure_session_active_for_realtime(entity, action="ten_runtime_config")
-        return AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
+        response = AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
+        if response.launch_command:
+            print(
+                f"[TEN-CMD] session={session_id} status={response.launch_status}\n{response.launch_command}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[TEN-CMD] session={session_id} status={response.launch_status} command=<empty>",
+                flush=True,
+            )
+        return response
 
     def launch_ten_session(self, session_id: str) -> AIInterviewTENRuntimeResponse:
         entity = self._session_repository.get(session_id)
@@ -1255,7 +1368,12 @@ class AIInterviewService:
         property_file = str((entity.payload or {}).get("ten_property_file") or "")
         launch_patch = self._ten_runtime_manager.launch_session(session_id=session_id, property_file=property_file)
         entity = self._session_repository.update_status(session_id, status=entity.status, payload_patch=launch_patch)
-        return AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
+        response = AIInterviewTENRuntimeResponse.model_validate(self._build_ten_runtime_response(entity))
+        print(
+            f"[TEN-CMD] launch session={session_id} status={response.launch_status}\n{response.launch_command or ''}",
+            flush=True,
+        )
+        return response
 
     def rtc_reconnect(self, session_id: str, payload: AIInterviewRTCReconnectRequest) -> AIInterviewRTCReconnectResponse:
         """RTC-001锛氭柇绾块噸杩炪€?"""
@@ -2615,12 +2733,22 @@ class AIInterviewService:
         rtc_block = self._build_rtc_dict(entity, rtc_override=rtc_override)
         if not rtc_block.get("app_id") or not rtc_block.get("channel_name"):
             return {}
+        candidate = self._candidate_repository.get(entity.candidate_id)
+        job = self._job_repository.get(entity.job_id)
+        job_requirements = str(job.requirements or "").strip()
         runtime_payload = dict(entity.payload or {})
         runtime_payload.update(
             self._build_runtime_company_payload(
                 job_id=entity.job_id,
-                job_requirements="",
+                job_requirements=job_requirements,
                 payload=runtime_payload,
+            )
+        )
+        runtime_payload.update(
+            self._build_runtime_resume_payload(
+                candidate_name=str(candidate.name or "").strip(),
+                resume_text=str(candidate.resume_text or "").strip(),
+                job_requirements=job_requirements,
             )
         )
         runtime_payload.update(
@@ -2641,6 +2769,25 @@ class AIInterviewService:
             },
             payload=runtime_payload,
         )
+
+    @staticmethod
+    def _build_runtime_resume_payload(
+        *,
+        candidate_name: str,
+        resume_text: str,
+        job_requirements: str,
+    ) -> dict[str, str]:
+        compact_resume = " ".join((resume_text or "").split())
+        if len(compact_resume) > 1200:
+            compact_resume = compact_resume[:1200]
+        if not compact_resume:
+            compact_resume = "候选人简历信息暂缺。"
+        if candidate_name:
+            compact_resume = f"{candidate_name}：{compact_resume}"
+        return {
+            "resume_summary": compact_resume,
+            "job_requirements": (job_requirements or "").strip(),
+        }
 
     def _build_runtime_question_pack_payload(
         self,
@@ -2824,7 +2971,7 @@ class AIInterviewService:
 
     def _to_session_dict(self, entity) -> dict:
         """灏嗕細璇濆疄浣撹浆鎹负缁熶竴鍝嶅簲缁撴瀯銆?"""
-        join_url = f"/ai-interview/session/{entity.id}?token={entity.join_token}"
+        join_url = f"/interview/{entity.id}?token={entity.join_token}"
         rtc = self._build_rtc_dict(entity)
         ten = self._build_ten_runtime_response(entity)
         return {

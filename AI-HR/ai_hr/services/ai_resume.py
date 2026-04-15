@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import uuid
 import zipfile
@@ -16,7 +17,7 @@ from ..db import models as from_models
 from ..connectors.base import ConnectorCredentials
 from ..connectors.registry import registry
 from ..core.config import get_settings
-from ..core.exceptions import ConnectorOperationError, InvalidStateError, ResourceNotFoundError
+from ..core.exceptions import ConnectorOperationError, InvalidStateError, ObjectStorageError, ResourceNotFoundError
 from ..repositories.ai_observability import AIObservabilityRepository
 from ..repositories.ai_runtime import AIRuntimeRepository
 from ..repositories.candidates import CandidateRepository
@@ -49,10 +50,13 @@ from .llm.client import InvokeContext, LLMClient
 from .llm.guardrails import GuardrailService
 from .llm.prompts import get_prompt_template
 from .llm.router import ModelRouter
+from .object_storage import MinioResumeStorage, build_resume_storage_key
 from .credentials import get_credential_service, CredentialService
 
 PARSER_VERSION_HEURISTIC = "heuristic-v1"
 PARSER_VERSION_LLM = "llm-v1"
+
+logger = logging.getLogger(__name__)
 
 _SKILL_KEYWORDS = [
     "python",
@@ -103,6 +107,7 @@ class AIResumeService:
             guardrail_service=GuardrailService(),
             observability_repository=observability_repository,
         )
+        self._resume_storage = self._build_resume_storage()
 
     def parse_resume(self, payload: ResumeParseRequest) -> ResumeParseResult:
         candidate = self._candidate_repository.get(payload.candidate_id)
@@ -509,17 +514,29 @@ class AIResumeService:
         candidate = self._candidate_repository.get(candidate_id)
         connector = self._build_connector(candidate.source_channel)
         result = connector.fetch_resume_attachment(candidate.external_candidate_id, raw_profile=candidate.raw_profile or {})
+        object_storage_meta = self._upload_resume_attachment_to_object_storage(
+            candidate_id=candidate.id,
+            source_channel=candidate.source_channel,
+            file_name=str(result.get("file_name") or "resume.bin"),
+            file_sha256=str(result.get("file_sha256") or ""),
+            content_type=result.get("content_type"),
+            content_bytes=result.get("content_bytes") or b"",
+        )
+        attachment_source_url = object_storage_meta.get("object_url") or result.get("source_url")
+        raw_payload = dict(result.get("raw_payload") or {})
+        if object_storage_meta:
+            raw_payload["object_storage"] = object_storage_meta
         attachment = self._resume_attachment_repository.upsert(
             candidate_id=candidate.id,
             source_channel=candidate.source_channel,
             external_candidate_id=candidate.external_candidate_id,
             file_name=result["file_name"],
             content_type=result.get("content_type"),
-            source_url=result.get("source_url"),
+            source_url=attachment_source_url,
             file_size_bytes=int(result["file_size_bytes"]),
             file_sha256=result["file_sha256"],
             content_bytes=result["content_bytes"],
-            raw_payload=result.get("raw_payload", {}),
+            raw_payload=raw_payload,
         )
 
         updated_resume_text = False
@@ -530,7 +547,7 @@ class AIResumeService:
                 content_type=str(result.get("content_type") or ""),
                 content_bytes=result.get("content_bytes") or b"",
             ) or ""
-        if result.get("resume_text") or result.get("source_url"):
+        if result.get("resume_text") or attachment_source_url:
             current_profile = dict(candidate.raw_profile or {})
             current_profile.update(
                 {
@@ -538,8 +555,10 @@ class AIResumeService:
                     "resume_attachment_file_name": result["file_name"],
                 }
             )
-            if result.get("source_url"):
-                candidate.resume_url = result["source_url"]
+            if attachment_source_url:
+                candidate.resume_url = attachment_source_url
+            if object_storage_meta:
+                current_profile["resume_attachment_object_storage"] = object_storage_meta
             if resume_text:
                 candidate.resume_text = resume_text
                 updated_resume_text = True
@@ -1178,6 +1197,64 @@ class AIResumeService:
             if len(projects) >= 5:
                 break
         return projects
+
+    def _build_resume_storage(self) -> MinioResumeStorage | None:
+        if not self._settings.object_storage_enabled:
+            return None
+        provider = (self._settings.object_storage_provider or "").strip().lower()
+        if provider != "minio":
+            raise InvalidStateError(f"Unsupported object storage provider: {provider}")
+        return MinioResumeStorage(self._settings)
+
+    def _upload_resume_attachment_to_object_storage(
+        self,
+        *,
+        candidate_id: str,
+        source_channel: str,
+        file_name: str,
+        file_sha256: str,
+        content_type: str | None,
+        content_bytes: bytes,
+    ) -> dict[str, Any]:
+        if self._resume_storage is None:
+            return {}
+        object_key = build_resume_storage_key(
+            prefix=self._settings.object_storage_resume_prefix,
+            source_channel=source_channel,
+            candidate_id=candidate_id,
+            file_sha256=file_sha256,
+            file_name=file_name,
+        )
+        try:
+            stored = self._resume_storage.upload_resume(
+                object_key=object_key,
+                content=content_bytes,
+                content_type=content_type,
+                metadata={
+                    "candidate-id": candidate_id,
+                    "source-channel": source_channel,
+                    "file-sha256": file_sha256,
+                },
+            )
+            return {
+                "provider": stored.provider,
+                "bucket": stored.bucket,
+                "object_key": stored.object_key,
+                "object_url": stored.object_url,
+                "etag": stored.etag,
+            }
+        except ObjectStorageError as exc:
+            if self._settings.object_storage_required:
+                raise
+            logger.warning(
+                "Resume attachment upload to object storage failed, fallback to DB blob only. "
+                "candidate_id=%s channel=%s error=%s",
+                candidate_id,
+                source_channel,
+                exc,
+            )
+            return {}
+
     def _build_connector(self, channel: str):
         if channel == "boss":
             credentials = self._credential_service.resolve_boss_credentials()
@@ -1199,6 +1276,7 @@ class AIResumeService:
         )
 
     def _to_attachment_payload(self, attachment) -> ResumeAttachmentPayload:
+        object_storage = dict((attachment.raw_payload or {}).get("object_storage") or {})
         return ResumeAttachmentPayload(
             candidate_id=attachment.candidate_id,
             source_channel=attachment.source_channel,
@@ -1208,6 +1286,10 @@ class AIResumeService:
             source_url=attachment.source_url,
             file_size_bytes=attachment.file_size_bytes,
             file_sha256=attachment.file_sha256,
+            object_storage_provider=object_storage.get("provider"),
+            object_storage_bucket=object_storage.get("bucket"),
+            object_storage_key=object_storage.get("object_key"),
+            object_storage_url=object_storage.get("object_url"),
             last_synced_at=attachment.last_synced_at,
             created_at=attachment.created_at,
             updated_at=attachment.updated_at,

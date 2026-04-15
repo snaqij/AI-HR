@@ -166,6 +166,8 @@ class TENRuntimeManager:
                         "language": language,
                         "task_key": "interview_followup",
                         "max_followup": int(payload.get("ten_max_followup") or 2),
+                        "resume_summary": str(payload.get("resume_summary") or "").strip(),
+                        "job_requirements": str(payload.get("job_requirements") or "").strip(),
                         "company_info": str(
                             payload.get("company_info")
                             or payload.get("company_profile")
@@ -189,13 +191,15 @@ class TENRuntimeManager:
                         if identifier:
                             pack_ids.append(identifier)
                 logger.info(
-                    "ten_runtime.interview_orchestrator_payload_ready session_id=%s question_pack_source=%s question_pack_version=%s question_count=%s question_ids=%s company_info_source=%s",
+                    "ten_runtime.interview_orchestrator_payload_ready session_id=%s question_pack_source=%s question_pack_version=%s question_count=%s question_ids=%s company_info_source=%s resume_chars=%s jd_chars=%s",
                     session_id,
                     str(payload.get("question_pack_source") or "").strip(),
                     str(payload.get("question_pack_version") or "").strip(),
                     len(pack_questions) if isinstance(pack_questions, list) else 0,
                     ",".join(pack_ids),
                     str(payload.get("company_info_source") or "").strip(),
+                    len(str(payload.get("resume_summary") or "").strip()),
+                    len(str(payload.get("job_requirements") or "").strip()),
                 )
         return runtime
 
@@ -276,10 +280,47 @@ class TENRuntimeManager:
             return Path(self._settings.ai_interview_ten_agent_dir).expanduser().resolve()
         return (PROJECT_ROOT / "ten_agent").resolve()
 
+
+    def _load_template(self) -> dict[str, Any]:
+        template_val = self._settings.ai_interview_ten_property_template
+        if not template_val:
+            template_path = self._to_local_path(str(self._agent_dir() / "property.json"))
+        else:
+            template_path = self._to_local_path(template_val)
+
+        if not template_path.exists():
+            raise InvalidConnectorConfigError(f"TEN property template not found: {template_path}")
+        return json.loads(template_path.read_text(encoding="utf-8"))
+
+    def _to_local_path(self, path_str: str) -> Path:
+        """Translate WSL path to local Windows path if running on Windows."""
+        if os.name == "nt" and path_str.startswith("/mnt/"):
+            # /mnt/d/path -> D:\path
+            drive = path_str[5].upper()
+            return Path(f"{drive}:") / path_str[7:].replace("/", "\\")
+        return Path(path_str)
+
+    def _to_wsl_path(self, path_str: str) -> str:
+        """Translate Windows path to WSL path if running on Windows."""
+        if os.name == "nt":
+            path_obj = Path(path_str).resolve()
+            if path_obj.drive:
+                # D:\path -> /mnt/d/path
+                drive = path_obj.drive.replace(":", "").lower()
+                posix_path = path_obj.as_posix()
+                return f"/mnt/{drive}{posix_path[len(path_obj.drive):]}"
+        return path_str
+
+    def _agent_dir(self) -> Path:
+        if self._settings.ai_interview_ten_agent_dir:
+            return Path(self._settings.ai_interview_ten_agent_dir).expanduser().resolve()
+        return (PROJECT_ROOT / "ten_agent").resolve()
+
     def _session_dir(self) -> Path:
         if self._settings.ai_interview_ten_session_dir:
             return Path(self._settings.ai_interview_ten_session_dir).expanduser().resolve()
         return self._agent_dir() / ".ten_sessions"
 
     def _launch_command(self, property_file: str) -> str:
-        return f"{self._settings.ai_interview_ten_tman_cmd} run start -- --property {shlex.quote(property_file)}"
+        wsl_path = self._to_wsl_path(property_file)
+        return f"{self._settings.ai_interview_ten_tman_cmd} run start -- --property {shlex.quote(wsl_path)}"
