@@ -651,6 +651,9 @@ async def ws_ai_interview_duplex(
     packet_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=512)
     event_sub = DEFAULT_INTERVIEW_EVENT_BUS.subscribe(session_id=session_id)
     interrupt_generation = 0
+    candidate_last_spoken_at = 0.0
+    active_generation_id = 0  # Monotonically increasing ID to invalidate stale LLM tasks
+    pending_finalize_task: asyncio.Task | None = None
 
     def _clear_packet_queue() -> None:
         while True:
@@ -661,7 +664,7 @@ async def ws_ai_interview_duplex(
                 break
 
     async def _listen_event_bus():
-        nonlocal interrupt_generation
+        nonlocal interrupt_generation, candidate_last_spoken_at
         try:
             while not websocket_closed:
                 try:
@@ -669,39 +672,76 @@ async def ws_ai_interview_duplex(
                     # if event.get("event_type") != "tts.packet":
                     #     print(f"DEBUG [EventBus] Received event type={event.get('event_type')} for session={session_id}")
                     if event.get("event_type") == "asr.turn":
+                        candidate_last_spoken_at = time.perf_counter()
+                        # Increment generation ID immediately on any new user speech
+                        # This will invalidate any currently running LLM tasks
+                        active_generation_id += 1
+                        local_gen_id = active_generation_id
+                        
+                        # Cancel any pending debounced finalization
+                        if pending_finalize_task and not pending_finalize_task.done():
+                            pending_finalize_task.cancel()
+                        
                         payload = event.get("payload", {})
                         if payload:
                             await _safe_send({"type": "duplex.asr.turn", "data": payload})
                             # Bridge to service layer if this is a final turn to trigger LLM
                             seq = payload.get("seq")
-                            # print(f"DEBUG [EventBus Bridge] Checking is_final: {payload.get('is_final')} for seq={seq}")
-                            if bool(payload.get("is_final")):
-                                def _trigger_append():
-                                    try:
-                                        # print(f"DEBUG [Bridge Thread] Starting append_event for session={session_id}")
-                                        from ...db.session import SessionLocal
-                                        from ...schemas.ai_interviews import AIInterviewSessionEventRequest
-                                        with SessionLocal() as local_session:
-                                            local_service = get_ai_interview_service(local_session)
-                                            event_req = AIInterviewSessionEventRequest(
-                                                event_id=str(payload.get("event_id") or uuid.uuid4().hex),
-                                                seq=max(1, int(seq or 1)),
-                                                speaker="candidate",
-                                                transcript=str(payload.get("transcript") or ""),
-                                                confidence=float(payload.get("confidence") or 0.9),
-                                                payload=payload,
-                                            )
-                                            # print(f"DEBUG [Bridge Thread] Calling append_event session={session_id} seq={event_req.seq}")
-                                            res = local_service.append_event(session_id, event_req)
-                                            # print(f"DEBUG [Bridge Thread] append_event result: {res.get('accepted')}")
-                                            return res
-                                    except Exception as bridge_exc:
-                                        print(f"DEBUG [Bridge Thread ERROR] session={session_id}: {bridge_exc}")
-                                        import traceback
-                                        traceback.print_exc()
+                            is_final = bool(payload.get("is_final"))
+                            
+                            if is_final:
+                                transcript = str(payload.get("transcript") or "").strip()
+                                # Pre-check semantics to decide if we should debounce
+                                from ai_hr.services.interview_runtime.semantic_endpoint import evaluate_semantic_floor
+                                # Note: we don't know the exact stage here easily, default to S2/S3 cautious mode
+                                floor_action = evaluate_semantic_floor(transcript, stage="S3")
                                 
-                                # Run in thread to avoid blocking the event loop
-                                asyncio.create_task(asyncio.to_thread(_trigger_append))
+                                async def _debounced_trigger(target_gen_id: int):
+                                    if floor_action == "HOLD":
+                                        # Human pause or unfinished sentence: wait longer
+                                        await asyncio.sleep(1.0)
+                                    else:
+                                        # Likely finished, but still add a tiny debounce to catch fragmented ASR
+                                        await asyncio.sleep(0.3)
+                                    
+                                    # Final check before triggering: has user spoken again?
+                                    if active_generation_id != target_gen_id:
+                                        return
+
+                                    def _trigger_append():
+                                        try:
+                                            # Check again inside the thread (as best as possible)
+                                            if active_generation_id != target_gen_id:
+                                                return
+
+                                            from ...db.session import SessionLocal
+                                            from ...schemas.ai_interviews import AIInterviewSessionEventRequest
+                                            with SessionLocal() as local_session:
+                                                local_service = get_ai_interview_service(local_session)
+                                                event_req = AIInterviewSessionEventRequest(
+                                                    event_id=str(payload.get("event_id") or uuid.uuid4().hex),
+                                                    seq=max(1, int(seq or 1)),
+                                                    speaker="candidate",
+                                                    transcript=transcript,
+                                                    confidence=float(payload.get("confidence") or 0.9),
+                                                    payload=payload,
+                                                )
+                                                
+                                                # Perform the actual heavy lifting (LLM call etc)
+                                                res = local_service.append_event(session_id, event_req)
+                                                
+                                                # Post-generation check: if user started talking while we were in the LLM,
+                                                # we MUST NOT allow any side effects (though DB already updated).
+                                                # The TTS packets produced in the background will be blocked by Gatekeeper/interrupt_generation.
+                                                return res
+                                        except Exception as bridge_exc:
+                                            if not isinstance(bridge_exc, asyncio.CancelledError):
+                                                print(f"DEBUG [Bridge Thread ERROR] session={session_id}: {bridge_exc}")
+                                    
+                                    # Run the actual trigger
+                                    await asyncio.to_thread(_trigger_append)
+
+                                pending_finalize_task = asyncio.create_task(_debounced_trigger(local_gen_id))
                     elif event.get("event_type") == "tts.packet":
                         payload = event.get("payload", {})
                         if not packet_queue.full():
@@ -847,7 +887,20 @@ async def ws_ai_interview_duplex(
                         or packet_latency_ms > 120
                     )
                     if should_flush:
-                        await _flush_coalesced(now)
+                        time_since_speech = time.perf_counter() - candidate_last_spoken_at
+                        if time_since_speech < 0.6:
+                            logger.info(f"[Gatekeeper] TTS transmission aborted because candidate is speaking (gap: {time_since_speech:.3f}s)")
+                            interrupt_generation += 1
+                            local_interrupt_generation = interrupt_generation
+                            _clear_packet_queue()
+                            coalesce_bytes = bytearray()
+                            coalesce_text = ""
+                            coalesce_final = False
+                            coalesce_deadline = 0.0
+                            coalesce_first_produced_at = None
+                            coalesce_tts_first_pcm_at_ms = None
+                        else:
+                            await _flush_coalesced(now)
                 except asyncio.TimeoutError:
                     if coalesce_bytes and coalesce_deadline > 0 and time.perf_counter() >= coalesce_deadline:
                         await _flush_coalesced(time.perf_counter())

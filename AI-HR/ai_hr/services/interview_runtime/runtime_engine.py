@@ -116,6 +116,21 @@ class InterviewRuntimeEngine:
             stage=stage,
         )
 
+        floor_action = evaluation.get("floor_action", "YIELD")
+        if floor_action in ("HOLD", "DEBOUNCE_LONG"):
+            return RuntimeTurnDecision(
+                updated_state=working_state,
+                evaluation=evaluation,
+                stage=stage,
+                current_question=current_question,
+                next_stage=stage,
+                next_action="wait_candidate",
+                must_transition=False,
+                flow_reason="semantic_hold",
+                output_mode="wait_candidate",
+                target_question=current_question,
+            )
+
         stage_progress_snapshot: StageProgressSnapshot | None = None
         if stage == "S2":
             working_state, stage_progress_snapshot = self.stage_progress_engine.update(

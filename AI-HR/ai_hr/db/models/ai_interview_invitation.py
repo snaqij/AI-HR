@@ -27,7 +27,7 @@ class AIInterviewInvitation(TimestampMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    max_use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    max_use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
 
     # 可存储一些生成时的元数据
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)

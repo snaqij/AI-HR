@@ -109,6 +109,7 @@ class AliyunNlsASRExtension(AsyncExtension):
                 self.last_partial = ""
             elif cmd_name == "end_of_sentence":
                 try:
+                    vad_stop_ts = time.perf_counter()  # Capture VAD-confirmed silence time NOW
                     result = self.provider.transcribe_stream(
                         session_id=self.session_id,
                         seq=0,
@@ -119,6 +120,12 @@ class AliyunNlsASRExtension(AsyncExtension):
                         is_final=True,
                     )
                     metadata = result.metadata or {}
+                    # CRITICAL: If NLS hasn't fired on_sentence_end yet (mid-sentence VAD pause),
+                    # asr_physical_stop_ts will be 0.0 or stale, causing silence_ms to be astronomically
+                    # large in the orchestrator finalize loop → immediate force_finalize → user interrupted.
+                    # Fix: always use the VAD-confirmed stop time as the physical stop anchor.
+                    if not metadata.get("asr_physical_stop_ts"):
+                        metadata["asr_physical_stop_ts"] = vad_stop_ts
                     await self._emit_transcript(ten_env, result.transcript or "", True, metadata)
                 except Exception as exc:
                     print(f"[aliyun_nls_asr] finalize error: {exc}", flush=True)

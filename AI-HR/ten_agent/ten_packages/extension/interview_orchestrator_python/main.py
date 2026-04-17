@@ -81,7 +81,7 @@ class RealtimeEventBridge:
         batch_max_events: int = 20,
         critical_queue_size: int = 128,
         volatile_queue_size: int = 512,
-        request_timeout_s: float = 0.3,
+        request_timeout_s: float = 1.5,
     ):
         self.session_id = str(session_id or "").strip()
         self.base_url = str(base_url or "").rstrip("/")
@@ -396,27 +396,41 @@ class InterviewOrchestratorExtension(AsyncExtension):
         return any(phrase in transcript for phrase in move_on_phrases)
 
     def _is_company_question(self, transcript: str) -> bool:
-        text = str(transcript or "").strip().lower()
-        if not text:
+        text = str(transcript or "").strip()
+        if not text or len(text) > 30: # 长度保护：过长的输入通常是候选人的回答，而非询问
             return False
-        keywords = (
-            "公司",
-            "业务",
-            "做什么",
-            "主营",
-            "介绍一下公司",
-            "你们是做什么",
-            "你们公司",
-            "岗位职责",
-            "团队",
-            "技术栈",
-            "福利",
-            "薪资",
-            "工作时间",
-            "加班",
-            "公司叫什么",
-        )
-        return any(keyword in text for keyword in keywords)
+            
+        # 强匹配模式：明确的询问意图
+        patterns = [
+            r"介绍(一下|下)?(你们?|贵)的?(公司|业务|团队)",
+            r"(你们?|贵)的?(公司|业务|团队)?的?(业务|方向|是|主营|做什么).*(做)?什么",
+            r"(你们?|贵)的?公司的?名称是?",
+            r"岗位(职责|要求)是什么",
+            r"面试最后(会有)?(公司介绍|介绍(一下|下)?公司)[吗呢]?",
+            r"能(再)?讲讲(你们?|贵)的?公司吗",
+        ]
+        
+        if any(re.search(p, text) for p in patterns):
+            return True
+            
+        # 排除模式：候选人描述自己背景时常带的词（防止将描述经历误判为询问）
+        negative_patterns = [
+            r"我(在|之前|那家)公司",
+            r"在这个公司",
+            r"公司里边",
+            r"负责",
+            r"项目",
+            r"这段实习",
+            r"之前的",
+            r"上家",
+            r"工作过",
+        ]
+        if any(re.search(p, text) for p in negative_patterns):
+            return False
+            
+        # 弱匹配兜底（保留之前的核心关键词，但更谨慎）
+        weak_keywords = ("你们公司叫什么", "你们公司主营", "你们是做什么的")
+        return any(wk in text for wk in weak_keywords)
 
     async def _emit_company_qa_defer_reply(self, ten_env: AsyncTenEnv) -> None:
         reply = "公司和岗位相关信息我会在面试最后统一介绍，我们先继续当前面试流程。"
@@ -794,10 +808,35 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 stage = (self.state or {}).get("interview_stage", InterviewStage.OPENING)
                 policy = self._get_realtime_policy(stage)
                 speaking_elapsed_ms = int(payload.get("turn_accumulated_ms") or 0)
-                silence_ms = 0
+
+                # ── Dual-Reference Silence Calculation ────────────────────────────────
+                # BUG GUARD: When VAD fires END_OF_SENTENCE mid-utterance, the forced ASR
+                # emit may carry asr_physical_stop_ts=0.0 (NLS on_sentence_end hasn't fired).
+                # This makes silence_ms = now_ms = process uptime ms (hundreds of thousands),
+                # instantly exceeding max_force_finalize_ms → user gets rudely interrupted.
+                #
+                # Fix: use BOTH references and take the MINIMUM (most conservative).
+                # activity_silence_ms: time since last ASR event in orchestrator (always valid)
+                # ts_silence_ms:       time since NLS sentence-end ts (can be stale or zero)
                 asr_physical_stop_ts = float(payload.get("asr_physical_stop_ts") or 0.0)
+                activity_silence_ms = (
+                    max(0, now_ms - self.last_asr_activity_ms)
+                    if self.last_asr_activity_ms > 0 else 0
+                )
                 if asr_physical_stop_ts > 0:
-                    silence_ms = max(0, now_ms - int(asr_physical_stop_ts * 1000))
+                    ts_silence_ms = max(0, now_ms - int(asr_physical_stop_ts * 1000))
+                    silence_ms = min(activity_silence_ms, ts_silence_ms)
+                else:
+                    silence_ms = activity_silence_ms  # ts is invalid, use activity only
+
+                # ── Inter-Sentence Holdoff ────────────────────────────────────────────
+                # Do not evaluate turn completion if we haven't reached soft_pause_ms yet.
+                # Prevents cutting off users mid-sentence during natural Chinese speech pauses.
+                if silence_ms < policy.soft_pause_ms:
+                    await asyncio.sleep(0.1)
+                    continue
+                # ─────────────────────────────────────────────────────────────────────
+
                 resumed_recently = bool(
                     self.arbiter.last_user_resume_ms
                     and (now_ms - self.arbiter.last_user_resume_ms) < policy.resume_grace_ms
@@ -817,6 +856,8 @@ class InterviewOrchestratorExtension(AsyncExtension):
                     should_finalize=decision.should_finalize,
                     reason=decision.reason,
                     silence_ms=silence_ms,
+                    activity_silence_ms=activity_silence_ms,
+                    asr_stop_ts_valid=asr_physical_stop_ts > 0,
                     speaking_elapsed_ms=speaking_elapsed_ms,
                     semantic_completion_score=round(decision.semantic_completion_score, 2),
                 )

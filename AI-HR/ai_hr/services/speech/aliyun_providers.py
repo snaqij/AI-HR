@@ -178,6 +178,13 @@ class AliyunNlsASRProvider(ASRProvider):
             )
         if not ctx.is_active:
             # Fast self-heal after TaskFailed timeout: rebuild context on current call.
+            # If it was a standard timeout, we clear backoff to allow immediate reconnection.
+            is_timeout = getattr(ctx.callback, "is_timeout", False)
+            if is_timeout:
+                with self._lock:
+                    self._backoff_until.pop(stream_key, None)
+                logger.info(f"[NLS] session={session_id} applying fast self-heal for timeout error")
+
             self._close_context(stream_key)
             ctx = self._ensure_context(stream_key)
             if not ctx:
@@ -436,6 +443,7 @@ class _AliyunNlsCallback:
         self.started_ok = threading.Event()   # Set when RecognitionStarted received
         self.error_event = threading.Event()  # Set on any on_error callback
         self.is_rate_limited = False          # Set when Gateway returns TOO_MANY_REQUESTS
+        self.is_timeout = False               # Set when Request Timeout occurs
         self._on_error_trigger = on_error_trigger
         
         # Epoch tracking to prevent cross-turn transcript pollution
@@ -445,6 +453,7 @@ class _AliyunNlsCallback:
         self.completed_event = threading.Event()
         self.last_flush_at = 0.0
         self.sentence_start_ts = 0.0
+        self.asr_physical_stop_ts = 0.0  # Set by on_sentence_end; 0.0 means not yet confirmed
 
     def on_start(self, message, *args):
         """Called when TranscriptionStarted is received (for Transcriber)."""
@@ -525,10 +534,14 @@ class _AliyunNlsCallback:
         self.is_active = False
         msg_str = str(message).lower()
         self.is_rate_limited = "too_many_requests" in msg_str or "rate" in msg_str
-        if "request timeout" in msg_str:
+        self.is_timeout = "request timeout" in msg_str
+        
+        if self.is_timeout:
             # Unblock final wait and avoid hanging on dead task.
             self.received_completed = True
+            logger.warning(f"[NLS] session={self.session_id} detected request timeout, signaling fast self-heal")
             self.completed_event.set()
+        
         self.error_event.set()  # Signal failure (lock-free)
         self.started_ok.set()   # Unblock any waiting handshake check
         if self._on_error_trigger:
@@ -546,6 +559,7 @@ class _AliyunNlsCallback:
         self.current_sentence = ""
         self.received_completed = False
         self.sentence_start_ts = 0.0
+        self.asr_physical_stop_ts = 0.0  # Reset to prevent stale ts leaking into next turn
         self.completed_event.clear()
 
     @property

@@ -120,7 +120,7 @@ CREATE TABLE `ai_interview_invitations`  (
   `expires_at` datetime NOT NULL,
   `activated_at` datetime NULL DEFAULT NULL,
   `used_count` int NOT NULL DEFAULT 0,
-  `max_use_count` int NOT NULL DEFAULT 1,
+  `max_use_count` int NOT NULL DEFAULT 10,
   `payload` json NOT NULL,
   `note` text CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL,
   `created_at` datetime NOT NULL DEFAULT (now()),

@@ -280,8 +280,7 @@ class AIInterviewService:
             raise InvalidStateError("邀请链接已过期 (Expired)")
             
         if invitation.used_count >= invitation.max_use_count:
-             if invitation.max_use_count == 1:
-                raise InvalidStateError("邀请链接已被使用且失效 (Single-use link already consumed)")
+            raise InvalidStateError(f"邀请链接已达到最大使用次数 ({invitation.max_use_count})")
 
         # 2. 创建全新的 Session (哪怕之前退出过)
         session_create_req = AIInterviewSessionCreateRequest(

@@ -14,6 +14,7 @@ from ai_hr.services.interview_runtime.flow_policy import (
     normalize_stage_code,
     resolve_followup_limit,
 )
+from ai_hr.services.interview_runtime.semantic_endpoint import evaluate_semantic_floor
 
 
 class InterviewQuestionFlowEngine:
@@ -226,12 +227,15 @@ class InterviewQuestionFlowEngine:
             reason = "repetitive_content"
             fallback_recommended = True
 
+        floor_action = evaluate_semantic_floor(transcript, stage=stage or "S1")
+
         return {
             "need_followup": need_followup,
             "reason": reason,
             "normalized_len": len(normalized),
             "confidence": confidence,
             "fallback_recommended": fallback_recommended,
+            "floor_action": floor_action,
         }
 
     def get_stage_definition(self, stage_code: str) -> dict[str, Any]:
@@ -371,7 +375,12 @@ class InterviewQuestionFlowEngine:
         completion_reason = ""
         should_complete = False
         completed_with_gap = False
-        if force_complete or stage_progress_completed:
+
+        # Semantic Lock: if candidate likely hasn't finished, never complete turn/stage.
+        if evaluation.get("floor_action") == "HOLD":
+            should_complete = False
+            completion_reason = "semantic_hold"
+        elif force_complete or stage_progress_completed:
             should_complete = True
             completion_reason = "question_completed"
         elif candidate_requested_move_on:

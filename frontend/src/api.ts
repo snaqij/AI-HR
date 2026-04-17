@@ -1,3 +1,8 @@
+export interface Envelope<T> {
+  data: T;
+  accepted?: boolean;
+}
+
 export interface InterviewRTCInfo {
   provider: string;
   transport: string;

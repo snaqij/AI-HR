@@ -116,6 +116,20 @@ class TurnCompletionJudge:
         hold_satisfied = speaking_elapsed_ms >= policy.min_speaking_hold_ms
         early_close = semantic_score >= 0.92
 
+        # ── Semantic Hold Bypass ──────────────────────────────────────────────────
+        # When a candidate finishes with a well-formed, substantive sentence
+        # (≥30 chars, ends in punctuation, no continuation signals) and has
+        # already been silent for likely_done_ms, we allow finalization even if
+        # min_speaking_hold_ms hasn't been accumulated yet.
+        # Threshold 0.28 is reachable by any clean sentence ending in 。/！/？
+        # with no red-flag continuation/thinking-pause markers.
+        hold_bypass = (
+            silence_ms >= policy.likely_done_ms
+            and semantic_score >= 0.28
+            and len(text) >= 30
+        )
+        # ─────────────────────────────────────────────────────────────────────────
+
         if resumed_recently:
             return FinalizeDecision(
                 should_finalize=False,
@@ -134,6 +148,27 @@ class TurnCompletionJudge:
                 semantic_completion_score=semantic_score,
             )
 
+        # ── Minimum Content Length Guard ──────────────────────────────────────────
+        # A very short transcript (< 30 chars) almost certainly represents an
+        # incomplete sentence fragment from a mid-turn ASR event (e.g. a single
+        # short sentence while the candidate is still speaking their full answer).
+        # Require 2x likely_done_ms of silence before allowing finalization on
+        # such short content, unless the candidate explicitly says they're done.
+        MIN_CONTENT_CHARS_FOR_EARLY_CLOSE = 30
+        if len(text) < MIN_CONTENT_CHARS_FOR_EARLY_CLOSE and not any(
+            phrase in text for phrase in self._STRONG_ENDINGS
+        ):
+            extended_wait_ms = policy.likely_done_ms * 2
+            if silence_ms < extended_wait_ms:
+                return FinalizeDecision(
+                    should_finalize=False,
+                    confidence=0.05,
+                    reason="below_min_content_length",
+                    need_more_wait_ms=max(200, extended_wait_ms - silence_ms),
+                    semantic_completion_score=semantic_score,
+                )
+        # ─────────────────────────────────────────────────────────────────────────
+
         if silence_ms >= policy.max_force_finalize_ms:
             confidence = min(0.98, 0.70 + semantic_score * 0.15)
             return FinalizeDecision(
@@ -144,7 +179,7 @@ class TurnCompletionJudge:
                 semantic_completion_score=semantic_score,
             )
 
-        if not hold_satisfied and not early_close:
+        if not hold_satisfied and not early_close and not hold_bypass:
             return FinalizeDecision(
                 should_finalize=False,
                 confidence=min(0.35, pause_confidence),
@@ -153,7 +188,7 @@ class TurnCompletionJudge:
                 semantic_completion_score=semantic_score,
             )
 
-        if silence_ms >= policy.hard_done_ms and (hold_satisfied or early_close):
+        if silence_ms >= policy.hard_done_ms and (hold_satisfied or early_close or hold_bypass):
             confidence = min(0.99, 0.55 + pause_confidence * 0.25 + semantic_score * 0.20)
             return FinalizeDecision(
                 should_finalize=True,
@@ -169,6 +204,18 @@ class TurnCompletionJudge:
                 should_finalize=True,
                 confidence=confidence,
                 reason="semantic_early_finish",
+                need_more_wait_ms=0,
+                semantic_completion_score=semantic_score,
+            )
+
+        # Semantic hold bypass: well-formed sentence + likely_done silence reached.
+        # Lower confidence than hard_pause because we're relaxing the hold constraint.
+        if silence_ms >= policy.likely_done_ms and hold_bypass:
+            confidence = min(0.82, 0.38 + pause_confidence * 0.18 + semantic_score * 0.25)
+            return FinalizeDecision(
+                should_finalize=True,
+                confidence=confidence,
+                reason="semantic_hold_bypass",
                 need_more_wait_ms=0,
                 semantic_completion_score=semantic_score,
             )

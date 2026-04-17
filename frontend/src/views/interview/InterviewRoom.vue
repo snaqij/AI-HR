@@ -40,7 +40,7 @@ const cameraEnabled = ref(true);
 const showSettingsHint = ref(false);
 const interviewerSpeaking = ref(false);
 const candidateVideoMount = ref<HTMLElement | null>(null);
-const summaryScrollRef = ref<HTMLElement | null>(null);
+const transcriptScrollRef = ref<HTMLElement | null>(null);
 
 const session = ref<InterviewSession | null>(null);
 const sessionId = computed(() => session.value?.id || "");
@@ -226,10 +226,10 @@ function appendTranscript(transcript: string, speaker = "候选人", occurredAt?
   const timelineSecond = resolveTimelineSecond(occurredAt);
   const lastItem = transcriptView.value[transcriptView.value.length - 1];
   if (lastItem && lastItem.speaker === normalizedSpeaker && timelineSecond - lastItem.endSecond <= TRANSCRIPT_MERGE_WINDOW_SECONDS) {
-    if (!lastItem.transcript.includes(text)) {
-      const mergedText = [lastItem.transcript, text].filter(Boolean).join("\n");
-      transcriptView.value = [...transcriptView.value.slice(0, -1), { ...lastItem, transcript: mergedText, endSecond: Math.max(lastItem.endSecond, timelineSecond) }];
-    }
+    const isExactDuplicate = lastItem.transcript.trim() === text;
+    if (isExactDuplicate) return;
+    const mergedText = [lastItem.transcript, text].filter(Boolean).join("\n");
+    transcriptView.value = [...transcriptView.value.slice(0, -1), { ...lastItem, transcript: mergedText, endSecond: Math.max(lastItem.endSecond, timelineSecond) }];
     return;
   }
   transcriptView.value = [...transcriptView.value, { speaker: normalizedSpeaker, transcript: text, startSecond: timelineSecond, endSecond: timelineSecond }];
@@ -243,7 +243,9 @@ function hydrateReplay(items: ReplayItem[]): void {
 
 async function scrollTranscriptToLatest(): Promise<void> {
   await nextTick();
-  if (summaryScrollRef.value) summaryScrollRef.value.scrollTop = summaryScrollRef.value.scrollHeight;
+  if (transcriptScrollRef.value) {
+    transcriptScrollRef.value.scrollTop = transcriptScrollRef.value.scrollHeight;
+  }
 }
 
 async function connectEventBus(sessionIdValue: string): Promise<void> {
@@ -391,7 +393,7 @@ async function bootstrap(): Promise<void> {
 
 onMounted(() => bootstrap());
 onBeforeUnmount(() => { if (tickerTimer) clearInterval(tickerTimer); eventsSocket?.close(); rtcGateway.disconnect(); });
-watch(() => transcriptView.value.length, () => scrollTranscriptToLatest());
+watch([() => transcriptView.value.length, () => candidateDraft.value], () => scrollTranscriptToLatest());
 </script>
 
 <template>
@@ -468,7 +470,7 @@ watch(() => transcriptView.value.length, () => scrollTranscriptToLatest());
           </div>
         </div>
 
-        <div ref="summaryScrollRef" class="flex-1 overflow-y-auto p-6 space-y-8">
+        <div class="flex-1 min-h-0 p-6 flex flex-col gap-8">
           <div class="bg-blue-50/50 rounded-xl p-5 border border-blue-100/50">
              <div class="flex items-center gap-2 mb-3">
                <span class="text-blue-600 text-lg">?</span>
@@ -477,20 +479,20 @@ watch(() => transcriptView.value.length, () => scrollTranscriptToLatest());
              <p class="text-sm font-medium text-slate-900 leading-relaxed">{{ currentQuestion }}</p>
           </div>
 
-          <div class="space-y-6">
+          <div class="flex-1 min-h-0 flex flex-col">
             <div class="flex items-center gap-2 text-slate-400">
                <span class="text-lg">◌</span>
                <span class="text-xs font-bold uppercase tracking-widest">实时记录</span>
             </div>
             
-            <div class="space-y-6 pt-2">
+            <div ref="transcriptScrollRef" class="flex-1 min-h-0 overflow-y-auto space-y-6 pt-2 pr-1">
               <article v-for="(item, idx) in transcriptView" :key="idx" class="space-y-1.5">
                 <div class="flex items-center gap-2 text-[10px] font-medium text-slate-400 uppercase tracking-wider">
                   <span>{{ formatTimelineRange(item.startSecond, item.endSecond) }}</span>
                   <span>·</span>
                   <span>{{ item.speaker }}</span>
                 </div>
-                <p class="text-sm text-slate-700 leading-relaxed">{{ item.transcript }}</p>
+                <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">{{ item.transcript }}</p>
               </article>
               <article v-if="candidateDraft" class="space-y-1.5 opacity-50">
                 <div class="flex items-center gap-2 text-[10px] font-medium text-slate-400 uppercase tracking-wider">
@@ -498,7 +500,7 @@ watch(() => transcriptView.value.length, () => scrollTranscriptToLatest());
                   <span>·</span>
                   <span>候选人</span>
                 </div>
-                <p class="text-sm text-slate-700 leading-relaxed italic">{{ candidateDraft }}</p>
+                <p class="text-sm text-slate-700 leading-relaxed italic whitespace-pre-wrap break-words">{{ candidateDraft }}</p>
               </article>
             </div>
           </div>
