@@ -84,6 +84,23 @@
         </div>
 
         <div class="flex items-center gap-4">
+          <div class="relative min-w-[160px]">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-base">
+              filter_list
+            </span>
+            <select
+              v-model="activeResumeStatus"
+              class="pl-10 pr-8 py-2 bg-surface-container-lowest border border-outline-variant/20 rounded-xl text-xs font-black uppercase tracking-widest focus:ring-2 focus:ring-primary/10 outline-none w-full shadow-inner appearance-none cursor-pointer"
+            >
+              <option v-for="opt in resumeStatusOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant/30 text-base pointer-events-none">
+              expand_more
+            </span>
+          </div>
+
           <div class="relative">
             <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-base">
               search
@@ -246,9 +263,9 @@
         >
           前往岗位中心
         </router-link>
-      </div>
     </div>
   </div>
+</div>
 </template>
 
 <script setup lang="ts">
@@ -277,6 +294,7 @@ const evaluations = ref<CandidateEvaluation[]>([]);
 const deliveries = ref<CandidateEmailDelivery[]>([]);
 const keyword = ref("");
 const activeTab = ref("all");
+const activeResumeStatus = ref("all");
 const isLoading = ref(false);
 const isSyncing = ref(false);
 const sendingCandidateId = ref("");
@@ -293,6 +311,14 @@ const tabs = [
   { key: "recommended", label: "AI 推荐" },
   { key: "invited", label: "已发邀约" },
   { key: "failed", label: "发送失败" },
+];
+
+const resumeStatusOptions = [
+  { value: "all", label: "全部简历状态" },
+  { value: "downloaded", label: "简历已获取" },
+  { value: "requested", label: "全自动申请中" },
+  { value: "failed", label: "申请失败" },
+  { value: "pending", label: "待申请" },
 ];
 
 const evaluationByCandidateId = computed<Record<string, CandidateEvaluation>>(() => {
@@ -335,6 +361,27 @@ const filteredCandidates = computed(() => {
     result = result.filter((item) => !!latestDeliveryByCandidateId.value[item.candidate.id]);
   } else if (activeTab.value === "failed") {
     result = result.filter((item) => latestDeliveryByCandidateId.value[item.candidate.id]?.status === "failed");
+  }
+
+  if (activeResumeStatus.value !== "all") {
+    result = result.filter((item) => {
+      const status = item.resume_request_status;
+      const download = item.resume_download_status;
+
+      if (activeResumeStatus.value === "downloaded") {
+        return download === "downloaded";
+      }
+      if (activeResumeStatus.value === "requested") {
+        return status === "requested" && download !== "downloaded";
+      }
+      if (activeResumeStatus.value === "failed") {
+        return status === "failed" && download !== "downloaded";
+      }
+      if (activeResumeStatus.value === "pending") {
+        return !status && !download;
+      }
+      return true;
+    });
   }
 
   return result;

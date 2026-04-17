@@ -274,10 +274,16 @@ class AIInterviewService:
         invitation = self._invitation_repository.get_by_token(token)
         now = datetime.now(UTC).replace(tzinfo=None)
         
+        # 1. 严格校验：有效期与单次使用限制
         if invitation.expires_at < now:
-            raise InvalidStateError("Invitation link has expired")
+            self._invitation_repository.update_status(invitation.id, "expired")
+            raise InvalidStateError("邀请链接已过期 (Expired)")
+            
+        if invitation.used_count >= invitation.max_use_count:
+             if invitation.max_use_count == 1:
+                raise InvalidStateError("邀请链接已被使用且失效 (Single-use link already consumed)")
 
-        # 1. 创建全新的 Session (哪怕之前退出过)
+        # 2. 创建全新的 Session (哪怕之前退出过)
         session_create_req = AIInterviewSessionCreateRequest(
             candidate_id=invitation.candidate_id,
             job_id=invitation.job_id,
@@ -289,11 +295,9 @@ class AIInterviewService:
         session_dict = self.create_session(session_create_req)
         session_id = session_dict["id"]
 
-        # 2. 检查是否有预生成的题目包，并关联到新 Session
-        # 如果当前 invitation 已经有题目，则直接关联
+        # 3. 检查是否有预生成的题目包，并关联到新 Session
         prebuilt_set = self._session_repository.get_latest_question_set(invitation_id=invitation.id)
         if prebuilt_set:
-            # 关联题目集到新 Session (通过版本号叠加)
             version = self._session_repository.get_latest_question_set_version(session_id) + 1
             self._session_repository.create_question_set(
                 session_id=session_id,
@@ -302,10 +306,11 @@ class AIInterviewService:
                 source=prebuilt_set.source,
                 questions=prebuilt_set.questions_json
             )
-            # 标记邀请链接已开始使用 (status 改为 started)
-            self._invitation_repository.update_status(invitation.id, "started")
+            
+        # 4. 关键：标记邀请链接为已激活（增加已使用次数）
+        self._invitation_repository.mark_activated(invitation.id)
 
-        # 3. 启动 Session
+        # 5. 启动 Session
         start_req = AIInterviewSessionStartRequest(operator=operator)
         return self.start_session(session_id, start_req)
 
@@ -540,7 +545,7 @@ class AIInterviewService:
                 interview_stage = self._advance_stage(session_id)
 
             def _on_audio_packet(packet: dict) -> None:
-                """灏?TTS 鍒嗙墖鎺ㄩ€佽嚦浜嬩欢鎬荤嚎骞舵墦鍗拌皟璇曘€?"""
+                """将 TTS 分片推送至事件总线并打印调试。"""
                 if packet.get("audio_bytes") and not packet.get("_first_pcm_marker_recorded"):
                     packet["tts_first_pcm_at_ms"] = _record_duplex_timeline_marker(
                         session_id=session_id,
@@ -667,6 +672,26 @@ class AIInterviewService:
                 PayloadKey.LATENCY_BREAKDOWN: latency_breakdown,
             },
         )
+
+    def finalize_session_turn(self, session_id: str) -> dict:
+        """Manually trigger the finalization of the current turn (force AI response)."""
+        entity = self._session_repository.get(session_id)
+        if entity.status != InterviewSessionStatus.IN_PROGRESS:
+            raise InvalidStateError(f"AI interview session '{session_id}' is not in progress.")
+
+        # Publish force_finalize event to the bus. 
+        # The agent (orchestrator) will listen for this and trigger immediate processing.
+        DEFAULT_INTERVIEW_EVENT_BUS.publish(
+            session_id=session_id,
+            event_type=InterviewEventType.CANDIDATE_FORCE_FINALIZE,
+            payload={
+                "session_id": session_id,
+                "ts": int(time.time() * 1000),
+                "source": "manual_trigger"
+            },
+        )
+        
+        return {"session_id": session_id, "status": "sent", "event_type": InterviewEventType.CANDIDATE_FORCE_FINALIZE}
 
     def generate_question_set(
         self, 

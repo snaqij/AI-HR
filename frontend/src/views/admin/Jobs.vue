@@ -264,6 +264,22 @@ const fetchJobs = async () => {
 
 onMounted(fetchJobs);
 
+const cleanErrorMessage = (err: any) => {
+    let msg = String(err || "未知错误");
+    if (msg.includes('{')) {
+        try {
+            const jsonStr = msg.substring(msg.indexOf('{'));
+            const errData = JSON.parse(jsonStr);
+            if (errData?.error?.message) {
+                msg = errData.error.message;
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+    return msg.replace(/\s*\(.*\)\s*/, "").replace(/^.*:\s*/, "").trim();
+};
+
 const handleGlobalSync = async () => {
     isGlobalSyncing.value = true;
     syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 正在同步 BOSS 平台全量岗位...`);
@@ -272,7 +288,7 @@ const handleGlobalSync = async () => {
         syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 全量同步成功: 新增 ${result.created_count} 个，更新 ${result.updated_count} 个`);
         await fetchJobs();
     } catch (e) {
-        syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 全量同步失败: ${e}`);
+        syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 全量同步失败: ${cleanErrorMessage(e)}`);
     } finally {
         isGlobalSyncing.value = false;
     }
@@ -285,7 +301,7 @@ const handleSync = async (jobId: string) => {
         syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 岗位 ${jobId} 同步成功`);
         await fetchJobs(); // Refresh list to see updated counts
     } catch (e) {
-        syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 同步失败: ${e}`);
+        syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] 同步失败: ${cleanErrorMessage(e)}`);
     }
 };
 

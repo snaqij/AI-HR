@@ -22,19 +22,28 @@ class TurnCompletionJudge:
     """Blend timing and semantic signals to decide whether a turn is complete."""
 
     _STRONG_ENDINGS = (
-        "\u5dee\u4e0d\u591a\u5c31\u662f\u8fd9\u4e9b",
-        "\u5927\u6982\u5c31\u662f\u8fd9\u6837",
-        "\u57fa\u672c\u5c31\u8fd9\u4e9b",
-        "\u6211\u8fd9\u8fb9\u8bf4\u5b8c\u4e86",
-        "\u4e3b\u8981\u5c31\u662f\u8fd9\u51e0\u5757",
-        "\u6574\u4f53\u4e0a\u5c31\u662f\u8fd9\u4e2a\u601d\u8def",
+        "差不多就是这些",
+        "大概就是这样",
+        "基本就这些",
+        "我这边说完了",
+        "主要就是这几块",
+        "整体上就是这个思路",
+        # Explicit "don't know" or "stop" signals to allow early exit
+        "不知道",
+        "不清楚",
+        "没思路",
+        "就这样吧",
+        "就这些",
+        "没想好",
     )
     _WEAK_ENDINGS = (
-        "\u5c31\u8fd9\u6837",
-        "\u5c31\u8fd9\u4e2a",
-        "\u5c31\u662f\u8fd9\u6837",
-        "\u5927\u6982\u662f\u8fd9\u6837",
-        "\u57fa\u672c\u4e0a\u662f\u8fd9\u6837",
+        "就这样",
+        "就这个",
+        "就是这样",
+        "大概是这样",
+        "基本上是这样",
+        "好像是这样",
+        "应该是的",
     )
     _STRONG_CONTINUATIONS = (
         "然后",

@@ -488,10 +488,15 @@ export async function finishInterviewSession(
     method: "POST",
     body: JSON.stringify({
       result_status: payload.result_status || "completed",
-      operator: payload.operator || "system",
-      note: payload.note || null,
     })
   });
+}
+
+export async function finalizeInterviewTurn(sessionId: string): Promise<any> {
+    return request(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/finalize`, {
+        method: "POST",
+        body: JSON.stringify({}),
+    });
 }
 
 export async function joinInterviewRTC(

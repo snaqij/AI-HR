@@ -5,6 +5,7 @@ import {
   bootstrapDemoSession,
   buildInterviewEventsWsUrl,
   createInterviewSession,
+  finalizeInterviewTurn,
   finishInterviewSession,
   getInterviewSession,
   getTenRuntimeConfig,
@@ -55,6 +56,7 @@ const timelineBaseEpochMs = ref<number | null>(null);
 const tenLaunchCommand = ref("");
 const audioRecoveryHint = ref("");
 const tenPendingHint = ref("");
+const finalizing = ref(false);
 
 let tickerTimer: number | null = null;
 let eventsSocket: WebSocket | null = null;
@@ -350,6 +352,19 @@ async function toggleCamera(): Promise<void> {
   }
 }
 
+async function handleFinalizeAnswer(): Promise<void> {
+  if (finalizing.value || !sessionId.value) return;
+  finalizing.value = true;
+  try {
+    await finalizeInterviewTurn(sessionId.value);
+    // Visual feedback handled by ASR event clearing and AI thinking status
+  } catch (err: any) {
+    console.error("[InterviewRoom] Failed to finalize turn", err);
+  } finally {
+    finalizing.value = false;
+  }
+}
+
 async function bootstrap(): Promise<void> {
   loading.value = true;
   try {
@@ -430,6 +445,15 @@ watch(() => transcriptView.value.length, () => scrollTranscriptToLatest());
               :title="cameraEnabled ? '关闭视频' : '开启视频'"
             >
               <span class="text-[10px] font-bold">{{ cameraEnabled ? '视频' : '关闭' }}</span>
+            </button>
+            <div class="w-px h-6 bg-white/10 mx-1"></div>
+            <button
+              class="px-6 h-12 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-500/20 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-2"
+              @click="handleFinalizeAnswer"
+              :disabled="loading || finalizing || interviewerSpeaking"
+            >
+              <span v-if="finalizing" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+              <span>回答结束</span>
             </button>
           </div>
         </div>

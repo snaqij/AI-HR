@@ -346,6 +346,21 @@ class AIInterviewInvitationRepository:
         self._session.refresh(entity)
         return entity
 
+    def mark_activated(self, invitation_id: str) -> AIInterviewInvitation:
+        """Mark invitation as activated, increment used_count and update activated_at."""
+        stmt = select(AIInterviewInvitation).where(AIInterviewInvitation.id == invitation_id)
+        entity = self._session.execute(stmt).scalar_one_or_none()
+        if entity is None:
+            raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
+        
+        entity.status = "started"
+        entity.used_count += 1
+        entity.activated_at = datetime.now(UTC).replace(tzinfo=None)
+        
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity
+
     def update_delivery(
         self,
         invitation_id: str,

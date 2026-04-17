@@ -57,6 +57,8 @@ from ai_hr.services.llm.router import ModelRouter
 from ai_hr.services.orchestrator.conversation_arbiter import ConversationArbiter
 from ai_hr.services.orchestrator.streaming_utils import split_sentences, split_sentences_async
 from ai_hr.services.orchestrator.turn_completion import TurnCompletionJudge
+from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
+
 try:
     from .prompt_builder import InterviewPromptBuilder, PromptBuildInput
     from .session_context import Role, SessionContext
@@ -221,6 +223,8 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.llm_task = None
         self.system_prompt_built = ""
         self.last_final_transcript = ""
+        self.last_finalized_transcript = ""
+        self.last_finalized_ts = 0
         self.speculative_task = None
         self.pending_finalize_task = None
         self.pending_finalize_token = 0
@@ -280,6 +284,15 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.current_question_buffer = ""
         self.session_context = SessionContext(session_id="")
         self.prompt_builder = InterviewPromptBuilder()
+        self._bg_tasks: set[asyncio.Task] = set()
+
+
+    def _create_task(self, coro, name=None) -> asyncio.Task:
+        task = asyncio.create_task(coro, name=name)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
+
 
     def _build_company_intro(self) -> str:
         return build_interview_company_intro(self.company_info)
@@ -718,9 +731,27 @@ class InterviewOrchestratorExtension(AsyncExtension):
             "turn_accumulated_ms": self.current_turn_accumulated_ms,
         }
         self.last_asr_activity_ms = self._now_ms()
+        
+        # Turn stitching: if we are within 2.5s of the last finalized turn, 
+        # it is likely the user is continuing their previous thought after a premature finalization.
+        now = time.perf_counter()
+        stitch_window = 2.5 
+        if not self.pending_payload and self.last_finalized_ts and (now - self.last_finalized_ts) < stitch_window:
+             if self.last_finalized_transcript and transcript not in self.last_finalized_transcript:
+                 transcript = f"{self.last_finalized_transcript} {transcript}".strip()
+                 self._log(
+                     logging.INFO, 
+                     "orchestrator.turn_stitched", 
+                     diff_ms=int((now - self.last_finalized_ts) * 1000),
+                     new_transcript_len=len(transcript)
+                 )
+             # Consume the finalized state so we don't stitch again for the same turn fragment
+             self.last_finalized_ts = 0
+
         token = self.pending_finalize_token
-        self.pending_finalize_task = asyncio.create_task(
-            self._finalize_after_delay(ten_env, delay_ms=delay_ms, token=token)
+        self.pending_finalize_task = self._create_task(
+            self._finalize_after_delay(ten_env, delay_ms=delay_ms, token=token),
+            name="vad-finalize-after-delay"
         )
 
     async def _finalize_after_delay(self, ten_env: AsyncTenEnv, *, delay_ms: int, token: int) -> None:
@@ -806,6 +837,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
             return
 
     async def on_init(self, ten_env: AsyncTenEnv) -> None:
+        self._ten_env = ten_env
         self._log(logging.INFO, "orchestrator.init_started")
         settings = get_settings()
         router = ModelRouter(settings=settings)
@@ -843,6 +875,10 @@ class InterviewOrchestratorExtension(AsyncExtension):
             api_key=bridge_api_key,
         )
         self.event_bridge.start()
+        
+        # Start background listener for event bus
+        self._create_task(self._listen_for_events(), name="orchestrator-event-bus-listener")
+        
         self.session_context = SessionContext(session_id=self.session_id, max_turns=8)
         
         # 捕获职位要求
@@ -1029,6 +1065,19 @@ class InterviewOrchestratorExtension(AsyncExtension):
             if turn_start_ms is not None:
                 self.current_turn_start_ms = max(0, int(turn_start_ms))
 
+            # Speaking Guard: Do not trigger interaction if candidate is actively speaking.
+            # This prevents interruptions when a VAD timer expires but the user resumes speech.
+            if self.arbiter.is_candidate_speaking:
+                self._log(
+                    logging.INFO,
+                    "orchestrator.interaction_suppressed_candidate_speaking",
+                    transcript=transcript[:200],
+                )
+                return
+
+            self.last_finalized_transcript = transcript
+            self.last_finalized_ts = time.perf_counter()
+
             stage = self.state.get("interview_stage", InterviewStage.OPENING)
             original_index = self.state.get("active_question_index", 0)
             current_q = self.flow_engine.current_question(
@@ -1171,113 +1220,42 @@ class InterviewOrchestratorExtension(AsyncExtension):
                     company_info=self.company_info,
                     stage_goal=str(self.state.get("stage_goal") or ""),
                     missing_evidence=self.state.get("missing_evidence"),
-                    difficulty_level=str(self.state.get("difficulty_level") or "normal"),
-                    transition_reason=str(self.state.get("transition_reason") or ""),
-                    question_type=str(self.state.get("active_question_type") or current_q.get("question_type") or ""),
+                    difficulty_level=str(current_q.get("difficulty_level") or current_q.get("difficulty") or "normal"),
+                    transition_reason=str(getattr(decision, "transition_brief", "") or ""),
+                    question_type=str(current_q.get("question_type") or current_q.get("type") or "followup"),
                     focus_experience=str(self.state.get("focus_experience") or ""),
                     focus_module=str(self.state.get("focus_module") or ""),
-                    active_topic_name=str(self.state.get("active_topic_name") or ""),
+                    active_topic_name=str(self.state.get("active_topic_name") or current_q.get("topic_name") or ""),
                     active_topic_rounds=int(self.state.get("active_topic_rounds") or 0),
                     must_transition=bool(decision.must_transition),
                     candidate_requested_move_on=bool(candidate_requested_move_on),
-                    flow_reason=str(decision.flow_reason or self.state.get("transition_reason") or ""),
-                    system_prompt_prefix=self.system_prompt_built,
+                    flow_reason=str(decision.flow_reason or ""),
+                    system_prompt_prefix=str(self.system_prompt),
                     session_context=self.session_context,
                 )
             )
 
-            context = InvokeContext(
-                task_key=self.task_key,
-                trace_id=self.trace_id,
-                system_prompt=build_result.system_prompt,
-                prompt=build_result.prompt,
-                entity_type="candidate",
-                entity_id="test_user_01",
-            )
-
-            if get_settings().llm_context_debug_enabled:
-                self._log(
-                    logging.DEBUG,
-                    "orchestrator.llm_context",
-                    current_transcript=transcript[:400],
-                    debug_context=build_result.debug_context_payload,
-                )
-
-            self._log(
-                logging.INFO,
-                "orchestrator.llm_worker_triggered",
-                active_question_index=self.state.get("active_question_index"),
-                pending_question=build_result.pending_question,
-            )
-
-            if stage in [InterviewStage.PROJECT_DEEP_DIVE, InterviewStage.JD_MATCH, InterviewStage.GENERAL_PROBE]:
-                import random
-                available_fillers = [f for f in self.EXPERT_FILLERS if f != self.last_filler]
-                filler = random.choice(available_fillers)
-                self.last_filler = filler
-                self._log(logging.INFO, "orchestrator.filler_sent", filler_stage=stage, filler=filler)
-                await self._send_to_tts(ten_env, filler, is_final=False)
-
             llm_start_ts = time.perf_counter()
-            self.llm_task = asyncio.create_task(
+            self.llm_task = self._create_task(
                 self._llm_streaming_worker(
                     ten_env,
-                    context,
-                    asr_final_ts,
-                    asr_sentence_start_ts,
-                    asr_physical_stop_ts,
-                    orch_receive_ts,
-                    llm_start_ts,
-                    transcript,
-                )
+                    context=InvokeContext(
+                        task_key=self.task_key,
+                        trace_id=self.trace_id,
+                        prompt=build_result.prompt,
+                        system_prompt=build_result.system_prompt,
+                    ),
+                    asr_final_ts=asr_final_ts,
+                    asr_sentence_start_ts=asr_sentence_start_ts,
+                    asr_physical_stop_ts=asr_physical_stop_ts,
+                    orch_receive_ts=orch_receive_ts,
+                    llm_start_ts=llm_start_ts,
+                    transcript=transcript,
+                ),
+                name="llm-streaming-worker"
             )
-            full_reply_text = await self.llm_task
-
-            if full_reply_text is None:
-                self._log(logging.WARNING, "orchestrator.llm_task_returned_none")
-                return
-
-            was_fallback = "[FALLBACK]" in full_reply_text
-            if was_fallback:
-                self._log(logging.WARNING, "orchestrator.llm_triggered_fallback", fallback_stage=stage)
-                self.state["difficulty_level"] = "fallback"
-            elif self.state.get("difficulty_level") == "fallback":
-                self.state["difficulty_level"] = "normal"
-
-            refreshed_q = self.flow_engine.current_question(state=self.state, question_pack=self.question_pack)
-            self.state = self.flow_engine.sync_stage_metadata(
-                state=self.state,
-                stage_code=self.state.get("interview_stage", InterviewStage.OPENING),
-                question=refreshed_q,
-                transition_reason=str(self.state.get("transition_reason") or ""),
-            )
-
-            if decision.must_transition:
-                self._log(
-                    logging.INFO,
-                    "orchestrator.topic_terminated",
-                    next_action=decision.next_action,
-                    flow_reason=decision.flow_reason,
-                )
-
-        except asyncio.CancelledError:
-            self._log(logging.INFO, "orchestrator.interaction_cancelled")
         except Exception as exc:
-            logger.exception(
-                json.dumps(
-                    {
-                        "event": "orchestrator.interaction_failed",
-                        "session_id": self.session_context.session_id or "",
-                        "trace_id": self.trace_id or "",
-                        "stage": (self.state or {}).get("interview_stage", ""),
-                        "error": str(exc),
-                    },
-                    ensure_ascii=False,
-                )
-            )
-
-    async def on_start(self, ten_env: AsyncTenEnv) -> None:
-        self._log(logging.INFO, "orchestrator.started")
+            self._log(logging.ERROR, "orchestrator.interaction_handling_failed", error=str(exc))
 
     async def on_cmd(self, ten_env: AsyncTenEnv, cmd: Cmd) -> None:
         cmd_name = cmd.get_name()
@@ -1638,14 +1616,73 @@ class InterviewOrchestratorExtension(AsyncExtension):
             self.arbiter.clear_playback()
         await ten_env.send_data(tts_data)
 
+    async def _listen_for_events(self) -> None:
+        """监听 Event Bus 上的外部事件，如手动强制结算。"""
+        try:
+            async for event in DEFAULT_INTERVIEW_EVENT_BUS.subscribe():
+                if not isinstance(event, dict):
+                    continue
+                
+                event_type = event.get("event_type")
+                session_id = event.get("session_id")
+                
+                # 仅处理匹配当前会话的事件
+                if session_id != self.session_id:
+                    continue
+                
+                if event_type == InterviewEventType.CANDIDATE_FORCE_FINALIZE:
+                    self._log(logging.INFO, "orchestrator.force_finalize_received", event=event)
+                    # 触发手动交互处理，跳过 VAD 等待
+                    payload = event.get("payload") or {}
+                    transcript = payload.get("text") or self.last_final_transcript
+                    
+                    if transcript:
+                        # 使用 _create_task 确保并发执行
+                        self._create_task(
+                            self._handle_interaction(
+                                ten_env=self._ten_env,
+                                transcript=transcript,
+                                asr_final_ts=time.perf_counter(),
+                                asr_sentence_start_ts=0,
+                                asr_physical_stop_ts=0,
+                                orch_receive_ts=time.perf_counter(),
+                            ),
+                            name="manual-force-finalize"
+                        )
+        except asyncio.CancelledError:
+            self._log(logging.INFO, "orchestrator.event_bus_listener_cancelled")
+        except Exception as exc:
+            self._log(logging.ERROR, "orchestrator.event_bus_listener_failed", error=str(exc))
+
     async def on_stop(self, ten_env: AsyncTenEnv) -> None:
         self._cancel_pending_finalize()
         self._invalidate_active_response()
+        
+        # 取消并等待所有后台任务
+        if self._bg_tasks:
+            self._log(logging.INFO, "orchestrator.stopping_tasks", count=len(self._bg_tasks))
+            for task in list(self._bg_tasks):
+                if not task.done():
+                    task.cancel()
+            
+            # 使用 wait 确保所有任务都已清理完成，防止 rwlock 冲突
+            if self._bg_tasks:
+                import asyncio
+                # We are already in an async method, so we can await.
+                # However, on_stop might be called from a context where we want to be brief.
+                # But to avoid rwlock issues, we must await here.
+                done, pending = await asyncio.wait(list(self._bg_tasks), timeout=2.0)
+                for t in pending:
+                    # If still not done, we just log it and move on (not ideal but avoids hanging)
+                    pass
+            self._bg_tasks.clear()
+
         if self.event_bridge is not None:
             await self.event_bridge.stop()
         with contextlib.suppress(Exception):
             await ten_env.send_cmd(Cmd.create(RuntimeCommand.INTERRUPT))
         self._log(logging.INFO, "orchestrator.stopped")
+
 
     def _emit_agent_state(self, state: str) -> None:
         if self.event_bridge is None:

@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     email_smtp_password: str | None = None
     email_smtp_use_tls: bool = True
     email_smtp_use_ssl: bool = False
-    email_from_name: str = "AI-HR"
+    email_from_name: str = "深澜智远招聘"
     email_from_address: str | None = None
     ai_reply_llm_enabled: bool = False
     ai_interview_llm_enabled: bool = False

@@ -218,6 +218,7 @@ class InterviewQuestionFlowEngine:
             reason = "low_confidence"
             fallback_recommended = True
         elif len(normalized) < active_min_len:
+            # We still tag this for reason logging, but flow logic will ignore sufficiency for tech stages
             need_followup = True
             reason = "insufficient_detail"
         elif " " in normalized and len(set(normalized.split())) <= 2 and len(normalized) > 10:
@@ -378,8 +379,11 @@ class InterviewQuestionFlowEngine:
             completed_with_gap = True
             completion_reason = "candidate_requested_move_on"
         elif not need_followup:
-            should_complete = True
-            completion_reason = "question_completed"
+            # Technical stages require both technical signal and turn-based depth.
+            # We never transition based purely on answer length for S3, S4, and S5.
+            if current_stage not in ("S3", "S4", "S5"):
+                should_complete = True
+                completion_reason = "question_completed"
         elif topic_round_limit_reached:
             should_complete = True
             completed_with_gap = True
@@ -393,34 +397,8 @@ class InterviewQuestionFlowEngine:
             completed_with_gap = True
             completion_reason = "followup_limit_reached"
 
-        # Anti-Jump Safeguard: Prevent premature completion of technical questions.
-        # Technical stages (S3/S4/S5) require both adequate content AND no hard turn limit hit.
-        # This guards against candidates being cut off mid-thought during pauses.
-        if should_complete and current_stage in ("S3", "S4", "S5") and not stage_turn_limit_reached:
-            normalized_answer = " ".join(str(evaluation.get("normalized_len") and
-                                          transcript if False else "").split())
-            answer_char_count = int(evaluation.get("normalized_len") or 0)
 
-            # Block completion if answer quality signals are weak
-            if evaluation.get("reason") in ("too_short_or_noise", "insufficient_detail"):
-                should_complete = False
-                completion_reason = ""
-                completed_with_gap = False
 
-            # Block completion even for "sufficient" answers that are too brief for technical depth.
-            # A 60-character floor gives candidates room to think without being rushed.
-            # candidate_requested_move_on explicitly bypasses this guard (they chose to skip).
-            elif (
-                not candidate_requested_move_on
-                and answer_char_count < 60
-                and evaluation.get("reason") not in ("too_short_or_noise", "insufficient_detail")
-                and followup_count < followup_limit
-            ):
-                should_complete = False
-                completion_reason = ""
-                completed_with_gap = False
-                # Rewrite evaluation reason so LLM knows to prompt for more depth
-                evaluation = {**evaluation, "need_followup": True, "reason": "tech_answer_too_brief"}
 
         if should_complete:
             statuses[idx] = "completed_with_gap" if completed_with_gap else "completed"

@@ -98,6 +98,9 @@ class InterviewInvitationEmailService:
             request_payload={"template_code": template_code or self._settings.ai_auto_invitation_template_code},
         )
         try:
+            # 默认优先使用高端版模板
+            target_template_code = template_code or "interview_invitation_premium"
+            
             ai_interview_service = get_ai_interview_service(self._session)
             invitation = ai_interview_service.create_invitation(candidate_id=candidate.id, job_id=job.id, note=note)
             rendered = self._render_email(
@@ -106,14 +109,14 @@ class InterviewInvitationEmailService:
                 job_title=job.title,
                 invitation_token=invitation.token,
                 expires_at=invitation.expires_at,
-                template_code=template_code or self._settings.ai_auto_invitation_template_code,
+                template_code=target_template_code,
             )
             delivery = self._email_delivery_repository.create(
                 candidate_id=candidate.id,
                 job_id=job.id,
                 evaluation_id=evaluation.id,
                 invitation_id=invitation.id,
-                template_code=template_code or self._settings.ai_auto_invitation_template_code,
+                template_code=target_template_code,
                 to_email=rendered.to_email,
                 subject=rendered.subject,
                 html_body=rendered.html_body,
@@ -343,7 +346,11 @@ class InterviewInvitationEmailService:
         return None
 
     def _looks_like_email(self, value: str) -> bool:
-        return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value.strip()))
+        """校验邮箱格式。"""
+        if not value:
+            return False
+        pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        return bool(re.match(pattern, value.strip()))
 
     def _to_delivery_response(self, entity) -> CandidateEmailDeliveryResponse:
         return CandidateEmailDeliveryResponse(

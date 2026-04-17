@@ -134,6 +134,9 @@ class TencentTTSExtension(AsyncExtension):
             sentence_q = await self.pipeline_queue.get()
             print(f"[tencent_tts] playback: starting new sentence queue.", flush=True)
             self.turn_start_time = time.time() # Reset shield for EACH sentence
+            if self.interrupted:
+                self.pipeline_queue.task_done()
+                continue
             
             while True:
                 if self.interrupted: break
@@ -186,16 +189,14 @@ class TencentTTSExtension(AsyncExtension):
     async def on_cmd(self, ten_env: AsyncTenEnv, cmd: Cmd) -> None:
         cmd_name = cmd.get_name()
         if cmd_name in {"interrupt", "start_of_sentence"}:
-            # 1. 刚收到文字时的“启动保护期”（预防合成阶段的误触发）
-            # 将保护期从 5s 减少到 0.5s，确保用户可以随时打断
-            if time.time() - self.last_text_time < 0.5:
-                print(f"[tencent_tts] on_cmd: {cmd_name} IGNORED (Initial 0.5s Protection Active!)", flush=True)
+            # 将保护期减少到 0.1s，确保用户可以几乎随时打断
+            if time.time() - self.last_text_time < 0.1:
+                print(f"[tencent_tts] on_cmd: {cmd_name} IGNORED (Initial 0.1s Protection Active!)", flush=True)
                 await ten_env.return_result(CmdResult.create(StatusCode.OK, cmd))
                 return
 
-            # 2. 正在播放时的“回声护盾”（预防刚开口时的自激）
-            # 将护盾从 1s 减少到 0.2s，提高打断灵敏度
-            if cmd_name == "start_of_sentence" and time.time() - getattr(self, "turn_start_time", 0) < 0.2:
+            # 将护盾减少到 0.05s，最高程度提高打断灵敏度
+            if cmd_name == "start_of_sentence" and time.time() - getattr(self, "turn_start_time", 0) < 0.05:
                 print(f"[tencent_tts] on_cmd: {cmd_name} IGNORED (Acoustic Echo Shield Active!)", flush=True)
                 await ten_env.return_result(CmdResult.create(StatusCode.OK, cmd))
                 return

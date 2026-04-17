@@ -26,7 +26,21 @@ onMounted(async () => {
       }
     });
   } catch (err: any) {
-    errorText.value = err?.message || "激活邀请失败，请稍后重试。";
+    let msg = err?.message || "激活邀请失败，请稍后重试。";
+    // 尝试从 API 报错中提取纯文字信息，移除 HTTP 状态码和 JSON 结构
+    if (msg.includes('{')) {
+      try {
+        const jsonStr = msg.substring(msg.indexOf('{'));
+        const errData = JSON.parse(jsonStr);
+        if (errData?.error?.message) {
+          msg = errData.error.message;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    // 移除括号及其中的英文提示（如: (Single-use link already consumed)）
+    errorText.value = msg.replace(/\s*\(.*\)\s*/, "").trim();
     loading.value = false;
   }
 });

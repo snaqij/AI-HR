@@ -10,4 +10,5 @@ class InterviewEventType(StrEnum):
     QUESTION_FINAL = "question.final"
     TTS_PACKET = "tts.packet"
     LLM_SENTENCE = "llm.sentence"
+    CANDIDATE_FORCE_FINALIZE = "candidate.force_finalize"
     REPORT_GENERATED = "ai_interview.report.generated"
