@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from ai_hr.core.config import get_settings
 from ai_hr.db.base import Base
-from ai_hr.db.models import CandidateEmailDelivery, CandidateJobPipeline, JobCandidate
+from ai_hr.db.models import AgentEvent, AgentRun, CandidateEmailDelivery, CandidateJobPipeline, JobCandidate
 from ai_hr.db.session import get_db_session
 from ai_hr.main import app
 from ai_hr.services.recruitment_automation import RecruitmentAutomationService
@@ -154,3 +154,58 @@ def test_recruitment_automation_should_evaluate_and_send_invitation() -> None:
         assert pipeline.evaluation_status == "completed"
         assert pipeline.invitation_status == "invited"
         assert delivery.status == "sent"
+        run_count = session.execute(select(AgentRun)).scalars().all()
+        event_count = session.execute(select(AgentEvent)).scalars().all()
+        assert len(run_count) >= 2
+        assert len(event_count) >= 3
+
+
+def test_agent_ops_api_should_return_runs_and_events() -> None:
+    _configure_env()
+    invitation_email_module.smtplib.SMTP = DummySMTP
+    job_id, candidate_id = _create_job_and_candidate()
+
+    with TestingSessionLocal() as session:
+        session.add(
+            JobCandidate(
+                job_id=job_id,
+                publication_id=None,
+                candidate_id=candidate_id,
+                channel="boss",
+                external_job_id="boss-job-automation-002",
+                external_candidate_id="boss-automation-002",
+                stage="new",
+                source_status="active",
+                first_synced_at=datetime(2026, 4, 13, 0, 0, 0),
+                last_synced_at=datetime(2026, 4, 13, 0, 0, 0),
+                source_payload={},
+            )
+        )
+        from ai_hr.repositories.candidate_job_pipeline import CandidateJobPipelineRepository
+
+        pipeline_repo = CandidateJobPipelineRepository(session)
+        pipeline = pipeline_repo.ensure(
+            candidate_id=candidate_id,
+            job_id=job_id,
+            source_channel="boss",
+            external_candidate_id="boss-automation-002",
+        )
+        pipeline_repo.mark_resume_downloaded(pipeline.id, resume_attachment_id="resume-attachment-demo")
+        session.commit()
+
+    with TestingSessionLocal() as session:
+        automation = RecruitmentAutomationService(session)
+        automation.execute_due_candidate_evaluations(limit=10)
+        automation.execute_due_invitation_emails(limit=10)
+
+    runs_resp = client.get(f"/api/v1/agent/runs?job_id={job_id}&limit=50")
+    assert runs_resp.status_code == 200
+    runs_payload = runs_resp.json()["data"]
+    assert runs_payload["total"] >= 2
+    assert any(item["task_type"] == "candidate_evaluation" for item in runs_payload["items"])
+
+    events_resp = client.get(f"/api/v1/agent/events?candidate_id={candidate_id}&limit=50")
+    assert events_resp.status_code == 200
+    events_payload = events_resp.json()["data"]
+    assert events_payload["total"] >= 2
+    assert any(item["event_name"] == "evaluation.completed" for item in events_payload["items"])

@@ -148,7 +148,7 @@
               </div>
               <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">已作答题数</p>
-                <p class="text-sm font-bold mt-2 text-on-surface">{{ answeredCount }} / {{ recordDetail?.questions.length || 0 }}</p>
+                <p class="text-sm font-bold mt-2 text-on-surface">{{ answeredCount }} / {{ totalQuestionCount }}</p>
               </div>
               <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">平均维度分</p>
@@ -164,14 +164,31 @@
               <section class="lg:col-span-7">
                 <div class="flex items-center justify-between mb-4">
                   <h4 class="text-base font-black text-on-surface">问答时间线</h4>
-                  <span class="text-[11px] font-bold text-on-surface-variant">共 {{ recordDetail?.questions.length || 0 }} 题</span>
+                  <span class="text-[11px] font-bold text-on-surface-variant">共 {{ totalQuestionCount }} 题（含开场）</span>
                 </div>
 
-                <div v-if="!recordDetail?.questions.length" class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40 text-sm font-bold text-on-surface-variant">
+                <div v-if="!(recordDetail?.questions.length || recordDetail?.opening_segments?.length)" class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40 text-sm font-bold text-on-surface-variant">
                   暂无作答记录
                 </div>
 
                 <div v-else class="space-y-3">
+                  <article
+                    v-for="(item, index) in (recordDetail?.opening_segments || [])"
+                    :key="`opening-${index}`"
+                    class="rounded-2xl border border-outline-variant/10 p-5 bg-amber-50/50"
+                  >
+                    <div class="flex items-center justify-between mb-2">
+                      <p class="text-xs font-black tracking-widest text-amber-700">{{ item.title }}</p>
+                      <span class="text-[11px] font-bold text-on-surface-variant">
+                        {{ item.answer_turn_no ? `轮次 #${item.answer_turn_no}` : "未记录轮次" }}
+                      </span>
+                    </div>
+                    <div class="pt-2 border-t border-outline-variant/10">
+                      <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-2">候选人回答</p>
+                      <p class="text-sm font-medium text-on-surface whitespace-pre-wrap break-words">{{ item.candidate_answer || "候选人尚未作答" }}</p>
+                    </div>
+                  </article>
+
                   <article
                     v-for="(item, index) in recordDetail.questions"
                     :key="`${item.question_id}-${index}`"
@@ -280,7 +297,15 @@ const dimensionScoreEntries = computed(() => {
 });
 
 const answeredCount = computed(() => {
-  return (recordDetail.value?.questions || []).filter((item) => (item.candidate_answer || "").trim()).length;
+  const questionCount = (recordDetail.value?.questions || []).filter((item) => (item.candidate_answer || "").trim()).length;
+  const openingCount = (recordDetail.value?.opening_segments || []).filter((item) => (item.candidate_answer || "").trim()).length;
+  return questionCount + openingCount;
+});
+
+const totalQuestionCount = computed(() => {
+  const questionCount = recordDetail.value?.questions.length || 0;
+  const openingCount = recordDetail.value?.opening_segments.length || 0;
+  return questionCount + openingCount;
 });
 
 const averageDimensionScore = computed(() => {

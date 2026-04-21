@@ -10,6 +10,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SYSTEM_ENV_FILENAME = ".env.system"
+SECRETS_ENV_FILENAME = ".env.secrets"
 ENV_FILE_MAP = {
     "dev": ".env.dev",
     "development": ".env.dev",
@@ -54,8 +56,6 @@ class Settings(BaseSettings):
     job_sync_scheduler_enabled: bool = False
     job_sync_scheduler_poll_seconds: int = 30
     job_sync_scheduler_batch_size: int = 10
-    job_sync_default_interval_minutes: int = 30
-    job_sync_default_max_pages: int = 2
     job_global_sync_enabled: bool = True
     job_global_sync_interval_minutes: int = 1440
     job_global_sync_max_pages: int = 5
@@ -78,7 +78,6 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_streaming_enabled: bool = True
-    llm_context_debug_enabled: bool = False
     llm_timeout_seconds: int = 30
     llm_max_retries: int = 2
     ai_resume_llm_enabled: bool = False
@@ -107,8 +106,6 @@ class Settings(BaseSettings):
     ai_reply_handoff_alert_threshold: float = 0.30
     ai_reply_blocked_alert_threshold: float = 0.10
     ai_reply_alert_min_samples: int = 10
-    provider_health_probe_enabled: bool = False
-    provider_health_probe_timeout_ms: int = 1200
     provider_circuit_breaker_fail_threshold: int = 3
     provider_circuit_breaker_cooldown_seconds: int = 30
     rtc_provider: str = "mock"
@@ -119,17 +116,6 @@ class Settings(BaseSettings):
     agora_room_prefix: str = "ai-intv-"
     agora_token_ttl_seconds: int = 14400
     agora_ten_bot_user_id_prefix: str = "aihr-bot-"
-    livekit_base_url: str | None = None
-    livekit_api_key: str | None = None
-    livekit_api_secret: str | None = None
-    livekit_create_room_path: str = "/twirp/livekit.RoomService/CreateRoom"
-    livekit_update_subscriptions_path: str = "/twirp/livekit.RoomService/UpdateSubscriptions"
-    livekit_send_data_path: str = "/twirp/livekit.RoomService/SendData"
-    livekit_room_prefix: str = "ai-intv-"
-    ai_interview_rtc_webhook_enabled: bool = False
-    livekit_webhook_signature_required: bool = True
-    livekit_webhook_api_key: str | None = None
-    livekit_webhook_accept_skew_seconds: int = 120
     ai_interview_rtc_audio_subscribe_enabled: bool = False
     ai_interview_rtc_audio_subscribe_auto: bool = True
     ai_interview_rtc_audio_track_ids: str | None = None
@@ -149,10 +135,7 @@ class Settings(BaseSettings):
     ai_interview_ten_tman_cmd: str = "tman"
     ai_interview_ten_session_dir: str | None = None
     ai_interview_ten_property_template: str | None = None
-    ai_interview_ten_python_lib_path: str | None = None
     ai_interview_duplex_seen_frame_window: int = 2048
-    ai_interview_duplex_max_inflight_chunks: int = 6
-    ai_interview_duplex_stats_emit_every: int = 20
     ai_interview_duplex_partial_trigger_enabled: bool = True
     ai_interview_duplex_partial_min_chars: int = 8
     ai_interview_duplex_partial_dedup_ttl_ms: int = 1500
@@ -200,13 +183,11 @@ class Settings(BaseSettings):
     tts_tencent_ws_recv_timeout_ms: int = 1200
     tts_first_chunk_size: int = 12
     tts_warmup_enabled: bool = True
-    llm_followup_cache_ttl_seconds: int = 180
     redis_url: str | None = None
     ai_interview_redis_enabled: bool = False
     ai_interview_redis_prefix: str = "aihr"
     ai_interview_question_pack_ttl_seconds: int = 172800
     ai_interview_state_ttl_seconds: int = 172800
-    ai_interview_dedup_ttl_seconds: int = 86400
     ai_interview_followup_cache_ttl_seconds: int = 180
     ai_interview_prebuild_pack_ttl_seconds: int = 604800
     ai_interview_redis_event_bus_enabled: bool = False
@@ -225,8 +206,8 @@ class Settings(BaseSettings):
     )
 
 
-def _resolve_env_file() -> Path:
-    """Resolve env file path from explicit path or environment alias."""
+def _resolve_legacy_env_file() -> Path:
+    """Resolve legacy single env file path from explicit path or environment alias."""
     explicit_env_file = os.getenv("AI_HR_ENV_FILE")
     if explicit_env_file:
         return Path(explicit_env_file).expanduser().resolve()
@@ -236,15 +217,38 @@ def _resolve_env_file() -> Path:
     return PROJECT_ROOT / filename
 
 
+def _resolve_project_env_file(*, env_var: str, default_filename: str) -> Path:
+    raw_value = os.getenv(env_var, "").strip()
+    if raw_value:
+        candidate = Path(raw_value).expanduser()
+        return candidate if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()
+    return PROJECT_ROOT / default_filename
+
+
+def _resolve_env_files() -> tuple[Path, ...]:
+    """Resolve ordered env files; prefer split system/secret files when present."""
+    explicit_env_file = os.getenv("AI_HR_ENV_FILE", "").strip()
+    if explicit_env_file:
+        return (Path(explicit_env_file).expanduser().resolve(),)
+
+    system_env = _resolve_project_env_file(env_var="AI_HR_SYSTEM_ENV_FILE", default_filename=SYSTEM_ENV_FILENAME)
+    secret_env = _resolve_project_env_file(env_var="AI_HR_SECRET_ENV_FILE", default_filename=SECRETS_ENV_FILENAME)
+    split_files = tuple(path for path in (system_env, secret_env) if path.exists())
+    if split_files:
+        return split_files
+
+    return (_resolve_legacy_env_file(),)
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Return process-level cached Settings instance."""
-    env_file = _resolve_env_file()
-    if env_file.exists():
+    env_files = tuple(path for path in _resolve_env_files() if path.exists())
+    if env_files:
         last_error: UnicodeDecodeError | None = None
         for encoding in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
             try:
-                return Settings(_env_file=env_file, _env_file_encoding=encoding)
+                return Settings(_env_file=env_files, _env_file_encoding=encoding)
             except UnicodeDecodeError as exc:
                 last_error = exc
         if last_error is not None:

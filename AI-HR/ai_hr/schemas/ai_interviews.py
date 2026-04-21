@@ -491,14 +491,3 @@ class AIInterviewRTCASRIngestResponse(BaseModel):
     tts: AIInterviewTTSStreamResponse | None = None
 
 
-class AIInterviewRTCWebhookResponse(BaseModel):
-    """RTC webhook writeback response."""
-
-    accepted: bool
-    deduplicated: bool = False
-    vendor: str = "livekit"
-    event_type: str | None = None
-    event_id: str | None = None
-    room_id: str | None = None
-    session_id: str | None = None
-    reason: str | None = None

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from ..connectors.base import ConnectorCredentials
@@ -23,6 +25,8 @@ from ..schemas.jobs import (
     RemoteJobSyncItem,
 )
 from .credentials import get_credential_service, CredentialService
+
+logger = logging.getLogger(__name__)
 
 
 class JobService:
@@ -360,6 +364,28 @@ class JobService:
             raise ResourceNotFoundError(f"Link between job {job_id} and candidate {candidate_id} not found")
         return self._job_candidate_repository.update_stage(link, stage)
 
+    def link_candidate(self, job_id: str, candidate_id: str):
+        """Create or refresh a local job-candidate link for imported candidates."""
+        self._repository.get(job_id)
+        candidate = self._candidate_repository.get(candidate_id)
+        external_candidate_id = (candidate.external_candidate_id or candidate.id).strip()
+        self._job_candidate_repository.upsert_link(
+            job_id=job_id,
+            publication_id=None,
+            candidate_id=candidate.id,
+            channel="local_script",
+            external_job_id=None,
+            external_candidate_id=external_candidate_id,
+            stage=candidate.current_stage,
+            source_status="imported",
+            applied_at=None,
+            source_payload={"source": "generate_interview_invite"},
+        )
+        # Reuse existing repository commit path to persist the link in current transaction scope.
+        self._candidate_repository.update_stage(candidate.id, candidate.current_stage)
+        item = self._job_candidate_repository.get_link_detail(job_id, candidate_id)
+        return item
+
     def sync_resume_ready_candidates(self, job_id: str, payload: JobResumeReadySyncRequest) -> JobResumeReadySyncResult:
         job = self._repository.get(job_id)
         publication = next(
@@ -465,10 +491,19 @@ class JobService:
                 
                 # 标记已同步
                 self._candidate_repository.mark_metadata_synced(candidate.id)
-                print(f"DEBUG: Background enrichment success for {candidate.name}")
+                logger.debug(
+                    "job_service.background_enrich.success candidate_id=%s candidate_name=%s",
+                    candidate.id,
+                    candidate.name,
+                )
                 processed_count += 1
             except Exception as e:
-                print(f"Background metadata enrichment failed for candidate {candidate.name}: {e}")
+                logger.warning(
+                    "job_service.background_enrich.failed candidate_id=%s candidate_name=%s error=%s",
+                    candidate.id,
+                    candidate.name,
+                    e,
+                )
                 # 失败了也记录一下，标记同步过，避免在该批次死循环
                 self._candidate_repository.mark_metadata_synced(candidate.id)
                 

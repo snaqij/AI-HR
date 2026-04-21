@@ -1,11 +1,8 @@
 """AI 离线评测服务。"""
 
 from __future__ import annotations
-
 from datetime import UTC, datetime
-
 from sqlalchemy.orm import Session
-
 from ..core.exceptions import ResourceNotFoundError
 from ..repositories.ai_eval import AIEvalRepository
 from ..schemas.ai_eval import AIEvalReportResult, AIEvalRunRequest, AIEvalRunResult

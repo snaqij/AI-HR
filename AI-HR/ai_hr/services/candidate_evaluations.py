@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -11,7 +12,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
-from ..core.exceptions import InvalidStateError
+from ..core.exceptions import ConnectorOperationError, InvalidStateError
 from ..domain.constants import PromptTaskKey
 from ..repositories.ai_observability import AIObservabilityRepository
 from ..repositories.ai_runtime import AIRuntimeRepository
@@ -39,6 +40,8 @@ from .llm.guardrails import GuardrailService
 from .llm.prompts import PromptTemplate, get_prompt_template
 from .llm.router import ModelRouter
 from .policy.decision import PolicyDecisionService
+
+logger = logging.getLogger(__name__)
 
 _SKILL_KEYWORDS = (
     "python",
@@ -131,7 +134,21 @@ class CandidateEvaluationService:
         latest_attachment = self._resume_attachment_repository.get_latest(candidate_id)
         if latest_attachment is None:
             # Try to fetch attachment on-demand to avoid evaluating on incomplete profile fallback text.
-            self._resume_service.sync_resume_attachment(ResumeAttachmentSyncRequest(candidate_id=candidate_id))
+            try:
+                self._resume_service.sync_resume_attachment(ResumeAttachmentSyncRequest(candidate_id=candidate_id))
+            except ConnectorOperationError as exc:
+                # For locally imported candidates (for example source_channel=local_script),
+                # no remote connector may exist. If resume_text is already present, continue
+                # with local text instead of failing hard.
+                if (candidate.resume_text or "").strip():
+                    logger.warning(
+                        "candidate_evaluation.attachment_sync_skipped candidate_id=%s channel=%s reason=%s",
+                        candidate_id,
+                        candidate.source_channel,
+                        exc,
+                    )
+                else:
+                    raise
             latest_attachment = self._resume_attachment_repository.get_latest(candidate_id)
 
         # Always prefer latest attachment full text for evaluation accuracy.
@@ -682,10 +699,10 @@ class CandidateEvaluationService:
         )
         trailer = f"\n{'-' * 32}"
         try:
-            print(f"{header}{prompt}{trailer}")
+            logger.debug("%s%s%s", header, prompt, trailer)
         except UnicodeEncodeError:
             escaped_prompt = prompt.encode("unicode_escape", errors="replace").decode("ascii", errors="ignore")
-            print(f"{header}{escaped_prompt}{trailer}")
+            logger.debug("%s%s%s", header, escaped_prompt, trailer)
         result = self._llm_client.invoke_json(
             InvokeContext(
                 task_key=PromptTaskKey.CANDIDATE_EVALUATION,

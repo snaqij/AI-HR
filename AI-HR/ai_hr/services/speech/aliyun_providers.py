@@ -457,7 +457,7 @@ class _AliyunNlsCallback:
 
     def on_start(self, message, *args):
         """Called when TranscriptionStarted is received (for Transcriber)."""
-        # print(f"DEBUG [NLS Start] RAW: {message}")
+        # Debug hook reserved for raw start message tracing.
         logger.debug("Aliyun NLS Transcriber started")
         # 初始同步 Epoch，确保第一个句子不会因为初始化顺序而跳过
         self.current_sentence_epoch = self.epoch
@@ -465,7 +465,7 @@ class _AliyunNlsCallback:
         self.started_ok.set()
 
     def on_sentence_begin(self, message, *args):
-        # print(f"DEBUG [NLS SentenceBegin] RAW: {message}")
+        # Debug hook reserved for sentence begin tracing.
         try:
             # 记录本句开始处理的时刻，用于全链路时延首分计算
             if not getattr(self, "sentence_start_ts", 0):
@@ -476,7 +476,7 @@ class _AliyunNlsCallback:
         except Exception:
             pass
     def on_result_changed(self, message, *args):
-        # print(f"DEBUG [NLS ResultChanged] RAW: {message}")
+        # Debug hook reserved for partial result tracing.
         try:
             data = json.loads(message)
             payload = data.get("payload", {})
@@ -491,7 +491,7 @@ class _AliyunNlsCallback:
                     return
 
             self.current_sentence = payload.get("result", "")
-            # print(f"DEBUG [ASR Progress] {self.current_sentence}")
+            # Debug hook reserved for ASR progress tracing.
             logger.debug(f"NLS Intermediate: {self.current_sentence}")
             # 增量发布：仅发布当前正在识别的句子片段
             self._publish_asr_turn(is_final=False, fragment=self.current_sentence)
@@ -499,7 +499,7 @@ class _AliyunNlsCallback:
             pass
 
     def on_sentence_end(self, message, *args):
-        # print(f"DEBUG [NLS SentenceEnd] RAW: {message}")
+        # Debug hook reserved for sentence end tracing.
         try:
             data = json.loads(message)
             payload = data.get("payload", {})
@@ -518,7 +518,7 @@ class _AliyunNlsCallback:
             self.received_completed = True
             self.completed_event.set()
             
-            print(f"[ASR Final] {final_text}")
+            logger.debug("aliyun_nls.asr_final session_id=%s final_text=%s", self.session_id, final_text)
             logger.debug(f"NLS Sentence End: {final_text}")
             # 增量发布：仅发布刚刚完成的这一句全文
             self._publish_asr_turn(is_final=True, fragment=final_text)
@@ -579,7 +579,7 @@ class _AliyunNlsCallback:
 
         try:
             if is_final:
-                print(f"[EventBus] Publishing final asr.turn: {fragment[:60]}...")
+                logger.debug("aliyun_nls.eventbus_publish_final session_id=%s fragment=%s", self.session_id, fragment[:60])
             
             DEFAULT_INTERVIEW_EVENT_BUS.publish(
                 session_id=self.session_id,

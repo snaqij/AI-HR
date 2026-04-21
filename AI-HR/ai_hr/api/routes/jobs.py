@@ -353,6 +353,35 @@ def get_job_candidate(
     return Envelope.success(response)
 
 
+@router.post("/{job_id}/candidates/{candidate_id}/link", response_model=Envelope[JobCandidateItem])
+def link_job_candidate(
+    job_id: str,
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobCandidateItem]:
+    """Create a local job-candidate link for imported candidates."""
+    service = get_job_service(session)
+    item = service.link_candidate(job_id, candidate_id)
+    response = JobCandidateItem(
+        candidate=item.candidate,
+        channel=item.channel,
+        external_candidate_id=item.external_candidate_id,
+        external_job_id=item.external_job_id,
+        stage=item.stage,
+        source_status=item.source_status,
+        applied_at=item.applied_at,
+        first_synced_at=item.first_synced_at,
+        last_synced_at=item.last_synced_at,
+        source_payload={},
+        resume_request_status=item.pipeline.resume_request_status if item.pipeline else None,
+        resume_download_status=item.pipeline.resume_download_status if item.pipeline else None,
+        last_resume_requested_at=item.pipeline.last_resume_requested_at if item.pipeline else None,
+        evaluation=item.evaluation,
+        latest_delivery=item.latest_delivery,
+    )
+    return Envelope.success(response)
+
+
 @router.patch("/{job_id}/candidates/{candidate_id}", response_model=Envelope[JobCandidateItem])
 def update_job_candidate_stage(
     job_id: str,

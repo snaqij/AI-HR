@@ -313,12 +313,18 @@ class AIResumeService:
         job_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """ Orchestrate 'Smart Bole' automated resume requests based on job thresholds. """
+        trace_id = f"auto-resume-{uuid.uuid4().hex[:12]}"
         bootstrapped_count = self._candidate_job_pipeline_repository.bootstrap_pending_auto_request_pipelines(
             job_id=job_id,
             limit=500,
         )
         if bootstrapped_count:
-            print(f"DEBUG: [Smart Bole] Bootstrapped {bootstrapped_count} missing pipeline record(s).")
+            logger.info(
+                "ai_resume.auto_request.bootstrap trace_id=%s bootstrapped_count=%s job_id=%s",
+                trace_id,
+                bootstrapped_count,
+                job_id or "",
+            )
 
         requested_limit = max(1, int(limit or 10))
         active_job_ids = self._candidate_job_pipeline_repository.list_active_auto_request_job_ids(job_id=job_id)
@@ -331,12 +337,20 @@ class AIResumeService:
         )
         
         if not pipelines:
-            print("DEBUG: [Smart Bole] No pending candidates in queue found for automation.")
+            logger.info(
+                "ai_resume.auto_request.empty trace_id=%s job_id=%s",
+                trace_id,
+                job_id or "",
+            )
             return []
             
-        print(
-            "DEBUG: [Smart Bole] Starting scan for "
-            f"{len(pipelines)} pending candidates across {len(active_job_ids)} active job(s)."
+        logger.info(
+            "ai_resume.auto_request.scan_start trace_id=%s pending_candidates=%s active_jobs=%s requested_limit=%s effective_limit=%s",
+            trace_id,
+            len(pipelines),
+            len(active_job_ids),
+            requested_limit,
+            effective_limit,
         )
         results: list[dict[str, Any]] = []
         
@@ -370,7 +384,13 @@ class AIResumeService:
                 
                 # 2. Check Daily Quota
                 if cache["quota_remaining"] <= 0:
-                    print(f"DEBUG: [Smart Bole] Job '{job.title}' reached daily quota ({job.max_daily_resume_requests}). Skipping.")
+                    logger.info(
+                        "ai_resume.auto_request.quota_reached trace_id=%s job_id=%s job_title=%s daily_quota=%s",
+                        trace_id,
+                        job.id,
+                        job.title,
+                        job.max_daily_resume_requests,
+                    )
                     reached_quota_job_ids.add(pipeline.job_id)
                     continue
 
@@ -393,7 +413,14 @@ class AIResumeService:
                     continue
                 
                 # 5. Execute Request
-                print(f"DEBUG: [Smart Bole] >>> SUCCESS: Requesting resume for {candidate.name} (Job: {job.title})")
+                logger.info(
+                    "ai_resume.auto_request.request_start trace_id=%s candidate_id=%s candidate_name=%s job_id=%s job_title=%s",
+                    trace_id,
+                    candidate.id,
+                    candidate.name,
+                    job.id,
+                    job.title,
+                )
 
                 # Throttle outbound resume requests to reduce connector pressure.
                 if last_request_at_monotonic is not None:
@@ -406,6 +433,13 @@ class AIResumeService:
                     sync_attachment_when_ready=True
                 )
                 last_request_at_monotonic = time.monotonic()
+                logger.info(
+                    "ai_resume.auto_request.request_success trace_id=%s candidate_id=%s job_id=%s request_status=%s",
+                    trace_id,
+                    candidate.id,
+                    job.id,
+                    res.get("request_status", ""),
+                )
                 
                 cache["quota_remaining"] -= 1
                 results.append(res)
@@ -413,11 +447,20 @@ class AIResumeService:
                 
             except Exception as exc:
                 self._session.rollback()
-                print(f"DEBUG: [Smart Bole] ERROR: Unexpected failure for candidate {pipeline.candidate_id}: {exc}")
+                logger.exception(
+                    "ai_resume.auto_request.request_failed trace_id=%s candidate_id=%s job_id=%s",
+                    trace_id,
+                    pipeline.candidate_id,
+                    pipeline.job_id,
+                )
                 continue
         
         if not processed_somebody and pipelines:
-            print("DEBUG: [Smart Bole] Scan finished. No candidates in this batch met the current job thresholds.")
+            logger.info(
+                "ai_resume.auto_request.no_match trace_id=%s pending_candidates=%s",
+                trace_id,
+                len(pipelines),
+            )
                 
         return results
 
@@ -449,7 +492,13 @@ class AIResumeService:
             candidate_rank = self._get_degree_rank(candidate.degree)
             if candidate_rank < target_rank:
                 message = f"Degree {candidate.degree} < {job.min_degree}"
-                print(f"DEBUG: Candidate {candidate.name} skipped ({message})")
+                logger.debug(
+                    "ai_resume.auto_request.skip_degree candidate_id=%s job_id=%s candidate_name=%s reason=%s",
+                    candidate.id,
+                    job.id,
+                    candidate.name,
+                    message,
+                )
                 return {
                     "passed": False,
                     "code": "degree_not_meet",
@@ -470,7 +519,13 @@ class AIResumeService:
             
             if years < job.min_experience_years:
                 message = f"Experience {years}y < {job.min_experience_years}y"
-                print(f"DEBUG: Candidate {candidate.name} skipped ({message})")
+                logger.debug(
+                    "ai_resume.auto_request.skip_experience candidate_id=%s job_id=%s candidate_name=%s reason=%s",
+                    candidate.id,
+                    job.id,
+                    candidate.name,
+                    message,
+                )
                 return {
                     "passed": False,
                     "code": "experience_not_meet",

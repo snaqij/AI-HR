@@ -92,7 +92,7 @@ def _is_write_request(scope: Scope) -> bool:
     return scope["method"].upper() in {"POST", "PUT", "PATCH", "DELETE"}
 
 
-def _compute_fingerprint(scope: Scope, body: bytes) -> str:
+def _compute_idempotency_digest(scope: Scope, body: bytes) -> str:
     """计算请求指纹（方法+路径+查询+体摘要）。"""
     method = scope["method"].upper()
     path = scope.get("path", "")
@@ -133,7 +133,7 @@ class IdempotencyMiddleware:
             return
 
         body = await self._read_body(receive)
-        fingerprint = _compute_fingerprint(scope, body)
+        fingerprint = _compute_idempotency_digest(scope, body)
         cached_or_state = self.store.reserve_or_get(idempotency_key)
         if isinstance(cached_or_state, CachedResponse):
             if cached_or_state.request_fingerprint != fingerprint:

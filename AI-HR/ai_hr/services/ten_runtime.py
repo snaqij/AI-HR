@@ -83,8 +83,7 @@ class TENRuntimeManager:
         
         banner = "=" * 80
         msg = f"\n{banner}\n!!! [MANUAL MODE] COPY AND RUN THIS IN YOUR WSL TERMINAL !!!\n\n{launch_cmd}\n{banner}\n"
-        print(msg, flush=True)
-        logger.info("Manual launch command generated for session %s", session_id)
+        logger.info("ten_runtime.manual_launch session_id=%s message=%s", session_id, msg)
 
         return {
             "ten_enabled": True,
@@ -137,7 +136,7 @@ class TENRuntimeManager:
                         "auto_join": True,
                     }
                 )
-                print(f"[TEN-DEBUG] Generated agora_rtc props: {prop}", flush=True)
+                logger.debug("ten_runtime.agora_props session_id=%s props=%s", session_id, prop)
             elif name == "ten_vad":
                 prop.setdefault("dump", False)
                 prop.update({"silence_duration_ms": 500})
@@ -250,9 +249,9 @@ class TENRuntimeManager:
     def _load_template(self) -> dict[str, Any]:
         template_val = self._settings.ai_interview_ten_property_template
         if not template_val:
-            template_path = self._to_local_path(str(self._agent_dir() / "property.json"))
+            template_path = (self._agent_dir() / "property.json").resolve()
         else:
-            template_path = self._to_local_path(template_val)
+            template_path = self._resolve_runtime_path(template_val)
 
         if not template_path.exists():
             raise InvalidConnectorConfigError(f"TEN property template not found: {template_path}")
@@ -265,6 +264,13 @@ class TENRuntimeManager:
             drive = path_str[5].upper()
             return Path(f"{drive}:") / path_str[7:].replace("/", "\\")
         return Path(path_str)
+
+    def _resolve_runtime_path(self, path_str: str) -> Path:
+        """Resolve TEN path from settings; relative paths are anchored at PROJECT_ROOT."""
+        candidate = self._to_local_path(path_str).expanduser()
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        return candidate.resolve()
 
     def _to_wsl_path(self, path_str: str) -> str:
         """Translate Windows path to WSL path if running on Windows."""
@@ -279,48 +285,12 @@ class TENRuntimeManager:
 
     def _agent_dir(self) -> Path:
         if self._settings.ai_interview_ten_agent_dir:
-            return Path(self._settings.ai_interview_ten_agent_dir).expanduser().resolve()
-        return (PROJECT_ROOT / "ten_agent").resolve()
-
-
-    def _load_template(self) -> dict[str, Any]:
-        template_val = self._settings.ai_interview_ten_property_template
-        if not template_val:
-            template_path = self._to_local_path(str(self._agent_dir() / "property.json"))
-        else:
-            template_path = self._to_local_path(template_val)
-
-        if not template_path.exists():
-            raise InvalidConnectorConfigError(f"TEN property template not found: {template_path}")
-        return json.loads(template_path.read_text(encoding="utf-8"))
-
-    def _to_local_path(self, path_str: str) -> Path:
-        """Translate WSL path to local Windows path if running on Windows."""
-        if os.name == "nt" and path_str.startswith("/mnt/"):
-            # /mnt/d/path -> D:\path
-            drive = path_str[5].upper()
-            return Path(f"{drive}:") / path_str[7:].replace("/", "\\")
-        return Path(path_str)
-
-    def _to_wsl_path(self, path_str: str) -> str:
-        """Translate Windows path to WSL path if running on Windows."""
-        if os.name == "nt":
-            path_obj = Path(path_str).resolve()
-            if path_obj.drive:
-                # D:\path -> /mnt/d/path
-                drive = path_obj.drive.replace(":", "").lower()
-                posix_path = path_obj.as_posix()
-                return f"/mnt/{drive}{posix_path[len(path_obj.drive):]}"
-        return path_str
-
-    def _agent_dir(self) -> Path:
-        if self._settings.ai_interview_ten_agent_dir:
-            return Path(self._settings.ai_interview_ten_agent_dir).expanduser().resolve()
+            return self._resolve_runtime_path(self._settings.ai_interview_ten_agent_dir)
         return (PROJECT_ROOT / "ten_agent").resolve()
 
     def _session_dir(self) -> Path:
         if self._settings.ai_interview_ten_session_dir:
-            return Path(self._settings.ai_interview_ten_session_dir).expanduser().resolve()
+            return self._resolve_runtime_path(self._settings.ai_interview_ten_session_dir)
         return self._agent_dir() / ".ten_sessions"
 
     def _launch_command(self, property_file: str) -> str:

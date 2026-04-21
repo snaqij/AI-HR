@@ -4562,4 +4562,4 @@ AI-HR/ten_agent/ten_packages/system
 # node / python / build
 node_modules/
 dist/
-build/!/AI-HR/ten_agent/ten_packages/
+build/!/AI-HR/ten_agent/ten_packages/!/boss-cli-main/

@@ -28,17 +28,6 @@ class ProviderHealthService:
         provider = self._settings.rtc_provider
         if provider == "mock":
             return self._ok(provider, extra={"mode": "mock"})
-        if provider == "livekit":
-            reasons = []
-            if not self._settings.livekit_base_url:
-                reasons.append("livekit_base_url_missing")
-            if not self._settings.livekit_api_key:
-                reasons.append("livekit_api_key_missing")
-            if not self._settings.livekit_api_secret:
-                reasons.append("livekit_api_secret_missing")
-            if reasons:
-                return self._error(provider, reasons=reasons)
-            return self._ok(provider, extra={"mode": "livekit", "endpoint": self._normalize_url(self._settings.livekit_base_url)})
         if provider == "agora":
             reasons = []
             if not self._settings.agora_app_id:

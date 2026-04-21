@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ from .ai_resume import AIResumeService, get_ai_resume_service
 from .jobs import JobService, get_job_service
 from .recruitment_automation import get_recruitment_automation_service
 from .credentials import get_credential_service
+
+logger = logging.getLogger(__name__)
 
 
 class JobSyncService:
@@ -219,7 +222,7 @@ class JobSyncService:
                 )
                 results.append(res)
             except Exception as e:
-                print(f"Global job sync failed for {channel}: {e}")
+                logger.exception("job_sync.global_sync.failed channel=%s", channel)
         return results
 
     def _maybe_sync_resume_access(

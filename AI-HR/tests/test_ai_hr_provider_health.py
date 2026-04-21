@@ -11,5 +11,5 @@ def test_provider_health_endpoint_should_return_all_domains() -> None:
     assert resp.status_code == 200
     payload = resp.json()["data"]
     assert set(payload.keys()) == {"rtc", "llm", "asr", "tts"}
-    assert payload["rtc"]["provider"] in {"mock", "livekit"}
+    assert payload["rtc"]["provider"] in {"mock", "agora"}
     assert "circuit" in payload["rtc"]

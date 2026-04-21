@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
-
 from ...core.responses import Envelope
 from ...core.security import require_ai_interview_auth, require_ai_interview_ws_auth
 from ...db.session import get_db_session
@@ -528,7 +527,7 @@ async def ws_ai_interview_duplex(
     
     service = get_ai_interview_service(session)
     await websocket.accept()
-    print(f"DEBUG [WS Open] Session: {session_id}")
+    logger.info("ai_interview.ws.duplex_open trace_id=%s session_id=%s", session_id, session_id)
     await websocket.send_json({"type": "duplex.connected", "session_id": session_id})
     
     # CRITICAL: Bind the event bus to the current running loop for async distribution
@@ -653,21 +652,19 @@ async def ws_ai_interview_duplex(
                 break
 
     async def _listen_event_bus():
-        nonlocal interrupt_generation, candidate_last_spoken_at
+        nonlocal interrupt_generation, candidate_last_spoken_at, active_generation_id, pending_finalize_task
         try:
             while not websocket_closed:
                 try:
                     event = await asyncio.wait_for(event_sub.queue.get(), timeout=1.0)
-                    # if event.get("event_type") != "tts.packet":
-                    #     print(f"DEBUG [EventBus] Received event type={event.get('event_type')} for session={session_id}")
+
                     if event.get("event_type") == "asr.turn":
                         candidate_last_spoken_at = time.perf_counter()
-                        # Increment generation ID immediately on any new user speech
-                        # This will invalidate any currently running LLM tasks
+
                         active_generation_id += 1
                         local_gen_id = active_generation_id
-                        
-                        # Cancel any pending debounced finalization
+
+
                         if pending_finalize_task and not pending_finalize_task.done():
                             pending_finalize_task.cancel()
                         
@@ -725,7 +722,11 @@ async def ws_ai_interview_duplex(
                                                 return res
                                         except Exception as bridge_exc:
                                             if not isinstance(bridge_exc, asyncio.CancelledError):
-                                                print(f"DEBUG [Bridge Thread ERROR] session={session_id}: {bridge_exc}")
+                                                logger.exception(
+                                                    "ai_interview.ws.bridge_thread_error trace_id=%s session_id=%s",
+                                                    session_id,
+                                                    session_id,
+                                                )
                                     
                                     # Run the actual trigger
                                     await asyncio.to_thread(_trigger_append)
@@ -770,6 +771,7 @@ async def ws_ai_interview_duplex(
 
     async def _dispatch_packets_session():
         """Route handler."""
+        nonlocal interrupt_generation
         packet_index = 0
         prev_sent_at: float | None = None
         coalesce_bytes = bytearray()

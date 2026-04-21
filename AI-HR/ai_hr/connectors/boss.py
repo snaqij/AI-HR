@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 import os
 import uuid
@@ -15,6 +16,8 @@ from urllib.parse import unquote
 
 from ..core.exceptions import ConnectorOperationError, InvalidConnectorConfigError, CredentialsExpiredError
 from .base import ConnectorCredentials, PublishJobResult, SyncJobStatusResult
+
+logger = logging.getLogger(__name__)
 
 
 class BossConnector:
@@ -347,7 +350,7 @@ class BossConnector:
             }
 
         # --- 第 1 步：解锁并回复投递意向 (block/v2) ---
-        print(f"[boss_connector] Step 1: Triggering block/v2 for recruitment action...", flush=True)
+        logger.info("boss_connector.send_message.step1_unblock_start target_id=%s job_id=%s", target_id, job_id or "")
         unblock_path = "/wapi/zpblock/chat/reply/block/v2"
         unblock_payload = {
             "securityId": target_id,
@@ -366,17 +369,25 @@ class BossConnector:
                 method="POST",
                 is_json=True
             )
-            print(f"[boss_connector] Step 1 Response: {unblock_resp.get('message', 'Success')}", flush=True)
+            logger.info(
+                "boss_connector.send_message.step1_unblock_done target_id=%s message=%s",
+                target_id,
+                unblock_resp.get("message", "Success"),
+            )
         except Exception as e:
             # 特别处理 121 报错，告知用户这通常是因为重复解锁
-            print(f"[boss_connector] Step 1 Unblock logic skipped (possibly already unblocked): {e}", flush=True)
+            logger.warning(
+                "boss_connector.send_message.step1_unblock_skipped target_id=%s error=%s",
+                target_id,
+                e,
+            )
 
         # --- 第 2 步：核心投递 (send.json) ---
         # 如果有 UID，这一步是产生 App 聊天记录的关键
         if not numeric_uid:
-            print("[boss_connector] Warning: No numeric_uid provided, Step 2 might fail for new candidates.", flush=True)
+            logger.warning("boss_connector.send_message.step2_missing_numeric_uid target_id=%s", target_id)
 
-        print(f"[boss_connector] Step 2: Sending direct chat message via send.json to UID {numeric_uid}...", flush=True)
+        logger.info("boss_connector.send_message.step2_send_start target_id=%s numeric_uid=%s", target_id, numeric_uid)
         send_path = "/wapi/zpchat/conversation/send.json"
         
         send_payload = {
@@ -393,7 +404,7 @@ class BossConnector:
             is_json=True
         )
         
-        print(f"[boss_connector] Step 2 Response: {json.dumps(response_payload)}", flush=True)
+        logger.info("boss_connector.send_message.step2_send_done target_id=%s", target_id)
 
         return {
             "status": "sent",

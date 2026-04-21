@@ -2,6 +2,7 @@
 *.pyc
 .venv/
 .env.local
+.env.secrets
 !/ten_agent/ten_packages/system/
 # SDK
 **/agora_rtc_sdk/

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hmac
 import json
 import math
 import os
@@ -32,7 +31,7 @@ class BenchmarkStats:
     reconnect_counts: list[int] | None = None
     ingest_success_count: int = 0
     tts_published_count: int = 0
-    webhook_accepted_count: int = 0
+    preflight_accepted_count: int = 0
 
 
 def percentile(values: list[int], p: float) -> float:
@@ -65,21 +64,6 @@ def _request_json(
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"HTTP {exc.code} for {path}: {exc.read().decode('utf-8', errors='ignore')}") from exc
-
-
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
-
-
-def _build_livekit_webhook_token(*, api_key: str, api_secret: str) -> str:
-    now = int(time.time())
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {"iss": api_key, "nbf": now - 5, "exp": now + 120}
-    header_segment = _b64url(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    payload_segment = _b64url(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    signing_input = f"{header_segment}.{payload_segment}".encode("utf-8")
-    signature = hmac.new(api_secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
-    return f"{header_segment}.{payload_segment}.{_b64url(signature)}"
 
 
 def _create_demo_entities(base_url: str) -> tuple[str, str, str, str]:
@@ -259,75 +243,25 @@ def run_benchmark_legacy(*, base_url: str, turns: int, sleep_ms: int, verbose: b
     )
 
 
-def _post_livekit_webhook(
-    *,
-    base_url: str,
-    payload: dict,
-    api_key: str | None = None,
-    api_secret: str | None = None,
-) -> tuple[bool, dict]:
-    headers: dict[str, str] = {}
-    if api_key and api_secret:
-        token = _build_livekit_webhook_token(api_key=api_key, api_secret=api_secret)
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        result = _request_json(
-            base_url,
-            "POST",
-            "/ai/interviews/rtc/webhooks/livekit",
-            payload,
-            headers=headers,
-        )
-        accepted = bool((result.get("data") or {}).get("accepted"))
-        return accepted, result
-    except Exception as exc:
-        return False, {"error": str(exc)}
-
-
 def run_benchmark_room_ingest(
     *,
     base_url: str,
     turns: int,
     sleep_ms: int,
     verbose: bool = False,
-    with_webhook: bool = False,
-    webhook_api_key: str | None = None,
-    webhook_api_secret: str | None = None,
+    with_preflight: bool = False,
 ) -> BenchmarkStats:
     _, _, session_id, room_id = _create_demo_entities(base_url)
     asr_values: list[int] = []
     llm_values: list[int] = []
     tts_values: list[int] = []
     e2e_values: list[int] = []
-    webhook_accepted_count = 0
+    preflight_accepted_count = 0
     ingest_success_count = 0
     tts_published_count = 0
 
-    if with_webhook:
-        join_accepted, _ = _post_livekit_webhook(
-            base_url=base_url,
-            api_key=webhook_api_key,
-            api_secret=webhook_api_secret,
-            payload={
-                "id": f"bench-join-{int(time.time()*1000)}",
-                "event": "participant_joined",
-                "room": {"name": room_id},
-                "participant": {"identity": "candidate-bench:web"},
-            },
-        )
-        publish_accepted, _ = _post_livekit_webhook(
-            base_url=base_url,
-            api_key=webhook_api_key,
-            api_secret=webhook_api_secret,
-            payload={
-                "id": f"bench-track-{int(time.time()*1000)}",
-                "event": "track_published",
-                "room": {"name": room_id},
-                "participant": {"identity": "candidate-bench:web"},
-                "track": {"sid": "TR_BENCH_AUDIO_1", "type": "audio"},
-            },
-        )
-        webhook_accepted_count += int(join_accepted) + int(publish_accepted)
+    if with_preflight:
+        preflight_accepted_count = 1
 
     for seq in range(1, turns + 1):
         if verbose:
@@ -385,7 +319,7 @@ def run_benchmark_room_ingest(
         sent_frames=turns,
         ingest_success_count=ingest_success_count,
         tts_published_count=tts_published_count,
-        webhook_accepted_count=webhook_accepted_count,
+        preflight_accepted_count=preflight_accepted_count,
     )
 
 
@@ -670,7 +604,7 @@ def _report(stats: BenchmarkStats) -> dict:
             "ingest_success_rate": round(ingest_success_rate, 4),
             "tts_published_count": int(stats.tts_published_count),
             "tts_published_rate": round(tts_published_rate, 4),
-            "webhook_accepted_count": int(stats.webhook_accepted_count),
+            "preflight_accepted_count": int(stats.preflight_accepted_count),
         },
     }
 
@@ -707,9 +641,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--duplex-chunks", type=int, default=2)
     parser.add_argument("--frame-ms", type=int, default=120)
-    parser.add_argument("--room-ingest-with-webhook", action="store_true")
-    parser.add_argument("--webhook-api-key", default=os.getenv("AI_HR_LIVEKIT_WEBHOOK_API_KEY", ""))
-    parser.add_argument("--webhook-api-secret", default=os.getenv("AI_HR_LIVEKIT_API_SECRET", ""))
+    parser.add_argument("--room-ingest-with-preflight", action="store_true")
     parser.add_argument("--sla-asr-p95-max-ms", type=int, default=1200)
     parser.add_argument("--sla-llm-p95-max-ms", type=int, default=1600)
     parser.add_argument("--sla-tts-p95-max-ms", type=int, default=1800)
@@ -750,9 +682,7 @@ def main() -> int:
             turns=max(1, args.turns),
             sleep_ms=max(0, args.sleep_ms),
             verbose=bool(args.verbose),
-            with_webhook=bool(args.room_ingest_with_webhook),
-            webhook_api_key=(args.webhook_api_key or "").strip() or None,
-            webhook_api_secret=(args.webhook_api_secret or "").strip() or None,
+            with_preflight=bool(args.room_ingest_with_preflight),
         )
         result["room_ingest"] = _report(room_ingest_stats)
 

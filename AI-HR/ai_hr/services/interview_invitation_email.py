@@ -1,4 +1,4 @@
-"""Interview invitation email delivery services."""
+﻿"""Interview invitation email delivery services."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from ..schemas.interview_invitation_email import (
     InterviewAIAnalysis,
     InterviewInvitationHistoryItem,
     InterviewInvitationHistoryResult,
+    InterviewOpeningSegmentItem,
     InterviewInvitationRecordDetailResult,
     InterviewQuestionAnswerItem,
 )
@@ -82,15 +83,15 @@ class InterviewInvitationEmailService:
         if not candidate_email:
             raise InvalidStateError(f"Candidate '{candidate.id}' has no email address for invitation delivery")
 
-        # 1. 幂等性检查：防止重复发送
+        # 1) 幂等性检查：避免重复发送邀请邮件
         existing_delivery = self._email_delivery_repository.list_by_job(
             job_id=job.id,
             candidate_id=candidate.id,
             limit=1
         )
         if existing_delivery and any(d.status in {"sent", "delivered"} for d in existing_delivery):
-             # 如果该候选人在该岗位下已经成功发送过邀请，则跳过
-             return {
+            # 该候选人在该岗位下已成功发送过邀请，直接跳过
+            return {
                 "candidate_id": candidate.id,
                 "job_id": job.id,
                 "status": "skipped",
@@ -109,7 +110,6 @@ class InterviewInvitationEmailService:
             request_payload={"template_code": template_code or self._settings.ai_auto_invitation_template_code},
         )
         try:
-            # 默认优先使用高端版模板
             target_template_code = template_code or "interview_invitation_premium"
             
             ai_interview_service = get_ai_interview_service(self._session)
@@ -306,12 +306,16 @@ class InterviewInvitationEmailService:
 
         invitation = self._invitation_repository.get_by_id(delivery.invitation_id)
         question_set = self._interview_session_repository.get_latest_question_set(invitation_id=invitation.id)
+        raw_questions = question_set.questions_json if question_set and question_set.questions_json else []
+        questions_payload = raw_questions if isinstance(raw_questions, list) else []
+        opening_from_questions, remaining_questions = self._split_opening_questions(questions_payload)
 
         session_id = question_set.session_id if question_set and question_set.session_id else None
         if session_id is None:
             detail.record_message = "候选人尚未开始面试。"
+            detail.opening_segments = opening_from_questions
             detail.questions = self._build_question_answers(
-                questions=question_set.questions_json if question_set else [],
+                questions=remaining_questions,
                 candidate_turns=[],
             )
             return detail
@@ -324,10 +328,13 @@ class InterviewInvitationEmailService:
             if str(turn.speaker).lower() == "candidate" and (turn.transcript or "").strip()
         ]
         report = self._interview_session_repository.get_latest_report(session_id)
+        opening_from_turns, consumed_turn_nos = self._build_opening_segments(candidate_turns=candidate_turns)
+        detail.opening_segments = opening_from_turns or opening_from_questions
+        question_turns = [turn for turn in candidate_turns if int(turn.turn_no) not in consumed_turn_nos]
 
         detail.questions = self._build_question_answers(
-            questions=question_set.questions_json if question_set else [],
-            candidate_turns=candidate_turns,
+            questions=remaining_questions,
+            candidate_turns=question_turns,
         )
         detail.analysis = InterviewAIAnalysis(
             summary=report.summary if report else None,
@@ -335,10 +342,118 @@ class InterviewInvitationEmailService:
             dimension_scores=dict(report.dimension_scores_json or {}) if report else {},
             risk_tags=list(report.risk_tags_json or []) if report else [],
         )
-        detail.has_record = bool(detail.questions or candidate_turns or report)
+        detail.has_record = bool(detail.opening_segments or detail.questions or candidate_turns or report)
         if not detail.has_record:
             detail.record_message = "暂无面试记录。"
         return detail
+
+    def _build_opening_segments(self, *, candidate_turns: list[Any]) -> tuple[list[InterviewOpeningSegmentItem], set[int]]:
+        stage_to_title = {
+            "S1": "自我介绍",
+            "S2": "项目介绍",
+        }
+        stage_turn_map: dict[str, Any] = {}
+        for turn in candidate_turns:
+            stage = str((turn.payload or {}).get("interview_stage") or "").strip().upper()
+            if stage in stage_to_title and stage not in stage_turn_map:
+                stage_turn_map[stage] = turn
+
+        segments: list[InterviewOpeningSegmentItem] = []
+        consumed_turn_nos: set[int] = set()
+        for stage in ("S1", "S2"):
+            turn = stage_turn_map.get(stage)
+            if turn is None:
+                continue
+            turn_no = int(turn.turn_no)
+            consumed_turn_nos.add(turn_no)
+            segments.append(
+                InterviewOpeningSegmentItem(
+                    title=stage_to_title[stage],
+                    candidate_answer=(turn.transcript or "").strip(),
+                    answer_turn_no=turn_no,
+                )
+            )
+
+        if segments:
+            return segments, consumed_turn_nos
+
+        fallback_titles = ("自我介绍", "项目介绍")
+        for idx, turn in enumerate(candidate_turns[:2]):
+            turn_no = int(turn.turn_no)
+            consumed_turn_nos.add(turn_no)
+            segments.append(
+                InterviewOpeningSegmentItem(
+                    title=fallback_titles[idx],
+                    candidate_answer=(turn.transcript or "").strip(),
+                    answer_turn_no=turn_no,
+                )
+            )
+        return segments, consumed_turn_nos
+
+    def _split_opening_questions(
+        self, questions: list[dict[str, Any]]
+    ) -> tuple[list[InterviewOpeningSegmentItem], list[dict[str, Any]]]:
+        opening: list[InterviewOpeningSegmentItem] = []
+        opening_indexes: set[int] = set()
+
+        def _normalize_stage(raw: Any) -> str:
+            return str(raw or "").strip().upper()
+
+        def _is_self_intro_prompt(text: str) -> bool:
+            normalized = text.strip()
+            if not normalized:
+                return False
+            return bool(
+                re.search(r"自我介绍|介绍一下你自己|先做.{0,8}自我介绍", normalized)
+            )
+
+        def _is_project_intro_prompt(text: str) -> bool:
+            normalized = text.strip()
+            if not normalized:
+                return False
+            return bool(
+                re.search(r"项目介绍|介绍一下.{0,8}项目|先讲.{0,8}项目|先介绍.{0,8}项目", normalized)
+            )
+
+        for idx, item in enumerate(questions):
+            stage = _normalize_stage(item.get("stage") or item.get("stage_code"))
+            text = str(
+                item.get("question")
+                or item.get("text")
+                or item.get("title")
+                or item.get("prompt")
+                or ""
+            ).strip()
+            if not text:
+                continue
+            if stage == "S1" and not any(seg.title == "自我介绍" for seg in opening):
+                opening.append(InterviewOpeningSegmentItem(title="自我介绍", candidate_answer=None, answer_turn_no=None))
+                opening_indexes.add(idx)
+                continue
+            if stage == "S2" and not any(seg.title == "项目介绍" for seg in opening):
+                opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
+                opening_indexes.add(idx)
+                continue
+
+        if not any(seg.title == "自我介绍" for seg in opening):
+            for idx, item in enumerate(questions):
+                text = str(item.get("question") or item.get("text") or item.get("title") or item.get("prompt") or "").strip()
+                if _is_self_intro_prompt(text):
+                    opening.append(InterviewOpeningSegmentItem(title="自我介绍", candidate_answer=None, answer_turn_no=None))
+                    opening_indexes.add(idx)
+                    break
+
+        if not any(seg.title == "项目介绍" for seg in opening):
+            for idx, item in enumerate(questions):
+                text = str(item.get("question") or item.get("text") or item.get("title") or item.get("prompt") or "").strip()
+                if _is_project_intro_prompt(text):
+                    opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
+                    opening_indexes.add(idx)
+                    break
+
+        opening.sort(key=lambda seg: 0 if seg.title == "自我介绍" else 1)
+        remaining = [item for idx, item in enumerate(questions) if idx not in opening_indexes]
+        return opening, remaining
 
     def _build_question_answers(self, *, questions: list[dict[str, Any]], candidate_turns: list[Any]) -> list[InterviewQuestionAnswerItem]:
         question_items: list[InterviewQuestionAnswerItem] = []
@@ -420,7 +535,7 @@ class InterviewInvitationEmailService:
             }
         except ResourceNotFoundError:
             return {
-                "subject_template": "【面试邀请】诚邀您参加${job_title}岗位面试",
+                "subject_template": "【面试邀请】诚邀您参加 ${job_title} 岗位面试",
                 "html_template": (
                     "<p>${candidate_name}，您好：</p>"
                     "<p>感谢您关注 ${job_title} 岗位。结合您的简历评估结果，我们诚邀您进入面试环节。</p>"
@@ -430,7 +545,7 @@ class InterviewInvitationEmailService:
                 ),
                 "text_template": (
                     "${candidate_name}，您好：\n"
-                    "感谢您关注${job_title}岗位。结合您的简历评估结果，我们诚邀您进入面试环节。\n"
+                    "感谢您关注 ${job_title} 岗位。结合您的简历评估结果，我们诚邀您进入面试环节。\n"
                     "请通过以下链接开始面试：${interview_link}\n"
                     "链接有效期至：${expire_at}\n"
                     "如有问题，请联系：${contact_email}"
@@ -487,7 +602,7 @@ class InterviewInvitationEmailService:
         return None
 
     def _looks_like_email(self, value: str) -> bool:
-        """校验邮箱格式。"""
+        """Validate basic email format."""
         if not value:
             return False
         pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
@@ -524,3 +639,5 @@ def get_interview_invitation_email_service(session: Session) -> InterviewInvitat
     """Return an invitation email service bound to the current session."""
 
     return InterviewInvitationEmailService(session)
+
+

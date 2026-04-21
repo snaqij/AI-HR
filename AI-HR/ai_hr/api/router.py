@@ -4,8 +4,8 @@ from fastapi import APIRouter
 
 from .routes import (
     ai,
+    agent_ops,
     ai_interview_invitations,
-    ai_interview_webhooks,
     ai_interviews,
     ai_runtime,
     analytics,
@@ -22,9 +22,9 @@ api_router.include_router(jobs.router)
 api_router.include_router(candidates.router)
 api_router.include_router(conversations.router)
 api_router.include_router(ai.router)
+api_router.include_router(agent_ops.router)
 api_router.include_router(ai_interviews.router)
 api_router.include_router(ai_interview_invitations.router)
-api_router.include_router(ai_interview_webhooks.router)
 api_router.include_router(ai_runtime.router)
 api_router.include_router(analytics.router)
 api_router.include_router(interviews.router)

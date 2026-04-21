@@ -2,6 +2,7 @@
 
 Usage:
   python scripts/generate_interview_invite.py
+  python scripts/generate_interview_invite.py --no-send-email
   python scripts/generate_interview_invite.py --open --activate
   python scripts/generate_interview_invite.py --resume data/sample.pdf --api-base http://127.0.0.1:8000/api/v1
 """
@@ -16,6 +17,7 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -73,18 +75,41 @@ def _pick_resume_file(data_dir: Path) -> Path:
 
 
 def _api_post(
-    client: httpx.Client,
-    path: str,
-    payload: dict[str, Any],
-    *,
-    timeout: float | None = None,
+        client: httpx.Client,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     print(f"[invite] POST {path} ...")
     resp = client.post(path, json=payload, timeout=timeout)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     print(f"[invite] POST {path} done status={resp.status_code} cost_ms={elapsed_ms}")
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        body_text = (resp.text or "").strip()
+        raise RuntimeError(f"HTTP {resp.status_code} on POST {path}: {body_text}")
+    body = resp.json()
+    if not body.get("ok"):
+        err = body.get("error") or {}
+        raise RuntimeError(f"API error on {path}: {err.get('code')} {err.get('message')}")
+    return body["data"]
+
+
+def _api_get(
+        client: httpx.Client,
+        path: str,
+        *,
+        timeout: float | None = None,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    print(f"[invite] GET {path} ...")
+    resp = client.get(path, timeout=timeout)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    print(f"[invite] GET {path} done status={resp.status_code} cost_ms={elapsed_ms}")
+    if resp.status_code >= 400:
+        body_text = (resp.text or "").strip()
+        raise RuntimeError(f"HTTP {resp.status_code} on GET {path}: {body_text}")
     body = resp.json()
     if not body.get("ok"):
         err = body.get("error") or {}
@@ -107,6 +132,21 @@ def main() -> int:
     parser.add_argument("--resume", default="", help="Optional resume path. Default: auto-pick from data/.")
     parser.add_argument("--open", action="store_true", help="Open invitation URL in browser.")
     parser.add_argument("--activate", action="store_true", help="Activate invitation and print session join URL.")
+    parser.add_argument(
+        "--send-email",
+        dest="send_email",
+        action="store_true",
+        default=True,
+        help="Send invitation via email (evaluate candidate first). Enabled by default.",
+    )
+    parser.add_argument(
+        "--no-send-email",
+        dest="send_email",
+        action="store_false",
+        help="Disable email sending and only create invitation link.",
+    )
+    parser.add_argument("--candidate-email", default="jiujingz@126.com", help="Candidate email used for invitation delivery.")
+    parser.add_argument("--template-code", default="", help="Optional email template code for invitation.")
     parser.add_argument("--timeout", type=float, default=600.0, help="Default HTTP timeout seconds.")
     parser.add_argument(
         "--invitation-timeout",
@@ -122,7 +162,7 @@ def main() -> int:
     print(f"[invite] frontend_base={args.frontend_base}")
     print(
         f"[invite] timeout={args.timeout}s invitation_timeout={args.invitation_timeout}s "
-        f"activate={args.activate} open={args.open}"
+        f"activate={args.activate} open={args.open} send_email={args.send_email}"
     )
 
     if args.resume:
@@ -163,10 +203,12 @@ def main() -> int:
                 "name": candidate_name,
                 "source_channel": "local_script",
                 "external_candidate_id": candidate_external_id,
+                "email": (args.candidate_email or "").strip() or None,
                 "resume_text": resume_text[:20000],
                 "raw_profile": {
                     "from_script": "generate_interview_invite",
                     "resume_file": resume_path.name,
+                    "email": (args.candidate_email or "").strip() or None,
                 },
             }
         ]
@@ -194,30 +236,98 @@ def main() -> int:
         if not candidate:
             raise RuntimeError("Candidate import returned empty candidates.")
 
-        print("[invite] step=create_invitation")
-        invitation = _api_post(
-            client,
-            "/ai-interviews/invitations",
-            {
-                "candidate_id": candidate["id"],
-                "job_id": job["id"],
-                "note": f"resume={resume_path.name}",
-            },
-            timeout=args.invitation_timeout,
-        )
+        invitation: dict[str, Any] | None = None
+        token = ""
+        invite_url = ""
 
-        token = invitation["token"]
-        invite_url = f"{args.frontend_base.rstrip('/')}/interview/invitation/{token}"
+        if args.send_email:
+            candidate_email = (args.candidate_email or "").strip()
+            if not candidate_email:
+                raise RuntimeError("--send-email requires --candidate-email")
+
+            print("[invite] step=link_candidate_to_job")
+            _api_post(
+                client,
+                f"/jobs/{job['id']}/candidates/{candidate['id']}/link",
+                {},
+                timeout=args.invitation_timeout,
+            )
+
+            evaluation_id: str | None = None
+            print("[invite] step=evaluate_candidate")
+            try:
+                eval_result = _api_post(
+                    client,
+                    f"/jobs/{job['id']}/candidates/{candidate['id']}/evaluate",
+                    {
+                        "evaluation_version": "v1",
+                        "force_refresh": False,
+                    },
+                    timeout=args.invitation_timeout,
+                )
+                evaluation_id = str((((eval_result or {}).get("evaluation") or {}).get("id") or "")).strip() or None
+            except Exception as exc:  # noqa: BLE001
+                print(f"[invite][warn] evaluate failed, will try latest evaluation fallback: {exc}")
+                try:
+                    latest_eval = _api_get(
+                        client,
+                        f"/jobs/{job['id']}/candidates/{candidate['id']}/evaluation-latest",
+                        timeout=args.invitation_timeout,
+                    )
+                    evaluation_id = str((((latest_eval or {}).get("evaluation") or {}).get("id") or "")).strip() or None
+                    if evaluation_id:
+                        print(f"[invite] fallback latest evaluation_id={evaluation_id}")
+                except Exception as latest_exc:  # noqa: BLE001
+                    print(f"[invite][warn] latest evaluation fallback failed: {latest_exc}")
+
+            print("[invite] step=send_invite_email")
+            email_result = _api_post(
+                client,
+                f"/jobs/{job['id']}/candidates/{candidate['id']}/invite-email",
+                {
+                    "evaluation_id": evaluation_id,
+                    "template_code": (args.template_code or "").strip() or None,
+                    "note": f"resume={resume_path.name}",
+                },
+                timeout=args.invitation_timeout,
+            )
+
+            invite_url = str(email_result.get("invitation_link") or "").strip()
+            if not invite_url:
+                raise RuntimeError("invite-email succeeded but invitation_link is empty")
+            path_parts = [p for p in urlparse(invite_url).path.split("/") if p]
+            if path_parts and path_parts[-2:] and len(path_parts) >= 2 and path_parts[-2] == "invitation":
+                token = path_parts[-1]
+            print(f"[invite] email_delivery_id={email_result.get('delivery_id')}")
+            print(f"[invite] email_status={email_result.get('status')}")
+            print(f"[invite] invitation_id={email_result.get('invitation_id')}")
+        else:
+            print("[invite] step=create_invitation")
+            invitation = _api_post(
+                client,
+                "/ai-interviews/invitations",
+                {
+                    "candidate_id": candidate["id"],
+                    "job_id": job["id"],
+                    "note": f"resume={resume_path.name}",
+                },
+                timeout=args.invitation_timeout,
+            )
+            token = invitation["token"]
+            invite_url = f"{args.frontend_base.rstrip('/')}/interview/invitation/{token}"
 
         print("=== Interview Invitation Generated ===")
         print(f"resume_file: {resume_path}")
         print(f"job_id: {job['id']}")
         print(f"candidate_id: {candidate['id']}")
-        print(f"invitation_id: {invitation['id']}")
-        print(f"invitation_token: {token}")
+        if invitation:
+            print(f"invitation_id: {invitation['id']}")
+        print(f"invitation_token: {token or '<not-parsed>'}")
         print(f"invite_url: {invite_url}")
 
         if args.activate:
+            if not token:
+                raise RuntimeError("Cannot activate invitation because token was not parsed from invitation_link")
             print("[invite] step=activate_invitation")
             activated = _api_post(client, f"/ai-interviews/invitations/token/{token}/activate", {})
             session_id = activated.get("id")

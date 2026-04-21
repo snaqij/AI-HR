@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { AgoraRTCGateway } from "../../agoraGateway";
 import {
@@ -28,7 +28,11 @@ interface TimelineItem {
   kind?: "confirmed" | "draft_fallback";
 }
 
-const TRANSCRIPT_MERGE_WINDOW_SECONDS = 12;
+interface AppendTranscriptOptions {
+  forceSeparate?: boolean;
+}
+
+const TRANSCRIPT_MERGE_WINDOW_SECONDS = 8;
 const CANDIDATE_DRAFT_FALLBACK_MS = 1800;
 const RTC_CLIENT_ID = "web";
 
@@ -43,6 +47,7 @@ const micEnabled = ref(true);
 const cameraEnabled = ref(true);
 const showSettingsHint = ref(false);
 const interviewerSpeaking = ref(false);
+const interviewEnded = ref(false);
 const candidateVideoMount = ref<HTMLElement | null>(null);
 const transcriptScrollRef = ref<HTMLElement | null>(null);
 const canScrollTranscriptUp = ref(false);
@@ -51,8 +56,8 @@ const isTranscriptPinnedToLatest = ref(true);
 const session = ref<InterviewSession | null>(null);
 const sessionId = computed(() => session.value?.id || "");
 
-const micStatus = ref("等待初始化");
-const ttsStatus = ref("等待面试官接入");
+const micStatus = ref("等待麦克风连接...");
+const ttsStatus = ref("等待面试官语音...");
 const currentQuestion = ref("正在准备面试链路...");
 const followupQuestion = ref("");
 const transportStatus = ref("未连接");
@@ -70,17 +75,22 @@ let tickerTimer: number | null = null;
 let candidateDraftFallbackTimer: number | null = null;
 let eventsSocket: WebSocket | null = null;
 
-const roleTitle = computed(() => "后端开发工程师面试");
-const sessionLabel = computed(() => (loading.value ? "正在建立链路" : "实时技术面试"));
+const roleTitle = computed(() => "后端工程师面试");
+const sessionLabel = computed(() => {
+  if (loading.value) return "连接中";
+  if (exiting.value) return "结束中";
+  if (interviewEnded.value) return "已结束";
+  return "实时面试";
+});
 const networkTone = computed(() => {
   const status = transportStatus.value;
-  if (status.includes("已连接")) {
+  if (status.includes("Connected")) {
     return { text: "网络优秀", state: "good" };
   }
-  if (status.includes("连接中") || status.includes("重连中") || status.includes("接入")) {
+  if (status.includes("connecting") || status.includes("reconnecting") || status.includes("connected") || status.includes("??")) {
     return { text: "连接中", state: "pending" };
   }
-  if (status.includes("异常") || status.includes("断开") || status.includes("失败")) {
+  if (status.includes("failed") || status.includes("disconnected") || status.includes("abnormal")) {
     return { text: "连接异常", state: "bad" };
   }
   return { text: "等待连接", state: "idle" };
@@ -88,13 +98,13 @@ const networkTone = computed(() => {
 
 const interviewerBannerText = computed(() => {
   if (interviewerSpeaking.value) {
-    return "面试官正在发问";
+    return "面试官正在发言";
   }
-  if (ttsStatus.value.includes("播报")) {
-    return "面试官正在发问";
+  if (ttsStatus.value.includes("speaking") || ttsStatus.value.includes("playing")) {
+    return "面试官正在发言";
   }
-  if (ttsStatus.value.includes("等待") || ttsStatus.value.includes("就绪")) {
-    return "面试官正在聆听";
+  if (ttsStatus.value.includes("waiting") || ttsStatus.value.includes("ready") || ttsStatus.value.includes("listening")) {
+    return "面试官正在倾听";
   }
   return ttsStatus.value;
 });
@@ -114,9 +124,9 @@ const rtcGateway = new AgoraRTCGateway({
   onRemoteAudioSpeakingChanged(speaking) {
     interviewerSpeaking.value = speaking;
     if (speaking) {
-      ttsStatus.value = "面试官正在发问";
-    } else if (ttsStatus.value.includes("播报") || ttsStatus.value.includes("音频")) {
-      ttsStatus.value = "面试官正在聆听";
+      ttsStatus.value = "面试官正在发言";
+    } else if (ttsStatus.value.includes("speaking") || ttsStatus.value.includes("audio")) {
+      ttsStatus.value = "面试官正在倾听";
     }
   },
   onConnectionStateChanged(state, reason) {
@@ -151,8 +161,8 @@ const rtcGateway = new AgoraRTCGateway({
     });
   },
   onRemoteAudioPlaybackError(message) {
-    ttsStatus.value = "面试官音频待浏览器放行";
-    audioRecoveryHint.value = message || "浏览器阻止了自动播报，请点击“开启声音”后重试。";
+    ttsStatus.value = "远端音频需要用户交互";
+    audioRecoveryHint.value = message || "浏览器阻止了自动播放，请点击启用音频后重试。";
   }
 });
 
@@ -181,7 +191,7 @@ function formatTransportStatus(state?: string | null, reason?: string | null): s
     case "FAILED": stateText = "Agora 连接失败"; break;
     default: if (state) stateText = `Agora 状态：${state}`;
   }
-  return reasonText ? `${stateText}（${reasonText}）` : stateText;
+  return reasonText ? `${stateText} (${reasonText})` : stateText;
 }
 
 function isLikelyTokenIssueReason(reason?: string | null): boolean {
@@ -234,12 +244,11 @@ async function recoverRtcConnection(options: { trigger: string; forceReconnect: 
     }
     rtcFailureRecoverAttempts.value = 0;
     errorText.value = "";
-    transportStatus.value = canRenewInPlace ? "Agora token 已自动续签" : "Agora 已自动重连";
+    transportStatus.value = canRenewInPlace ? "Agora Token 已自动续期" : "Agora 已自动重连";
     console.info("[RTC] recovery succeeded", { trigger: options.trigger, mode: canRenewInPlace ? "renew" : "reconnect" });
   } catch (err: any) {
-    rtcFailureRecoverAttempts.value += 1;
     const message = err?.message || "RTC token refresh failed";
-    errorText.value = `RTC 自动恢复失败(${rtcFailureRecoverAttempts.value}): ${message}`;
+    errorText.value = `RTC 自动恢复失败（${rtcFailureRecoverAttempts.value}）：${message}`;
     console.error("[RTC] recovery failed", { trigger: options.trigger, expectedTokenIssue: options.expectedTokenIssue, err });
   } finally {
     rtcRecoveryInFlight.value = false;
@@ -276,9 +285,16 @@ function resolveTimelineSecond(input?: string | null): number {
 
 function normalizeSpeaker(raw?: string | null): string {
   const value = String(raw || "").trim();
+  const lower = value.toLowerCase();
   if (!value) return "候选人";
-  if (value.includes("assistant") || value.includes("agent") || value.includes("interviewer") || value.includes("面试官")) return "面试官";
-  if (value.includes("system") || value.includes("系统")) return "系统";
+  if (
+    lower.includes("assistant") ||
+    lower.includes("agent") ||
+    lower.includes("interviewer") ||
+    value.includes("面试官")
+  ) return "面试官";
+  if (lower.includes("system") || value.includes("系统")) return "系统";
+  if (value.includes("候选人")) return "候选人";
   return "候选人";
 }
 
@@ -331,10 +347,12 @@ function appendTranscript(
   transcript: string,
   speaker = "候选人",
   occurredAt?: string,
-  kind: TimelineItem["kind"] = "confirmed"
+  kind: TimelineItem["kind"] = "confirmed",
+  options: AppendTranscriptOptions = {}
 ): void {
   const text = transcript.trim();
   if (!text) return;
+  const forceSeparate = Boolean(options.forceSeparate);
   const normalizedSpeaker = normalizeSpeaker(speaker);
   const timelineSecond = resolveTimelineSecond(occurredAt);
   const lastItem = transcriptView.value[transcriptView.value.length - 1];
@@ -351,10 +369,13 @@ function appendTranscript(
     ];
     return;
   }
-  if (lastItem && lastItem.speaker === normalizedSpeaker && timelineSecond - lastItem.endSecond <= TRANSCRIPT_MERGE_WINDOW_SECONDS) {
+  if (!forceSeparate && lastItem && lastItem.speaker === normalizedSpeaker && timelineSecond - lastItem.endSecond <= TRANSCRIPT_MERGE_WINDOW_SECONDS) {
     const isExactDuplicate = lastItem.transcript.trim() === text;
     if (isExactDuplicate) return;
-    const mergedText = [lastItem.transcript, text].filter(Boolean).join("\n");
+    const mergedText = [lastItem.transcript, text]
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+      .join("，");
     transcriptView.value = [...transcriptView.value.slice(0, -1), { ...lastItem, transcript: mergedText, endSecond: Math.max(lastItem.endSecond, timelineSecond), kind }];
     return;
   }
@@ -433,14 +454,14 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
         const isFinal = Boolean(payload.is_final);
         const text = String(payload.transcript || payload.text || "").trim();
         if (!isFinal) {
-            // partial — show as draft
+            // partial - show as draft
             if (text) {
                 candidateDraft.value = text;
                 candidateDraftOccurredAt.value = String(payload.occurred_at || "");
                 scheduleCandidateDraftFallback();
             }
         } else {
-            // final — commit to transcript
+            // final - commit to transcript
             if (text) {
                 clearCandidateDraftFallbackTimer();
                 appendTranscript(text, "候选人", String(payload.occurred_at || ""), "confirmed");
@@ -465,9 +486,9 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
     if (eventType === "agent.state") {
         const state = String(payload.state || "").toLowerCase();
         if (state === "thinking" || state === "speaking") commitCandidateDraftToTranscript("draft_fallback");
-        if (state === "listening") ttsStatus.value = "面试官正在聆听";
+        if (state === "listening") ttsStatus.value = "面试官正在倾听";
         else if (state === "thinking") ttsStatus.value = "面试官正在思考";
-        else if (state === "speaking") ttsStatus.value = "面试官正在发问";
+        else if (state === "speaking") ttsStatus.value = "面试官正在发言";
         return;
     }
     if (eventType === "question.update" || eventType === "question.final") {
@@ -527,7 +548,7 @@ async function toggleMic(): Promise<void> {
     micEnabled.value = next;
     micStatus.value = next ? "候选人音频已接入" : "候选人已静音";
   } catch (err: any) {
-    errorText.value = err?.message || "切换麦克风失败";
+    errorText.value = err?.message || "Failed to toggle microphone";
   }
 }
 
@@ -537,7 +558,7 @@ async function toggleCamera(): Promise<void> {
     await rtcGateway.setCameraEnabled(next);
     cameraEnabled.value = next;
   } catch (err: any) {
-    errorText.value = err?.message || "切换摄像头失败";
+    errorText.value = err?.message || "Failed to toggle camera";
   }
 }
 
@@ -566,8 +587,44 @@ async function bootstrap(): Promise<void> {
   }
 }
 
+function teardownRealtimeConnections(): void {
+  if (tickerTimer) {
+    clearInterval(tickerTimer);
+    tickerTimer = null;
+  }
+  clearCandidateDraftFallbackTimer();
+  eventsSocket?.close();
+  eventsSocket = null;
+  rtcGateway.disconnect();
+}
+
+async function handleEndInterview(): Promise<void> {
+  if (exiting.value || interviewEnded.value) return;
+  if (!session.value?.id) {
+    teardownRealtimeConnections();
+    interviewEnded.value = true;
+    return;
+  }
+  exiting.value = true;
+  errorText.value = "";
+  try {
+    const latest = await finishInterviewSession(session.value.id, { result_status: "completed" });
+    session.value = latest;
+    interviewEnded.value = true;
+    transportStatus.value = "面试已结束";
+    ttsStatus.value = "面试官已离线";
+    micStatus.value = "会话已关闭";
+    persistSessionSnapshot(null);
+    teardownRealtimeConnections();
+  } catch (err: any) {
+    errorText.value = err?.message || "结束面试失败，请稍后重试";
+  } finally {
+    exiting.value = false;
+  }
+}
+
 onMounted(() => bootstrap());
-onBeforeUnmount(() => { if (tickerTimer) clearInterval(tickerTimer); clearCandidateDraftFallbackTimer(); eventsSocket?.close(); rtcGateway.disconnect(); });
+onBeforeUnmount(() => { teardownRealtimeConnections(); });
 watch([() => transcriptView.value.length, () => candidateDraft.value], () => scrollTranscriptToLatest());
 </script>
 
@@ -575,20 +632,22 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
   <div class="meeting-shell bg-slate-50 h-screen overflow-hidden flex flex-col font-sans">
     <header class="h-16 bg-white border-b px-8 flex items-center justify-between shrink-0">
       <div class="flex items-center gap-4">
-        <span class="font-bold text-slate-900">职位面试中</span>
+        <span class="font-bold text-slate-900">AI 智能面试</span>
         <div class="w-px h-4 bg-slate-200"></div>
         <span class="text-slate-500 text-sm">{{ roleTitle }}</span>
       </div>
       <div class="flex items-center gap-6">
         <div class="flex items-center gap-2 text-slate-500 text-sm">
-          <span>◷</span>
+          <span>⏱</span>
           <span class="font-mono">{{ meetingTimeText }}</span>
         </div>
         <div class="flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-medium">
           <span class="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
-          <span>网络优秀</span>
+          <span>{{ networkTone.text }}</span>
         </div>
-        <button class="px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-bold hover:bg-red-100 transition-colors" @click="exiting = true">退出面试</button>
+        <button class="px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-bold hover:bg-red-100 transition-colors disabled:cursor-not-allowed disabled:opacity-60" :disabled="loading || exiting || interviewEnded" @click="handleEndInterview">
+          {{ exiting ? "结束中..." : interviewEnded ? "已结束" : "结束面试" }}
+        </button>
       </div>
     </header>
 
@@ -610,7 +669,7 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
               :class="micEnabled ? 'bg-black/40 hover:bg-black/55' : 'bg-red-600/85 hover:bg-red-600'"
               :disabled="loading"
               @click="toggleMic"
-              :title="micEnabled ? '关闭麦克风' : '开启麦克风'"
+              :title="micEnabled ? 'Mute microphone' : 'Unmute microphone'"
             >
               <span class="text-xs font-bold">{{ micEnabled ? '麦克风' : '静音' }}</span>
             </button>
@@ -619,9 +678,9 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
               :class="cameraEnabled ? 'bg-black/40 hover:bg-black/55' : 'bg-red-600/85 hover:bg-red-600'"
               :disabled="loading"
               @click="toggleCamera"
-              :title="cameraEnabled ? '关闭视频' : '开启视频'"
+              :title="cameraEnabled ? 'Turn off camera' : 'Turn on camera'"
             >
-              <span class="text-xs font-bold">{{ cameraEnabled ? '视频' : '关闭' }}</span>
+              <span class="text-xs font-bold">{{ cameraEnabled ? '摄像头' : '隐藏视频' }}</span>
             </button>
           </div>
         </div>
@@ -629,7 +688,7 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
 
       <aside class="w-[400px] min-h-0 border-l bg-white flex flex-col shrink-0 overflow-hidden">
         <div class="p-6 border-b flex items-center justify-between">
-          <h2 class="font-bold text-slate-900">会议纪要</h2>
+          <h2 class="font-bold text-slate-900">会话纪要</h2>
           <div class="flex items-center gap-1.5 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded uppercase tracking-wider">
             <span class="w-1 h-1 bg-blue-500 rounded-full"></span>
             <span>{{ sessionLabel }}</span>
@@ -639,7 +698,6 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
         <div class="flex-1 min-h-0 overflow-hidden p-6 flex flex-col gap-8">
           <div class="bg-blue-50/50 rounded-xl p-5 border border-blue-100/50">
              <div class="flex items-center gap-2 mb-3">
-               <span class="text-blue-600 text-lg">?</span>
                <span class="text-sm font-bold text-blue-600 uppercase tracking-widest">当前问题</span>
              </div>
              <p class="text-base font-medium text-slate-900 leading-8">{{ currentQuestion }}</p>
@@ -647,7 +705,6 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
 
           <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
             <div class="flex items-center gap-2 text-slate-400">
-               <span class="text-lg">◌</span>
                <span class="text-sm font-bold uppercase tracking-widest">实时记录</span>
             </div>
             
@@ -669,7 +726,7 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
                 <article v-for="(item, idx) in transcriptView" :key="idx" class="space-y-1.5">
                 <div class="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   <span>{{ formatTimelineRange(item.startSecond, item.endSecond) }}</span>
-                  <span>·</span>
+                  <span>路</span>
                   <span>{{ item.speaker }}</span>
                 </div>
                 <p class="text-base text-slate-700 leading-8 whitespace-pre-wrap break-words">{{ item.transcript }}</p>
@@ -677,7 +734,7 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
                 <article v-if="candidateDraft" class="space-y-1.5 opacity-50">
                 <div class="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   <span>{{ meetingTimeText }}</span>
-                  <span>·</span>
+                  <span>路</span>
                   <span>候选人</span>
                 </div>
                 <p class="text-base text-slate-700 leading-8 italic whitespace-pre-wrap break-words">{{ candidateDraft }}</p>
@@ -707,3 +764,7 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
 <style scoped>
 /* Simplified layout styles, Tailwind handles most */
 </style>
+
+
+
+

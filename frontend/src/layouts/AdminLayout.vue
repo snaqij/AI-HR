@@ -28,13 +28,6 @@
         </router-link>
       </nav>
 
-      <div class="mt-auto rounded-2xl bg-surface-container-high p-5">
-        <div class="mb-2 flex items-center gap-2">
-          <div class="h-2 w-2 animate-pulse rounded-full bg-green-500"></div>
-          <span class="text-xs font-bold tracking-wider text-on-surface-variant">系统在线</span>
-        </div>
-        <p class="text-[13px] font-medium leading-relaxed text-on-surface-variant opacity-80">AI 智能体当前正在处理 12 场进行中的面试。</p>
-      </div>
     </aside>
 
     <main class="ml-64 flex min-h-screen flex-1 flex-col">

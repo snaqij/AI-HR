@@ -310,7 +310,6 @@ class TencentASRProvider(ASRProvider):
                                 # Use a small buffer to allow slight bursts.
                                 time.sleep(min(0.2, wall_time_needed - elapsed))
 
-                        print(f"DEBUG [Pacing] Sent {len(audio_bytes)} bytes in {time.perf_counter() - pacing_start:.3f}s (required > {wall_time_needed:.3f}s)")
                         logger.debug("Tencent ASR WS duplex: sent %d bytes in %.3fs", len(audio_bytes), time.perf_counter() - pacing_start)
                     partial_texts, _ = self._collect_ws_messages(
                         ctx=ctx,
@@ -337,7 +336,13 @@ class TencentASRProvider(ASRProvider):
                         "Tencent ASR WS duplex: stream_key=%s, is_final=%s, partial_texts=%s, new_transcripts_count=%d",
                         stream_key, is_final, partial_texts, len(ctx.transcripts) - before_len
                     )
-                    print(f"DEBUG [Tencent ASR] Stream: {stream_key}, IS_FINAL: {is_final}, New transcripts: {len(ctx.transcripts) - before_len}, Partials: {len(partial_texts)}")
+                    logger.debug(
+                        "tencent_asr.ws_stream stream_key=%s is_final=%s new_transcripts=%s partials=%s",
+                        stream_key,
+                        is_final,
+                        len(ctx.transcripts) - before_len,
+                        len(partial_texts),
+                    )
                     break
                 except Exception as exc:
                     last_exc = exc
@@ -386,7 +391,7 @@ class TencentASRProvider(ASRProvider):
             reused = ctx is not None
             if ctx is None:
                 ws_url = self._build_ws_url(voice_id=stream_key, voice_format=voice_format)
-                print(f"DEBUG [Tencent ASR] WS URL: {ws_url}")
+                logger.debug("tencent_asr.ws_url stream_key=%s ws_url=%s", stream_key, ws_url)
                 
                 # Force IPv4 to avoid 5.2s Windows IPv6 TCP SYN timeout
                 import socket
@@ -525,14 +530,13 @@ class TencentASRProvider(ASRProvider):
             except Exception:
                 break
             
-            if logger.isEnabledFor(logging.DEBUG) or True:  # Force for debugging
-                print(f"DEBUG [Tencent ASR Raw Msg]: {message}")
+            if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"Tencent ASR WS msg: {message}")
 
             payload = self._parse_ws_message(message)
             code = payload.get("code")
             if code is not None and code != 0:
-                print(f"DEBUG [Tencent ASR Error]: code={code}, message={payload.get('message')}")
+                logger.warning("tencent_asr.ws_business_error code=%s message=%s", code, payload.get("message"))
             
             text = self._extract_ws_text(payload)
             if text:
@@ -765,7 +769,7 @@ class TencentTTSProvider(TTSProvider):
                     logger.debug("[Tencent TTS Pool] Pre-warmed a fresh connection. Current pool size: %d", self._ws_pool.qsize())
                 else:
                     try: ws.close()
-                    except: pass
+                    except Exception: pass
             except Exception as e:
                 logger.debug("[Tencent TTS Pool] Failed to pre-warm: %s", e)
                 time.sleep(2.0) # Backoff on error
@@ -802,7 +806,7 @@ class TencentTTSProvider(TTSProvider):
         """Once used, close the WebSocket session as Tencent doesn't support session reuse."""
         try:
             if ws: ws.close()
-        except:
+        except Exception:
             pass
 
 
@@ -1032,12 +1036,12 @@ class TencentTTSProvider(TTSProvider):
         except Exception as exc:
             if ws:
                 try: ws.close()
-                except: pass
+                except Exception: pass
             raise ConnectorOperationError(f"Tencent TTS websocket error: {exc}") from exc
         finally:
             if ws:
                 try: ws.close()
-                except: pass
+                except Exception: pass
 
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
         logger.debug("Tencent TTS websocket stream finished session=%s packets=%s elapsed_ms=%s", session_id, packet_idx, elapsed_ms)

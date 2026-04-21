@@ -1,6 +1,8 @@
 """数据库模型模块集合。"""
 
 from .ai_decision_log import AIDecisionLog
+from .agent_event import AgentEvent
+from .agent_run import AgentRun
 from .ai_eval_run import AIEvalRun
 from .ai_feature_flag import AIFeatureFlag
 from .ai_interview_handoff import AIInterviewHandoff
@@ -38,6 +40,8 @@ from .credential import ChannelCredential
 
 __all__ = [
     "AIDecisionLog",
+    "AgentEvent",
+    "AgentRun",
     "AIEvalRun",
     "AIFeatureFlag",
     "AIInterviewHandoff",

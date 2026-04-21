@@ -28,7 +28,7 @@ class AIInterviewSession(TimestampMixin, Base):
     channel: Mapped[str] = mapped_column(String(64), nullable=False, default="self_hosted_rtc")
     language: Mapped[str] = mapped_column(String(16), nullable=False, default="zh-CN")
     rtc_room_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
-    # LiveKit JWT token can be much longer than 128 chars.
+    # RTC tokens can be much longer than 128 chars.
     join_token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

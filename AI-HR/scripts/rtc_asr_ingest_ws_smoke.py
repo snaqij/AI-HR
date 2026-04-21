@@ -1,9 +1,8 @@
 """RTC room ASR ingest websocket smoke tool.
 
 This script validates low-latency room-level ingest:
-1) optional webhook preflight (participant_joined / track_published)
-2) websocket connection to /ai/interviews/rtc/asr/ingest/ws
-3) continuous audio_frame streaming with ack/result validation
+1) websocket connection to /ai/interviews/rtc/asr/ingest/ws
+2) continuous audio_frame streaming with ack/result validation
 
 Usage:
   uv run --project AI-HR python AI-HR/scripts/rtc_asr_ingest_ws_smoke.py \
@@ -13,8 +12,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
-import hmac
 import json
 import math
 import struct
@@ -22,8 +19,6 @@ import time
 import urllib.error
 import urllib.request
 import wave
-from hashlib import sha256
-from io import BytesIO
 from urllib.parse import urlparse
 
 from ai_hr.services.rtc.pcm_stream import build_asr_stream_payloads
@@ -50,20 +45,6 @@ def _request_json(
             return int(exc.code), json.loads(raw)
         except Exception:
             return int(exc.code), {"error": {"message": raw or str(exc)}}
-
-
-def _b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
-
-
-def _build_livekit_webhook_token(*, api_key: str, api_secret: str) -> str:
-    now = int(time.time())
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {"iss": api_key, "nbf": now - 5, "exp": now + 180}
-    h = _b64url(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    p = _b64url(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    sign = hmac.new(api_secret.encode("utf-8"), f"{h}.{p}".encode("utf-8"), sha256).digest()
-    return f"{h}.{p}.{_b64url(sign)}"
 
 
 def _to_ingest_ws_url(base_url: str, api_prefix: str) -> str:
@@ -97,52 +78,6 @@ def _gen_sine_pcm(*, seconds: float = 2.0, sample_rate: int = 16000, freq_hz: fl
     return bytes(out), sample_rate, 1
 
 
-def _simulate_webhook_preflight(
-    *,
-    base_url: str,
-    api_prefix: str,
-    room_id: str,
-    participant_identity: str,
-    track_sid: str,
-    webhook_api_key: str | None,
-    webhook_api_secret: str | None,
-) -> dict:
-    headers: dict[str, str] = {}
-    if webhook_api_key and webhook_api_secret:
-        token = _build_livekit_webhook_token(api_key=webhook_api_key, api_secret=webhook_api_secret)
-        headers["Authorization"] = f"Bearer {token}"
-    endpoint = f"{base_url.rstrip('/')}{api_prefix.rstrip('/')}/ai/interviews/rtc/webhooks/livekit"
-    joined_status, joined_resp = _request_json(
-        method="POST",
-        url=endpoint,
-        payload={
-            "id": f"smoke-join-{int(time.time() * 1000)}",
-            "event": "participant_joined",
-            "room": {"name": room_id},
-            "participant": {"identity": participant_identity},
-        },
-        headers=headers,
-    )
-    track_status, track_resp = _request_json(
-        method="POST",
-        url=endpoint,
-        payload={
-            "id": f"smoke-track-{int(time.time() * 1000)}",
-            "event": "track_published",
-            "room": {"name": room_id},
-            "participant": {"identity": participant_identity},
-            "track": {"sid": track_sid, "type": "audio"},
-        },
-        headers=headers,
-    )
-    return {
-        "join_status": joined_status,
-        "join_ok": bool((joined_resp.get("data") or {}).get("accepted")),
-        "track_status": track_status,
-        "track_ok": bool((track_resp.get("data") or {}).get("accepted")),
-    }
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="RTC room ASR ingest websocket smoke")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -157,9 +92,6 @@ def main() -> None:
     parser.add_argument("--track-sid", default="TR_SMOKE_AUDIO_1")
     parser.add_argument("--sleep-ms", type=int, default=30)
     parser.add_argument("--api-key", default="")
-    parser.add_argument("--simulate-webhook", action="store_true")
-    parser.add_argument("--webhook-api-key", default="")
-    parser.add_argument("--webhook-api-secret", default="")
     args = parser.parse_args()
 
     if args.wav_file:
@@ -184,18 +116,6 @@ def main() -> None:
         payload["track_sid"] = args.track_sid
         payload["auto_followup"] = True
         payload["auto_tts_publish"] = True
-
-    preflight = None
-    if args.simulate_webhook:
-        preflight = _simulate_webhook_preflight(
-            base_url=args.base_url,
-            api_prefix=args.api_prefix,
-            room_id=args.room_id,
-            participant_identity=args.participant_identity,
-            track_sid=args.track_sid,
-            webhook_api_key=(args.webhook_api_key or "").strip() or None,
-            webhook_api_secret=(args.webhook_api_secret or "").strip() or None,
-        )
 
     ws_url = _to_ingest_ws_url(args.base_url, args.api_prefix)
     ws_headers = {}
@@ -266,7 +186,6 @@ def main() -> None:
         "ack_latency_ms": ack_latencies,
         "asr_latency_ms": asr_latencies,
         "tts_latency_ms": tts_latencies,
-        "preflight": preflight,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 

@@ -300,6 +300,12 @@ export interface InterviewQuestionAnswerItem {
   answer_turn_no?: number | null;
 }
 
+export interface InterviewOpeningSegmentItem {
+  title: string;
+  candidate_answer?: string | null;
+  answer_turn_no?: number | null;
+}
+
 export interface InterviewAIAnalysis {
   summary?: string | null;
   recommendation?: string | null;
@@ -319,6 +325,7 @@ export interface InterviewInvitationRecordDetailResult {
   session_id?: string | null;
   has_record: boolean;
   record_message?: string | null;
+  opening_segments: InterviewOpeningSegmentItem[];
   questions: InterviewQuestionAnswerItem[];
   analysis: InterviewAIAnalysis;
 }

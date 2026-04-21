@@ -91,7 +91,7 @@ def test_create_ai_interview_session_success() -> None:
             "candidate_id": candidate_id,
             "job_id": job_id,
             "channel": "self_hosted_rtc",
-            "note": "棣栬疆 AI 璇煶闈㈣瘯",
+            "note": "首轮 AI 语音面试",
             "payload": {"source": "auto_schedule"},
         },
     )
@@ -778,7 +778,7 @@ def test_rtc_join_and_reconnect_should_succeed() -> None:
     assert join_payload["reconnectable"] is True
     assert join_payload["room_id"].startswith("ai-intv-")
     assert join_payload["channel_name"] == join_payload["room_id"]
-    assert join_payload["provider"] in {"mock", "livekit", "agora"}
+    assert join_payload["provider"] in {"mock", "agora"}
 
     reconnect_resp = client.post(
         f"/api/v1/ai/interviews/sessions/{session_id}/rtc/reconnect",
@@ -801,7 +801,7 @@ def test_ten_runtime_config_endpoint_should_reflect_session_state() -> None:
     runtime_payload = runtime_resp.json()["data"]
     assert runtime_payload["session_id"] == session_id
     assert runtime_payload["room_id"].startswith("ai-intv-")
-    assert runtime_payload["provider"] in {"mock", "livekit", "agora"}
+    assert runtime_payload["provider"] in {"mock", "agora"}
 
 
 def test_finished_session_should_reject_realtime_entrypoints() -> None:

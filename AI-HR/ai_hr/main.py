@@ -2,49 +2,23 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Allow running as a script before importing third-party modules that depend on stdlib names
-# such as `copy`, which would otherwise be shadowed by `ai_hr/copy`.
-if __package__ in {None, ""}:
-    project_root = Path(__file__).resolve().parents[1]
-    script_dir = str(Path(__file__).resolve().parent)
-    sys.path[:] = [item for item in sys.path if Path(item or ".").resolve() != Path(script_dir).resolve()]
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-
 import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
-if __package__ in {None, ""}:
-    # Allow running as a script: python ai_hr/main.py
-    from ai_hr.api.router import api_router
-    from ai_hr.core.config import Settings, get_settings
-    from ai_hr.core.exceptions import AIHRException, ResourceNotFoundError
-    from ai_hr.core.idempotency import IdempotencyMiddleware
-    from ai_hr.core.request_observability import RequestObservabilityMiddleware
-    from ai_hr.core.responses import Envelope
-    from ai_hr.db.base import Base
-    from ai_hr.db.session import engine
-    from ai_hr.services.job_sync import create_job_sync_scheduler
-    from ai_hr.services.providers.circuit_breaker import ProviderCircuitBreaker
-    from ai_hr.services.providers.health import ProviderHealthService
-else:
-    from .api.router import api_router
-    from .core.config import Settings, get_settings
-    from .core.exceptions import AIHRException, ResourceNotFoundError
-    from .core.idempotency import IdempotencyMiddleware
-    from .core.request_observability import RequestObservabilityMiddleware
-    from .core.responses import Envelope
-    from .db.base import Base
-    from .db.session import engine
-    from .services.job_sync import create_job_sync_scheduler
-    from .services.providers.circuit_breaker import ProviderCircuitBreaker
-    from .services.providers.health import ProviderHealthService
+from ai_hr.api.router import api_router
+from ai_hr.core.config import Settings, get_settings
+from ai_hr.core.exceptions import AIHRException, ResourceNotFoundError
+from ai_hr.core.idempotency import IdempotencyMiddleware
+from ai_hr.core.request_observability import RequestObservabilityMiddleware
+from ai_hr.core.responses import Envelope
+from ai_hr.db.base import Base
+from ai_hr.db.session import engine
+from ai_hr.services.job_sync import create_job_sync_scheduler
+from ai_hr.services.providers.circuit_breaker import ProviderCircuitBreaker
+from ai_hr.services.providers.health import ProviderHealthService
 
 
 def _resolve_cors_origins(settings: Settings) -> list[str]:

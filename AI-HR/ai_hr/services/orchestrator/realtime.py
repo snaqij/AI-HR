@@ -250,7 +250,7 @@ class RealtimeOrchestrator:
                             followup_question = res
                     
                     # if followup_question:
-                    #     print(f"DEBUG [LLM Output] Session: {session_id}, Followup: {followup_question}")
+                    # Debug hook reserved for LLM output tracing.
                     
                     if followup_question:
                         DEFAULT_FOLLOWUP_CACHE.set(cache_key, question=followup_question, reason="llm")
@@ -276,7 +276,7 @@ class RealtimeOrchestrator:
                 if not streamed_in_llm_block:
                     if on_audio_packet:
                         # 对于由于缓存命中或预取跳过 LLM 流的场景，不分句，直接全文合成以保证连贯性
-                        # print(f"DEBUG [TTS Replay] Session: {session_id}, Playing existing followup: {followup_question[:100]}...")
+                        # Debug hook reserved for TTS replay tracing.
                         for packet in self._tts_provider.synthesize_stream_iter(
                             session_id=session_id,
                             text=followup_question,

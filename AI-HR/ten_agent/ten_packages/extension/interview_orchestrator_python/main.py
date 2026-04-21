@@ -18,7 +18,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from ai_hr.core.config import get_settings
-from ai_hr.copy.interview_zh import (
+from ai_hr.content.interview_zh import (
     AUDIO_ISSUE_PHRASES,
     AUDIO_RETRY_MESSAGE,
     DEFAULT_CANDIDATE_NAME,
@@ -121,6 +121,7 @@ class RealtimeEventBridge:
             "ts": int(time.time() * 1000),
             "source": "ten_agent",
             "payload": payload,
+            "__critical": bool(critical),
         }
         queue = self.critical_queue if critical else self.volatile_queue
         try:
@@ -146,9 +147,35 @@ class RealtimeEventBridge:
                     continue
                 ok = await asyncio.to_thread(self._post_batch, batch)
                 if not ok:
+                    self._requeue_failed_batch(batch)
                     self._circuit_open_until = time.monotonic() + 5.0
         except asyncio.CancelledError:
             return
+
+    def _requeue_failed_batch(self, events: list[dict]) -> None:
+        """Best-effort retry by returning failed events back to in-memory queues."""
+        if not events:
+            return
+        requeued = 0
+        dropped = 0
+        for event in events:
+            is_critical = bool(event.get("__critical"))
+            queue = self.critical_queue if is_critical else self.volatile_queue
+            try:
+                queue.put_nowait(event)
+                requeued += 1
+            except asyncio.QueueFull:
+                dropped += 1
+                if is_critical:
+                    self._drop_counters["critical"] += 1
+                else:
+                    self._drop_counters["volatile"] += 1
+        logger.warning(
+            "orchestrator.event_bridge_requeue session_id=%s requeued=%s dropped=%s",
+            self.session_id,
+            requeued,
+            dropped,
+        )
 
     async def _collect_batch(self) -> list[dict]:
         events: list[dict] = []
@@ -564,6 +591,21 @@ class InterviewOrchestratorExtension(AsyncExtension):
             "喂",
         )
         return any(marker in text for marker in reengagement_markers)
+
+    def _is_duplicate_like_transcript(self, current: str, previous: str) -> bool:
+        """Conservative duplicate check to avoid dropping semantically different turns."""
+        cur = str(current or "").strip()
+        prev = str(previous or "").strip()
+        if not cur or not prev:
+            return False
+        if cur == prev:
+            return True
+        if cur in prev or prev in cur:
+            min_len = max(1, min(len(cur), len(prev)))
+            return abs(len(cur) - len(prev)) <= max(4, int(min_len * 0.4))
+        prefix_len = len(os.path.commonprefix([cur, prev]))
+        min_len = max(1, min(len(cur), len(prev)))
+        return min_len >= 6 and prefix_len >= max(6, int(min_len * 0.8))
 
     def _new_turn_id(self) -> str:
         return f"turn-{uuid.uuid4().hex[:8]}"
@@ -1459,9 +1501,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
             return
 
         if self.turn_triggered and len(transcript) > 0:
-            if self.last_triggered_text and (
-                self.last_triggered_text in transcript or transcript[:5] == self.last_triggered_text[:5]
-            ):
+            if self.last_triggered_text and self._is_duplicate_like_transcript(transcript, self.last_triggered_text):
                 if self._is_reengagement_transcript(transcript):
                     self._log(logging.INFO, "orchestrator.reengagement_allowed", transcript=transcript[:200])
                 elif self._has_active_response_pipeline():

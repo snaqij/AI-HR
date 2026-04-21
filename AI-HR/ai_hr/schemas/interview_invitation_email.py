@@ -98,6 +98,14 @@ class InterviewQuestionAnswerItem(BaseModel):
     answer_turn_no: int | None = None
 
 
+class InterviewOpeningSegmentItem(BaseModel):
+    """Opening segment shown before formal question list."""
+
+    title: str
+    candidate_answer: str | None = None
+    answer_turn_no: int | None = None
+
+
 class InterviewAIAnalysis(BaseModel):
     """AI interview analysis summary."""
 
@@ -121,5 +129,6 @@ class InterviewInvitationRecordDetailResult(BaseModel):
     session_id: str | None = None
     has_record: bool = False
     record_message: str | None = None
+    opening_segments: list[InterviewOpeningSegmentItem] = Field(default_factory=list)
     questions: list[InterviewQuestionAnswerItem] = Field(default_factory=list)
     analysis: InterviewAIAnalysis = Field(default_factory=InterviewAIAnalysis)
