@@ -102,6 +102,23 @@ export interface Job {
   min_degree?: string | null;
   min_experience_years?: number | null;
   max_daily_resume_requests?: number;
+  publications?: JobPublication[];
+}
+
+export interface JobPublication {
+  id: string;
+  channel: string;
+  status: string;
+  external_job_id?: string | null;
+}
+
+export interface JobsQuery {
+  limit?: number;
+  offset?: number;
+  platform?: string;
+  name?: string;
+  job_type?: "intern" | "social";
+  salary?: string;
 }
 
 export interface Candidate {
@@ -138,6 +155,8 @@ export interface JobCandidate {
   external_candidate_id: string;
   external_job_id?: string | null;
   source_status?: string;
+  evaluation?: CandidateEvaluation | null;
+  latest_delivery?: CandidateEmailDelivery | null;
 }
 
 export interface JobCandidateListResult {
@@ -255,6 +274,55 @@ export interface InterviewInvitationEmailSendResult {
   invitation_link: string;
 }
 
+export interface InterviewInvitationHistoryItem {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_email?: string | null;
+  job_id: string;
+  job_title: string;
+  delivery_status: string;
+  scene: string;
+  sent_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InterviewInvitationHistoryResult {
+  total: number;
+  items: InterviewInvitationHistoryItem[];
+}
+
+export interface InterviewQuestionAnswerItem {
+  question_id: string;
+  question: string;
+  candidate_answer?: string | null;
+  answer_turn_no?: number | null;
+}
+
+export interface InterviewAIAnalysis {
+  summary?: string | null;
+  recommendation?: string | null;
+  dimension_scores: Record<string, number>;
+  risk_tags: string[];
+}
+
+export interface InterviewInvitationRecordDetailResult {
+  delivery_id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_email?: string | null;
+  job_id: string;
+  job_title: string;
+  delivery_status: string;
+  invitation_id?: string | null;
+  session_id?: string | null;
+  has_record: boolean;
+  record_message?: string | null;
+  questions: InterviewQuestionAnswerItem[];
+  analysis: InterviewAIAnalysis;
+}
+
 export interface DashboardAnalytics {
   funnel: Array<{
     label: string,
@@ -271,6 +339,35 @@ export interface DashboardAnalytics {
     progress: number
   }>;
   total_synced: number;
+}
+
+export interface HiringCenterEvaluationItem {
+  candidate_id: string;
+  candidate_name: string;
+  candidate_stage: string;
+  candidate_expected_salary?: string | null;
+  candidate_score_explanation?: string | null;
+  job_id: string;
+  job_title: string;
+  job_salary_range?: string | null;
+  evaluation_status: string;
+  final_score: number;
+  recommendation: string;
+  summary?: string | null;
+  highlights: string[];
+  invited_flag: boolean;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface HiringCenterOverviewResult {
+  total: number;
+  review_count: number;
+  invited_count: number;
+  recommended_count: number;
+  conversion_rate: number;
+  top_items: HiringCenterEvaluationItem[];
+  queue_items: HiringCenterEvaluationItem[];
 }
 
 export interface CredentialStatus {
@@ -318,9 +415,40 @@ export async function fetchDashboardAnalytics(): Promise<DashboardAnalytics> {
   return request<DashboardAnalytics>("/analytics/dashboard");
 }
 
+export async function fetchHiringCenterOverview(
+  payload: { top_n?: number; queue_limit?: number; max_scan?: number } = {}
+): Promise<HiringCenterOverviewResult> {
+  const params = new URLSearchParams();
+  params.set("top_n", String(payload.top_n ?? 3));
+  params.set("queue_limit", String(payload.queue_limit ?? 20));
+  params.set("max_scan", String(payload.max_scan ?? 3000));
+  return request<HiringCenterOverviewResult>(`/analytics/hiring-center?${params.toString()}`);
+}
+
 // Jobs
-export async function listJobs(limit = 100): Promise<Job[]> {
-  const res = await request<{ items: Job[] }>(`/jobs?limit=${limit}`);
+export async function listJobs(query: number | JobsQuery = 100): Promise<Job[]> {
+  const params = new URLSearchParams();
+  if (typeof query === "number") {
+    params.set("limit", String(query));
+  } else {
+    params.set("limit", String(query.limit ?? 100));
+    if (typeof query.offset === "number") {
+      params.set("offset", String(query.offset));
+    }
+    if (query.platform) {
+      params.set("platform", query.platform);
+    }
+    if (query.name) {
+      params.set("name", query.name);
+    }
+    if (query.job_type) {
+      params.set("job_type", query.job_type);
+    }
+    if (query.salary) {
+      params.set("salary", query.salary);
+    }
+  }
+  const res = await request<{ items: Job[] }>(`/jobs?${params.toString()}`);
   return res.items;
 }
 
@@ -342,10 +470,23 @@ export async function syncJobCandidates(jobId: string): Promise<any> {
   });
 }
 
+export async function deleteJob(jobId: string): Promise<void> {
+  await request(`/jobs/${jobId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function batchDeleteJobs(jobIds: string[]): Promise<{ deleted_count: number }> {
+  return request<{ deleted_count: number }>(`/jobs/batch-delete`, {
+    method: "POST",
+    body: JSON.stringify({ job_ids: jobIds }),
+  });
+}
+
 // Candidates
 export async function listJobCandidates(
   jobId: string,
-  payload: { limit?: number; cursor?: string } = {}
+  payload: { limit?: number; cursor?: string; keyword?: string; resume_status?: string; segment?: "all" | "recommended" | "invited" | "failed" } = {}
 ): Promise<JobCandidateListResult> {
   const params = new URLSearchParams();
   if (payload.limit) {
@@ -353,6 +494,15 @@ export async function listJobCandidates(
   }
   if (payload.cursor) {
     params.set("cursor", payload.cursor);
+  }
+  if (payload.keyword) {
+    params.set("keyword", payload.keyword);
+  }
+  if (payload.resume_status && payload.resume_status !== "all") {
+    params.set("resume_status", payload.resume_status);
+  }
+  if (payload.segment && payload.segment !== "all") {
+    params.set("segment", payload.segment);
   }
   const qs = params.toString();
   return request<JobCandidateListResult>(`/jobs/${jobId}/candidates${qs ? `?${qs}` : ""}`);
@@ -430,6 +580,24 @@ export async function fetchJobEmailDeliveries(
   return request<CandidateEmailDeliveryListResult>(`/jobs/${jobId}/email-deliveries?${params.toString()}`);
 }
 
+export async function fetchInterviewInvitationHistory(
+  payload: { limit?: number; keyword?: string; status?: string } = {}
+): Promise<InterviewInvitationHistoryResult> {
+  const params = new URLSearchParams();
+  params.set("limit", String(payload.limit ?? 200));
+  if (payload.keyword) {
+    params.set("keyword", payload.keyword);
+  }
+  if (payload.status && payload.status !== "all") {
+    params.set("status", payload.status);
+  }
+  return request<InterviewInvitationHistoryResult>(`/interviews/invitations/history?${params.toString()}`);
+}
+
+export async function fetchInterviewInvitationRecord(deliveryId: string): Promise<InterviewInvitationRecordDetailResult> {
+  return request<InterviewInvitationRecordDetailResult>(`/interviews/invitations/${encodeURIComponent(deliveryId)}/record`);
+}
+
 export async function updateCandidateStage(jobId: string, candidateId: string, stage: string): Promise<JobCandidate> {
   return request<JobCandidate>(`/jobs/${jobId}/candidates/${candidateId}`, {
     method: "PATCH",
@@ -497,13 +665,6 @@ export async function finishInterviewSession(
   });
 }
 
-export async function finalizeInterviewTurn(sessionId: string): Promise<any> {
-    return request(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/finalize`, {
-        method: "POST",
-        body: JSON.stringify({}),
-    });
-}
-
 export async function joinInterviewRTC(
   sessionId: string,
   candidateId: string,
@@ -516,6 +677,14 @@ export async function joinInterviewRTC(
       client_id: clientId,
     }),
   });
+}
+
+export async function renewInterviewRTCToken(
+  sessionId: string,
+  candidateId: string,
+  clientId = "web"
+): Promise<InterviewRTCJoinInfo> {
+  return joinInterviewRTC(sessionId, candidateId, clientId);
 }
 
 export async function joinInterviewRTCPreflight(

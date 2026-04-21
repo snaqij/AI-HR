@@ -836,6 +836,9 @@ class CandidateEvaluationService:
         dimension_scores: dict[str, Any],
         job_requirement_coverage: dict[str, Any],
     ) -> str:
+        # Product rule: 80+ should be recommended directly.
+        if final_score >= 80:
+            return "strong_recommend" if final_score >= 85 else "recommend"
         learning_agility = self._safe_float(dimension_scores.get("learning_agility")) or 0.0
         engineering_ability = self._safe_float(dimension_scores.get("engineering_ability")) or 0.0
         coverage_ratio = self._coverage_to_ratio(job_requirement_coverage)

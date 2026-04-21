@@ -17,6 +17,7 @@ AI-HR backend service extracted from the initial BOSS automation exploration.
 
 ## 中文功能清单
 - 已实现功能（仅基于代码落地）：[`docs/AI-HR-已实现功能清单.md`](./docs/AI-HR-已实现功能清单.md)
+- 候选人详情页企业级改造实施方案：[`docs/候选人详情页企业级改造实施方案-v1.md`](./docs/候选人详情页企业级改造实施方案-v1.md)
 
 ## Environment
 - Default development config file: `.env.dev`

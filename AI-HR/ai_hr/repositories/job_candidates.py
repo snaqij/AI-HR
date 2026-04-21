@@ -9,7 +9,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
 from ..core.exceptions import InvalidStateError
-from ..db.models import Candidate, CandidateJobPipeline, JobCandidate
+from ..db.models import Candidate, CandidateEmailDelivery, CandidateJobEvaluation, CandidateJobPipeline, JobCandidate
 
 
 class JobCandidateRepository:
@@ -74,6 +74,9 @@ class JobCandidateRepository:
         *,
         limit: int = 50,
         cursor: str | None = None,
+        keyword: str | None = None,
+        resume_status: str | None = None,
+        candidate_segment: str | None = None,
     ) -> tuple[list[JobCandidate], str | None, bool]:
         page_size = max(1, min(limit, 200))
         stmt = (
@@ -117,6 +120,99 @@ class JobCandidateRepository:
             .where(JobCandidate.job_id == job_id)
             .order_by(JobCandidate.last_synced_at.desc(), JobCandidate.id.desc())
         )
+
+        keyword_query = (keyword or "").strip().lower()
+        if keyword_query:
+            pattern = f"%{keyword_query}%"
+            stmt = stmt.join(Candidate, JobCandidate.candidate_id == Candidate.id).where(
+                or_(
+                    Candidate.name.ilike(pattern),
+                    Candidate.email.ilike(pattern),
+                )
+            )
+
+        normalized_resume_status = (resume_status or "").strip().lower()
+        if normalized_resume_status and normalized_resume_status != "all":
+            stmt = stmt.outerjoin(
+                CandidateJobPipeline,
+                and_(
+                    CandidateJobPipeline.candidate_id == JobCandidate.candidate_id,
+                    CandidateJobPipeline.job_id == JobCandidate.job_id,
+                ),
+            )
+            if normalized_resume_status == "downloaded":
+                stmt = stmt.where(CandidateJobPipeline.resume_download_status == "downloaded")
+            elif normalized_resume_status == "requested":
+                stmt = stmt.where(
+                    CandidateJobPipeline.resume_request_status == "requested",
+                    CandidateJobPipeline.resume_download_status != "downloaded",
+                )
+            elif normalized_resume_status == "failed":
+                stmt = stmt.where(
+                    CandidateJobPipeline.resume_request_status == "failed",
+                    CandidateJobPipeline.resume_download_status != "downloaded",
+                )
+            elif normalized_resume_status == "pending":
+                stmt = stmt.where(
+                    or_(
+                        CandidateJobPipeline.id.is_(None),
+                        and_(
+                            or_(
+                                CandidateJobPipeline.resume_request_status.is_(None),
+                                CandidateJobPipeline.resume_request_status == "pending",
+                            ),
+                            or_(
+                                CandidateJobPipeline.resume_download_status.is_(None),
+                                CandidateJobPipeline.resume_download_status == "pending",
+                            ),
+                        ),
+                    )
+                )
+
+        normalized_segment = (candidate_segment or "").strip().lower()
+        if normalized_segment and normalized_segment != "all":
+            latest_eval_score = (
+                select(CandidateJobEvaluation.final_score)
+                .where(
+                    CandidateJobEvaluation.job_id == JobCandidate.job_id,
+                    CandidateJobEvaluation.candidate_id == JobCandidate.candidate_id,
+                )
+                .order_by(CandidateJobEvaluation.created_at.desc())
+                .limit(1)
+                .scalar_subquery()
+            )
+            latest_eval_recommendation = (
+                select(CandidateJobEvaluation.recommendation)
+                .where(
+                    CandidateJobEvaluation.job_id == JobCandidate.job_id,
+                    CandidateJobEvaluation.candidate_id == JobCandidate.candidate_id,
+                )
+                .order_by(CandidateJobEvaluation.created_at.desc())
+                .limit(1)
+                .scalar_subquery()
+            )
+            latest_delivery_status = (
+                select(CandidateEmailDelivery.status)
+                .where(
+                    CandidateEmailDelivery.job_id == JobCandidate.job_id,
+                    CandidateEmailDelivery.candidate_id == JobCandidate.candidate_id,
+                )
+                .order_by(CandidateEmailDelivery.created_at.desc())
+                .limit(1)
+                .scalar_subquery()
+            )
+
+            if normalized_segment == "recommended":
+                stmt = stmt.where(
+                    or_(
+                        latest_eval_score >= 80,
+                        latest_eval_recommendation.in_(("recommend", "strong_recommend")),
+                    )
+                )
+            elif normalized_segment == "invited":
+                stmt = stmt.where(latest_delivery_status.in_(("sending", "sent", "delivered", "opened", "clicked")))
+            elif normalized_segment == "failed":
+                stmt = stmt.where(latest_delivery_status == "failed")
 
         if cursor:
             cursor_time, cursor_id = self._decode_cursor(cursor)

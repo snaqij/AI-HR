@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
 from ..core.exceptions import InvalidStateError, ResourceNotFoundError
-from ..repositories.ai_interviews import AIInterviewInvitationRepository
+from ..repositories.ai_interviews import AIInterviewInvitationRepository, AIInterviewSessionRepository
 from ..repositories.automation_task_logs import AutomationTaskLogRepository
 from ..repositories.candidate_email_deliveries import CandidateEmailDeliveryRepository
 from ..repositories.candidate_job_evaluations import CandidateJobEvaluationRepository
@@ -22,7 +22,15 @@ from ..repositories.candidates import CandidateRepository
 from ..repositories.email_templates import EmailTemplateRepository
 from ..repositories.jobs import JobRepository
 from .ai_interviews import get_ai_interview_service
-from ..schemas.interview_invitation_email import CandidateEmailDeliveryListResult, CandidateEmailDeliveryResponse
+from ..schemas.interview_invitation_email import (
+    CandidateEmailDeliveryListResult,
+    CandidateEmailDeliveryResponse,
+    InterviewAIAnalysis,
+    InterviewInvitationHistoryItem,
+    InterviewInvitationHistoryResult,
+    InterviewInvitationRecordDetailResult,
+    InterviewQuestionAnswerItem,
+)
 
 
 @dataclass(slots=True)
@@ -37,6 +45,8 @@ class _RenderedInvitationEmail:
 class InterviewInvitationEmailService:
     """Creates interview invitations and sends email to qualified candidates."""
 
+    _MANUAL_INVITE_MIN_SCORE = 75.0
+
     def __init__(self, session: Session):
         self._session = session
         self._settings = get_settings()
@@ -47,6 +57,7 @@ class InterviewInvitationEmailService:
         self._email_delivery_repository = CandidateEmailDeliveryRepository(session)
         self._email_template_repository = EmailTemplateRepository(session)
         self._invitation_repository = AIInterviewInvitationRepository(session)
+        self._interview_session_repository = AIInterviewSessionRepository(session)
         self._automation_log_repository = AutomationTaskLogRepository(session)
 
     def invite_candidate_for_evaluation(
@@ -62,9 +73,9 @@ class InterviewInvitationEmailService:
         pipeline = self._pipeline_repository.get_by_candidate_job(candidate_id=candidate.id, job_id=job.id)
         if pipeline is None:
             raise InvalidStateError(f"Candidate '{candidate.id}' has no pipeline under job '{job.id}'")
-        if evaluation.recommendation not in {"recommend", "strong_recommend"}:
+        if evaluation.recommendation not in {"recommend", "strong_recommend"} and float(evaluation.final_score or 0.0) < self._MANUAL_INVITE_MIN_SCORE:
             raise InvalidStateError(
-                f"Candidate '{candidate.id}' is not eligible for invitation with recommendation '{evaluation.recommendation}'"
+                f"Candidate '{candidate.id}' is not eligible for invitation with recommendation '{evaluation.recommendation}' and score '{evaluation.final_score}'"
             )
 
         candidate_email = self._resolve_candidate_email(candidate.raw_profile or {}, candidate.email)
@@ -238,6 +249,136 @@ class InterviewInvitationEmailService:
             total=len(items),
             items=[self._to_delivery_response(item) for item in items],
         )
+
+    def list_invitation_history(
+        self,
+        *,
+        limit: int = 200,
+        keyword: str | None = None,
+        status: str | None = None,
+    ) -> InterviewInvitationHistoryResult:
+        rows = self._email_delivery_repository.list_history(
+            limit=limit,
+            keyword=keyword,
+            status=status,
+        )
+        return InterviewInvitationHistoryResult(
+            total=len(rows),
+            items=[
+                InterviewInvitationHistoryItem(
+                    id=delivery.id,
+                    candidate_id=candidate.id,
+                    candidate_name=candidate.name,
+                    candidate_email=candidate.email,
+                    job_id=job.id,
+                    job_title=job.title,
+                    delivery_status=delivery.status,
+                    scene=delivery.scene,
+                    sent_at=delivery.sent_at,
+                    created_at=delivery.created_at,
+                    updated_at=delivery.updated_at,
+                )
+                for delivery, candidate, job in rows
+            ],
+        )
+
+    def get_invitation_record_detail(self, *, delivery_id: str) -> InterviewInvitationRecordDetailResult:
+        """Get interview record detail for one invitation delivery."""
+        delivery = self._email_delivery_repository.get(delivery_id)
+        if delivery.scene != "interview_invitation":
+            raise InvalidStateError(f"Delivery '{delivery_id}' is not an interview invitation record")
+
+        candidate = self._candidate_repository.get(delivery.candidate_id)
+        job = self._job_repository.get(delivery.job_id)
+        detail = InterviewInvitationRecordDetailResult(
+            delivery_id=delivery.id,
+            candidate_id=candidate.id,
+            candidate_name=candidate.name,
+            candidate_email=candidate.email,
+            job_id=job.id,
+            job_title=job.title,
+            delivery_status=delivery.status,
+            invitation_id=delivery.invitation_id,
+        )
+        if not delivery.invitation_id:
+            detail.record_message = "该邀请记录尚未关联面试邀请。"
+            return detail
+
+        invitation = self._invitation_repository.get_by_id(delivery.invitation_id)
+        question_set = self._interview_session_repository.get_latest_question_set(invitation_id=invitation.id)
+
+        session_id = question_set.session_id if question_set and question_set.session_id else None
+        if session_id is None:
+            detail.record_message = "候选人尚未开始面试。"
+            detail.questions = self._build_question_answers(
+                questions=question_set.questions_json if question_set else [],
+                candidate_turns=[],
+            )
+            return detail
+
+        detail.session_id = session_id
+        turns = self._interview_session_repository.list_turns(session_id)
+        candidate_turns = [
+            turn
+            for turn in turns
+            if str(turn.speaker).lower() == "candidate" and (turn.transcript or "").strip()
+        ]
+        report = self._interview_session_repository.get_latest_report(session_id)
+
+        detail.questions = self._build_question_answers(
+            questions=question_set.questions_json if question_set else [],
+            candidate_turns=candidate_turns,
+        )
+        detail.analysis = InterviewAIAnalysis(
+            summary=report.summary if report else None,
+            recommendation=report.recommendation if report else None,
+            dimension_scores=dict(report.dimension_scores_json or {}) if report else {},
+            risk_tags=list(report.risk_tags_json or []) if report else [],
+        )
+        detail.has_record = bool(detail.questions or candidate_turns or report)
+        if not detail.has_record:
+            detail.record_message = "暂无面试记录。"
+        return detail
+
+    def _build_question_answers(self, *, questions: list[dict[str, Any]], candidate_turns: list[Any]) -> list[InterviewQuestionAnswerItem]:
+        question_items: list[InterviewQuestionAnswerItem] = []
+        for index, raw_question in enumerate(questions, start=1):
+            question_id = str(
+                raw_question.get("id")
+                or raw_question.get("question_id")
+                or raw_question.get("idx")
+                or index
+            ).strip()
+            question_text = str(
+                raw_question.get("question")
+                or raw_question.get("text")
+                or raw_question.get("title")
+                or raw_question.get("prompt")
+                or ""
+            ).strip()
+            if not question_text:
+                continue
+            turn = candidate_turns[index - 1] if index - 1 < len(candidate_turns) else None
+            question_items.append(
+                InterviewQuestionAnswerItem(
+                    question_id=question_id or str(index),
+                    question=question_text,
+                    candidate_answer=(turn.transcript or "").strip() if turn else None,
+                    answer_turn_no=int(turn.turn_no) if turn else None,
+                )
+            )
+        if question_items:
+            return question_items
+
+        return [
+            InterviewQuestionAnswerItem(
+                question_id=f"candidate-turn-{idx + 1}",
+                question=f"候选人作答片段 {idx + 1}",
+                candidate_answer=(turn.transcript or "").strip(),
+                answer_turn_no=int(turn.turn_no),
+            )
+            for idx, turn in enumerate(candidate_turns)
+        ]
 
     def _render_email(
         self,

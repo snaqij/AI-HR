@@ -5,7 +5,6 @@ import {
   bootstrapDemoSession,
   buildInterviewEventsWsUrl,
   createInterviewSession,
-  finalizeInterviewTurn,
   finishInterviewSession,
   getInterviewSession,
   getTenRuntimeConfig,
@@ -13,7 +12,9 @@ import {
   joinInterviewRTCPreflight,
   launchTenSession,
   loadReplayItems,
+  renewInterviewRTCToken,
   startInterviewSession,
+  type InterviewRTCJoinInfo,
   type InterviewRealtimeEvent,
   type InterviewSession,
   type ReplayItem
@@ -24,9 +25,12 @@ interface TimelineItem {
   transcript: string;
   startSecond: number;
   endSecond: number;
+  kind?: "confirmed" | "draft_fallback";
 }
 
 const TRANSCRIPT_MERGE_WINDOW_SECONDS = 12;
+const CANDIDATE_DRAFT_FALLBACK_MS = 1800;
+const RTC_CLIENT_ID = "web";
 
 const SESSION_STORAGE_KEY = "ai_hr_active_session";
 
@@ -41,6 +45,8 @@ const showSettingsHint = ref(false);
 const interviewerSpeaking = ref(false);
 const candidateVideoMount = ref<HTMLElement | null>(null);
 const transcriptScrollRef = ref<HTMLElement | null>(null);
+const canScrollTranscriptUp = ref(false);
+const isTranscriptPinnedToLatest = ref(true);
 
 const session = ref<InterviewSession | null>(null);
 const sessionId = computed(() => session.value?.id || "");
@@ -52,13 +58,16 @@ const followupQuestion = ref("");
 const transportStatus = ref("未连接");
 const transcriptView = ref<TimelineItem[]>([]);
 const candidateDraft = ref("");
+const candidateDraftOccurredAt = ref("");
 const timelineBaseEpochMs = ref<number | null>(null);
 const tenLaunchCommand = ref("");
 const audioRecoveryHint = ref("");
 const tenPendingHint = ref("");
-const finalizing = ref(false);
+const rtcRecoveryInFlight = ref(false);
+const rtcFailureRecoverAttempts = ref(0);
 
 let tickerTimer: number | null = null;
+let candidateDraftFallbackTimer: number | null = null;
 let eventsSocket: WebSocket | null = null;
 
 const roleTitle = computed(() => "后端开发工程师面试");
@@ -112,10 +121,34 @@ const rtcGateway = new AgoraRTCGateway({
   },
   onConnectionStateChanged(state, reason) {
     transportStatus.value = formatTransportStatus(state, reason);
+    const normalized = String(state || "").trim().toUpperCase();
     if (state === "CONNECTED") {
       micStatus.value = micEnabled.value ? "候选人音频已接入" : "候选人已静音";
+      rtcFailureRecoverAttempts.value = 0;
       errorText.value = "";
+      return;
     }
+    if (normalized === "FAILED" || normalized === "DISCONNECTED") {
+      void recoverRtcConnection({
+        trigger: "connection-state-change",
+        forceReconnect: true,
+        expectedTokenIssue: isLikelyTokenIssueReason(reason),
+      });
+    }
+  },
+  onTokenWillExpire() {
+    void recoverRtcConnection({
+      trigger: "token-will-expire",
+      forceReconnect: false,
+      expectedTokenIssue: true,
+    });
+  },
+  onTokenDidExpire() {
+    void recoverRtcConnection({
+      trigger: "token-did-expire",
+      forceReconnect: true,
+      expectedTokenIssue: true,
+    });
   },
   onRemoteAudioPlaybackError(message) {
     ttsStatus.value = "面试官音频待浏览器放行";
@@ -149,6 +182,68 @@ function formatTransportStatus(state?: string | null, reason?: string | null): s
     default: if (state) stateText = `Agora 状态：${state}`;
   }
   return reasonText ? `${stateText}（${reasonText}）` : stateText;
+}
+
+function isLikelyTokenIssueReason(reason?: string | null): boolean {
+  const normalized = String(reason || "").trim().toUpperCase();
+  if (!normalized) return false;
+  return normalized.includes("TOKEN") || normalized.includes("EXPIRE") || normalized === "9";
+}
+
+async function fetchLatestRtcJoinInfo(): Promise<InterviewRTCJoinInfo> {
+  if (!session.value) throw new Error("Session not ready");
+  return renewInterviewRTCToken(session.value.id, session.value.candidate_id, RTC_CLIENT_ID);
+}
+
+async function restoreLocalMediaState(): Promise<void> {
+  try {
+    await rtcGateway.setMicrophoneEnabled(micEnabled.value);
+  } catch (err) {
+    console.warn("[RTC] failed to restore microphone state", err);
+  }
+  try {
+    await rtcGateway.setCameraEnabled(cameraEnabled.value);
+  } catch (err) {
+    console.warn("[RTC] failed to restore camera state", err);
+  }
+  if (candidateVideoMount.value) rtcGateway.playLocalVideo(candidateVideoMount.value);
+}
+
+async function recoverRtcConnection(options: { trigger: string; forceReconnect: boolean; expectedTokenIssue: boolean }): Promise<void> {
+  if (loading.value || !session.value || rtcRecoveryInFlight.value) return;
+  if (rtcFailureRecoverAttempts.value >= 3 && options.trigger === "connection-state-change") return;
+  rtcRecoveryInFlight.value = true;
+  try {
+    const latest = await fetchLatestRtcJoinInfo();
+    if (!latest.join_token) throw new Error("empty join token");
+    const uid = Number(latest.uid);
+    if (Number.isNaN(uid)) throw new Error("invalid rtc uid");
+    const joinParams = {
+      appId: String(latest.app_id || ""),
+      channel: latest.channel_name,
+      token: latest.join_token,
+      uid,
+    };
+    const canRenewInPlace = !options.forceReconnect && Boolean(joinParams.appId && joinParams.channel);
+    if (canRenewInPlace) {
+      await rtcGateway.renewToken(joinParams.token);
+    } else {
+      await rtcGateway.disconnect();
+      await rtcGateway.connect(joinParams);
+      await restoreLocalMediaState();
+    }
+    rtcFailureRecoverAttempts.value = 0;
+    errorText.value = "";
+    transportStatus.value = canRenewInPlace ? "Agora token 已自动续签" : "Agora 已自动重连";
+    console.info("[RTC] recovery succeeded", { trigger: options.trigger, mode: canRenewInPlace ? "renew" : "reconnect" });
+  } catch (err: any) {
+    rtcFailureRecoverAttempts.value += 1;
+    const message = err?.message || "RTC token refresh failed";
+    errorText.value = `RTC 自动恢复失败(${rtcFailureRecoverAttempts.value}): ${message}`;
+    console.error("[RTC] recovery failed", { trigger: options.trigger, expectedTokenIssue: options.expectedTokenIssue, err });
+  } finally {
+    rtcRecoveryInFlight.value = false;
+  }
 }
 
 function parseOccurredAtMs(input?: string | null): number | null {
@@ -219,20 +314,68 @@ function readPreferredSessionId(): string {
   return "";
 }
 
-function appendTranscript(transcript: string, speaker = "候选人", occurredAt?: string): void {
+function isTranscriptOverlap(left: string, right: string): boolean {
+  const a = left.trim();
+  const b = right.trim();
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+function clearCandidateDraftFallbackTimer(): void {
+  if (candidateDraftFallbackTimer != null) {
+    window.clearTimeout(candidateDraftFallbackTimer);
+    candidateDraftFallbackTimer = null;
+  }
+}
+
+function appendTranscript(
+  transcript: string,
+  speaker = "候选人",
+  occurredAt?: string,
+  kind: TimelineItem["kind"] = "confirmed"
+): void {
   const text = transcript.trim();
   if (!text) return;
   const normalizedSpeaker = normalizeSpeaker(speaker);
   const timelineSecond = resolveTimelineSecond(occurredAt);
   const lastItem = transcriptView.value[transcriptView.value.length - 1];
+  if (
+    lastItem &&
+    lastItem.speaker === normalizedSpeaker &&
+    lastItem.kind === "draft_fallback" &&
+    timelineSecond - lastItem.endSecond <= TRANSCRIPT_MERGE_WINDOW_SECONDS &&
+    isTranscriptOverlap(lastItem.transcript, text)
+  ) {
+    transcriptView.value = [
+      ...transcriptView.value.slice(0, -1),
+      { ...lastItem, transcript: text, endSecond: Math.max(lastItem.endSecond, timelineSecond), kind },
+    ];
+    return;
+  }
   if (lastItem && lastItem.speaker === normalizedSpeaker && timelineSecond - lastItem.endSecond <= TRANSCRIPT_MERGE_WINDOW_SECONDS) {
     const isExactDuplicate = lastItem.transcript.trim() === text;
     if (isExactDuplicate) return;
     const mergedText = [lastItem.transcript, text].filter(Boolean).join("\n");
-    transcriptView.value = [...transcriptView.value.slice(0, -1), { ...lastItem, transcript: mergedText, endSecond: Math.max(lastItem.endSecond, timelineSecond) }];
+    transcriptView.value = [...transcriptView.value.slice(0, -1), { ...lastItem, transcript: mergedText, endSecond: Math.max(lastItem.endSecond, timelineSecond), kind }];
     return;
   }
-  transcriptView.value = [...transcriptView.value, { speaker: normalizedSpeaker, transcript: text, startSecond: timelineSecond, endSecond: timelineSecond }];
+  transcriptView.value = [...transcriptView.value, { speaker: normalizedSpeaker, transcript: text, startSecond: timelineSecond, endSecond: timelineSecond, kind }];
+}
+
+function commitCandidateDraftToTranscript(kind: TimelineItem["kind"] = "draft_fallback"): void {
+  const text = candidateDraft.value.trim();
+  if (!text) return;
+  appendTranscript(text, "候选人", candidateDraftOccurredAt.value, kind);
+  candidateDraft.value = "";
+  candidateDraftOccurredAt.value = "";
+  clearCandidateDraftFallbackTimer();
+}
+
+function scheduleCandidateDraftFallback(): void {
+  clearCandidateDraftFallbackTimer();
+  if (!candidateDraft.value.trim()) return;
+  candidateDraftFallbackTimer = window.setTimeout(() => {
+    commitCandidateDraftToTranscript("draft_fallback");
+  }, CANDIDATE_DRAFT_FALLBACK_MS);
 }
 
 function hydrateReplay(items: ReplayItem[]): void {
@@ -243,9 +386,34 @@ function hydrateReplay(items: ReplayItem[]): void {
 
 async function scrollTranscriptToLatest(): Promise<void> {
   await nextTick();
-  if (transcriptScrollRef.value) {
-    transcriptScrollRef.value.scrollTop = transcriptScrollRef.value.scrollHeight;
-  }
+  if (!transcriptScrollRef.value || !isTranscriptPinnedToLatest.value) return;
+  transcriptScrollRef.value.scrollTop = transcriptScrollRef.value.scrollHeight;
+  updateTranscriptScrollState();
+}
+
+function updateTranscriptScrollState(): void {
+  const container = transcriptScrollRef.value;
+  if (!container) return;
+  canScrollTranscriptUp.value = container.scrollTop > 8;
+  const distanceToBottom = container.scrollHeight - container.clientHeight - container.scrollTop;
+  isTranscriptPinnedToLatest.value = distanceToBottom <= 24;
+}
+
+function handleTranscriptScroll(): void {
+  updateTranscriptScrollState();
+}
+
+function revealPreviousTranscriptChunk(): void {
+  const container = transcriptScrollRef.value;
+  if (!container) return;
+  container.scrollBy({ top: -Math.max(container.clientHeight * 0.72, 220), behavior: "smooth" });
+}
+
+function jumpTranscriptToLatest(): void {
+  const container = transcriptScrollRef.value;
+  if (!container) return;
+  isTranscriptPinnedToLatest.value = true;
+  container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
 }
 
 async function connectEventBus(sessionIdValue: string): Promise<void> {
@@ -266,12 +434,18 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
         const text = String(payload.transcript || payload.text || "").trim();
         if (!isFinal) {
             // partial — show as draft
-            if (text) candidateDraft.value = text;
+            if (text) {
+                candidateDraft.value = text;
+                candidateDraftOccurredAt.value = String(payload.occurred_at || "");
+                scheduleCandidateDraftFallback();
+            }
         } else {
             // final — commit to transcript
             if (text) {
-                appendTranscript(text, "候选人", String(payload.occurred_at || ""));
+                clearCandidateDraftFallbackTimer();
+                appendTranscript(text, "候选人", String(payload.occurred_at || ""), "confirmed");
                 candidateDraft.value = "";
+                candidateDraftOccurredAt.value = "";
             }
         }
         return;
@@ -279,6 +453,7 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
 
     // --- Interviewer question / followup published as session.event ---
     if (eventType === "session.event") {
+        if (normalizeSpeaker(String(payload.speaker || "")) !== "候选人") commitCandidateDraftToTranscript("draft_fallback");
         const transcript = String(payload.transcript || "").trim();
         const speaker = String(payload.speaker || "候选人");
         if (transcript) appendTranscript(transcript, speaker, String(payload.occurred_at || ""));
@@ -289,20 +464,32 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
 
     if (eventType === "agent.state") {
         const state = String(payload.state || "").toLowerCase();
+        if (state === "thinking" || state === "speaking") commitCandidateDraftToTranscript("draft_fallback");
         if (state === "listening") ttsStatus.value = "面试官正在聆听";
         else if (state === "thinking") ttsStatus.value = "面试官正在思考";
         else if (state === "speaking") ttsStatus.value = "面试官正在发问";
         return;
     }
     if (eventType === "question.update" || eventType === "question.final") {
+        commitCandidateDraftToTranscript("draft_fallback");
         const text = String(payload.text || payload.spoken_text || "");
         if (text) { followupQuestion.value = ""; currentQuestion.value = text; }
         return;
     }
-    if (eventType === "candidate.partial") { candidateDraft.value = String(payload.text || ""); return; }
+    if (eventType === "candidate.partial") {
+        candidateDraft.value = String(payload.text || "");
+        candidateDraftOccurredAt.value = String(payload.occurred_at || "");
+        scheduleCandidateDraftFallback();
+        return;
+    }
     if (eventType === "candidate.final") {
         const text = String(payload.text || payload.transcript || "");
-        if (text) { appendTranscript(text, "候选人", String(payload.occurred_at || "")); candidateDraft.value = ""; }
+        if (text) {
+            clearCandidateDraftFallbackTimer();
+            appendTranscript(text, "候选人", String(payload.occurred_at || ""), "confirmed");
+            candidateDraft.value = "";
+            candidateDraftOccurredAt.value = "";
+        }
         return;
     }
   };
@@ -354,19 +541,6 @@ async function toggleCamera(): Promise<void> {
   }
 }
 
-async function handleFinalizeAnswer(): Promise<void> {
-  if (finalizing.value || !sessionId.value) return;
-  finalizing.value = true;
-  try {
-    await finalizeInterviewTurn(sessionId.value);
-    // Visual feedback handled by ASR event clearing and AI thinking status
-  } catch (err: any) {
-    console.error("[InterviewRoom] Failed to finalize turn", err);
-  } finally {
-    finalizing.value = false;
-  }
-}
-
 async function bootstrap(): Promise<void> {
   loading.value = true;
   try {
@@ -376,12 +550,13 @@ async function bootstrap(): Promise<void> {
     } else {
         session.value = await bootstrapDemoSession();
     }
-    const rtc = await joinInterviewRTC(session.value!.id, session.value!.candidate_id);
+    const rtc = await joinInterviewRTC(session.value!.id, session.value!.candidate_id, RTC_CLIENT_ID);
     await rtcGateway.connect({ appId: rtc.app_id!, channel: rtc.channel_name, token: rtc.join_token, uid: Number(rtc.uid) });
     await ensureTenLaunchCommand(session.value!.id);
     if (candidateVideoMount.value) rtcGateway.playLocalVideo(candidateVideoMount.value);
     const replay = await loadReplayItems(session.value!.id);
     hydrateReplay(replay);
+    isTranscriptPinnedToLatest.value = true;
     await connectEventBus(session.value!.id);
     tickerTimer = window.setInterval(() => { elapsedSeconds.value += 1; const mins = Math.floor(elapsedSeconds.value / 60).toString().padStart(2, "0"); const secs = Math.floor(elapsedSeconds.value % 60).toString().padStart(2, "0"); meetingTimeText.value = `${mins}:${secs}`; }, 1000);
   } catch (err: any) {
@@ -392,12 +567,12 @@ async function bootstrap(): Promise<void> {
 }
 
 onMounted(() => bootstrap());
-onBeforeUnmount(() => { if (tickerTimer) clearInterval(tickerTimer); eventsSocket?.close(); rtcGateway.disconnect(); });
+onBeforeUnmount(() => { if (tickerTimer) clearInterval(tickerTimer); clearCandidateDraftFallbackTimer(); eventsSocket?.close(); rtcGateway.disconnect(); });
 watch([() => transcriptView.value.length, () => candidateDraft.value], () => scrollTranscriptToLatest());
 </script>
 
 <template>
-  <div class="meeting-shell bg-slate-50 min-h-screen flex flex-col font-sans">
+  <div class="meeting-shell bg-slate-50 h-screen overflow-hidden flex flex-col font-sans">
     <header class="h-16 bg-white border-b px-8 flex items-center justify-between shrink-0">
       <div class="flex items-center gap-4">
         <span class="font-bold text-slate-900">职位面试中</span>
@@ -417,8 +592,8 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
       </div>
     </header>
 
-    <main class="flex-1 flex overflow-hidden">
-      <section class="flex-1 p-8 overflow-hidden flex flex-col">
+    <main class="flex-1 min-h-0 flex overflow-hidden">
+      <section class="flex-1 min-h-0 p-8 overflow-hidden flex flex-col">
         <div class="flex-1 bg-slate-900 rounded-2xl relative overflow-hidden ring-1 ring-slate-800 shadow-2xl">
           <div ref="candidateVideoMount" class="w-full h-full object-cover"></div>
           <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-slate-900/90 text-white flex-col gap-4">
@@ -427,41 +602,32 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
           </div>
           <div v-if="!loading && !errorText" class="absolute top-6 left-6 flex items-center gap-2 bg-slate-900/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10">
             <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-            <span class="text-xs text-white font-medium">{{ interviewerBannerText }}</span>
+            <span class="text-sm text-white font-medium">{{ interviewerBannerText }}</span>
           </div>
           <div class="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-3">
             <button
-              class="w-12 h-12 rounded-full border border-white/20 backdrop-blur-md text-white flex items-center justify-center transition"
+              class="w-14 h-14 rounded-full border border-white/20 backdrop-blur-md text-white flex items-center justify-center transition"
               :class="micEnabled ? 'bg-black/40 hover:bg-black/55' : 'bg-red-600/85 hover:bg-red-600'"
               :disabled="loading"
               @click="toggleMic"
               :title="micEnabled ? '关闭麦克风' : '开启麦克风'"
             >
-              <span class="text-[10px] font-bold">{{ micEnabled ? '麦克风' : '静音' }}</span>
+              <span class="text-xs font-bold">{{ micEnabled ? '麦克风' : '静音' }}</span>
             </button>
             <button
-              class="w-12 h-12 rounded-full border border-white/20 backdrop-blur-md text-white flex items-center justify-center transition"
+              class="w-14 h-14 rounded-full border border-white/20 backdrop-blur-md text-white flex items-center justify-center transition"
               :class="cameraEnabled ? 'bg-black/40 hover:bg-black/55' : 'bg-red-600/85 hover:bg-red-600'"
               :disabled="loading"
               @click="toggleCamera"
               :title="cameraEnabled ? '关闭视频' : '开启视频'"
             >
-              <span class="text-[10px] font-bold">{{ cameraEnabled ? '视频' : '关闭' }}</span>
-            </button>
-            <div class="w-px h-6 bg-white/10 mx-1"></div>
-            <button
-              class="px-6 h-12 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-lg shadow-blue-500/20 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-2"
-              @click="handleFinalizeAnswer"
-              :disabled="loading || finalizing || interviewerSpeaking"
-            >
-              <span v-if="finalizing" class="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-              <span>回答结束</span>
+              <span class="text-xs font-bold">{{ cameraEnabled ? '视频' : '关闭' }}</span>
             </button>
           </div>
         </div>
       </section>
 
-      <aside class="w-[400px] border-l bg-white flex flex-col shrink-0">
+      <aside class="w-[400px] min-h-0 border-l bg-white flex flex-col shrink-0 overflow-hidden">
         <div class="p-6 border-b flex items-center justify-between">
           <h2 class="font-bold text-slate-900">会议纪要</h2>
           <div class="flex items-center gap-1.5 text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded uppercase tracking-wider">
@@ -470,38 +636,66 @@ watch([() => transcriptView.value.length, () => candidateDraft.value], () => scr
           </div>
         </div>
 
-        <div class="flex-1 min-h-0 p-6 flex flex-col gap-8">
+        <div class="flex-1 min-h-0 overflow-hidden p-6 flex flex-col gap-8">
           <div class="bg-blue-50/50 rounded-xl p-5 border border-blue-100/50">
              <div class="flex items-center gap-2 mb-3">
                <span class="text-blue-600 text-lg">?</span>
-               <span class="text-xs font-bold text-blue-600 uppercase tracking-widest">当前问题</span>
+               <span class="text-sm font-bold text-blue-600 uppercase tracking-widest">当前问题</span>
              </div>
-             <p class="text-sm font-medium text-slate-900 leading-relaxed">{{ currentQuestion }}</p>
+             <p class="text-base font-medium text-slate-900 leading-8">{{ currentQuestion }}</p>
           </div>
 
-          <div class="flex-1 min-h-0 flex flex-col">
+          <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
             <div class="flex items-center gap-2 text-slate-400">
                <span class="text-lg">◌</span>
-               <span class="text-xs font-bold uppercase tracking-widest">实时记录</span>
+               <span class="text-sm font-bold uppercase tracking-widest">实时记录</span>
             </div>
             
-            <div ref="transcriptScrollRef" class="flex-1 min-h-0 overflow-y-auto space-y-6 pt-2 pr-1">
-              <article v-for="(item, idx) in transcriptView" :key="idx" class="space-y-1.5">
-                <div class="flex items-center gap-2 text-[10px] font-medium text-slate-400 uppercase tracking-wider">
+            <div ref="transcriptScrollRef" class="flex-1 min-h-0 overflow-y-auto pt-2 pr-1" @scroll="handleTranscriptScroll">
+              <div
+                v-if="canScrollTranscriptUp"
+                class="sticky top-0 z-10 -mx-1 mb-3 px-1 pt-1 pb-2 bg-gradient-to-b from-white via-white to-white/0"
+              >
+                <button
+                  type="button"
+                  class="w-full rounded-xl border border-slate-200 bg-white/95 px-3 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900"
+                  @click="revealPreviousTranscriptChunk"
+                >
+                  查看更早记录
+                </button>
+              </div>
+
+              <div class="space-y-6">
+                <article v-for="(item, idx) in transcriptView" :key="idx" class="space-y-1.5">
+                <div class="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   <span>{{ formatTimelineRange(item.startSecond, item.endSecond) }}</span>
                   <span>·</span>
                   <span>{{ item.speaker }}</span>
                 </div>
-                <p class="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">{{ item.transcript }}</p>
+                <p class="text-base text-slate-700 leading-8 whitespace-pre-wrap break-words">{{ item.transcript }}</p>
               </article>
-              <article v-if="candidateDraft" class="space-y-1.5 opacity-50">
-                <div class="flex items-center gap-2 text-[10px] font-medium text-slate-400 uppercase tracking-wider">
+                <article v-if="candidateDraft" class="space-y-1.5 opacity-50">
+                <div class="flex items-center gap-2 text-xs font-medium text-slate-400 uppercase tracking-wider">
                   <span>{{ meetingTimeText }}</span>
                   <span>·</span>
                   <span>候选人</span>
                 </div>
-                <p class="text-sm text-slate-700 leading-relaxed italic whitespace-pre-wrap break-words">{{ candidateDraft }}</p>
-              </article>
+                <p class="text-base text-slate-700 leading-8 italic whitespace-pre-wrap break-words">{{ candidateDraft }}</p>
+                </article>
+              </div>
+
+              <div
+                v-if="!isTranscriptPinnedToLatest"
+                class="sticky bottom-0 z-10 -mx-1 mt-3 px-1 pt-2 pb-1 bg-gradient-to-t from-white via-white to-white/0"
+              >
+                <button
+                  type="button"
+                  class="w-full rounded-xl border border-blue-200 bg-blue-50/95 px-3 py-2.5 text-sm font-semibold text-blue-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-100"
+                  @click="jumpTranscriptToLatest"
+                >
+                  回到最新记录
+                </button>
+              </div>
             </div>
           </div>
         </div>

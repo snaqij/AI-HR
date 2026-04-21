@@ -11,7 +11,6 @@ class RuntimeCommand(StrEnum):
     ON_CONNECTION_FAILURE = "on_connection_failure"
     ON_TOKEN_EXPIRED = "on_token_expired"
     INTERRUPT = "interrupt"
-    FORCE_FINALIZE = "force_finalize"
 
 
 class RuntimeDataChannel(StrEnum):

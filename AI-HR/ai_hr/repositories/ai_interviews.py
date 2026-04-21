@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from ..core.exceptions import ResourceNotFoundError
+from ..core.exceptions import InvalidStateError, ResourceNotFoundError
 from ..db.models import (
     AIInterviewHandoff,
     AIInterviewInvitation,

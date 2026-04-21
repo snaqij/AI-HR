@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core.exceptions import InvalidStateError, ResourceNotFoundError
-from ..db.models import Candidate, CandidateJobPipeline, Job
+from ..db.models import Candidate, CandidateJobPipeline, Job, JobCandidate
 
 
 class CandidateJobPipelineRepository:
@@ -207,11 +207,9 @@ class CandidateJobPipelineRepository:
         base_stmt = (
             select(CandidateJobPipeline)
             .join(Job, CandidateJobPipeline.job_id == Job.id)
-            .join(Candidate, CandidateJobPipeline.candidate_id == Candidate.id)
             .where(
                 Job.auto_request_resume.is_(True),
                 CandidateJobPipeline.resume_request_status == "pending",
-                Candidate.metadata_synced_at.is_not(None),
             )
         )
 
@@ -223,11 +221,9 @@ class CandidateJobPipelineRepository:
         jobs_stmt = (
             select(Job.id)
             .join(CandidateJobPipeline, CandidateJobPipeline.job_id == Job.id)
-            .join(Candidate, CandidateJobPipeline.candidate_id == Candidate.id)
             .where(
                 Job.auto_request_resume.is_(True),
                 CandidateJobPipeline.resume_request_status == "pending",
-                Candidate.metadata_synced_at.is_not(None),
             )
             .distinct()
         )
@@ -257,6 +253,67 @@ class CandidateJobPipelineRepository:
                 break
         
         return selected
+
+    def list_active_auto_request_job_ids(self, *, job_id: str | None = None) -> list[str]:
+        """List job ids that currently have pending auto-request candidates."""
+        jobs_stmt = (
+            select(Job.id)
+            .join(CandidateJobPipeline, CandidateJobPipeline.job_id == Job.id)
+            .where(
+                Job.auto_request_resume.is_(True),
+                CandidateJobPipeline.resume_request_status == "pending",
+            )
+            .distinct()
+        )
+        if job_id:
+            jobs_stmt = jobs_stmt.where(Job.id == job_id)
+        return list(self._session.execute(jobs_stmt).scalars().all())
+
+    def bootstrap_pending_auto_request_pipelines(
+        self,
+        *,
+        job_id: str | None = None,
+        limit: int = 300,
+    ) -> int:
+        """Create missing pending pipelines from job-candidate links for auto-enabled jobs."""
+        safe_limit = max(1, int(limit))
+        stmt = (
+            select(JobCandidate)
+            .join(Job, JobCandidate.job_id == Job.id)
+            .outerjoin(
+                CandidateJobPipeline,
+                (CandidateJobPipeline.job_id == JobCandidate.job_id)
+                & (CandidateJobPipeline.candidate_id == JobCandidate.candidate_id),
+            )
+            .where(
+                Job.auto_request_resume.is_(True),
+                CandidateJobPipeline.id.is_(None),
+            )
+            .order_by(JobCandidate.last_synced_at.desc())
+            .limit(safe_limit)
+        )
+        if job_id:
+            stmt = stmt.where(JobCandidate.job_id == job_id)
+
+        links = list(self._session.execute(stmt).scalars().all())
+        if not links:
+            return 0
+
+        created = 0
+        for link in links:
+            self.ensure(
+                candidate_id=link.candidate_id,
+                job_id=link.job_id,
+                source_channel=link.channel or "boss",
+                external_candidate_id=link.external_candidate_id,
+                payload={
+                    "bootstrapped_from_job_candidate": True,
+                    "job_candidate_id": link.id,
+                },
+            )
+            created += 1
+        self._session.flush()
+        return created
 
     def count_requests_today(self, job_id: str) -> int:
         """Count how many resume requests were sent today for a job."""

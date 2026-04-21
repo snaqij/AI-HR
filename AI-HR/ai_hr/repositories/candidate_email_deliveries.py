@@ -40,6 +40,34 @@ class CandidateEmailDeliveryRepository:
         stmt = stmt.order_by(CandidateEmailDelivery.created_at.desc()).limit(max(1, limit))
         return list(self._session.execute(stmt).scalars().all())
 
+    def list_history(
+        self,
+        *,
+        limit: int = 200,
+        keyword: str | None = None,
+        status: str | None = None,
+    ) -> list[tuple[CandidateEmailDelivery, Candidate, Job]]:
+        stmt = (
+            select(CandidateEmailDelivery, Candidate, Job)
+            .join(Candidate, Candidate.id == CandidateEmailDelivery.candidate_id)
+            .join(Job, Job.id == CandidateEmailDelivery.job_id)
+            .where(CandidateEmailDelivery.scene == "interview_invitation")
+            .order_by(CandidateEmailDelivery.created_at.desc())
+            .limit(max(1, limit))
+        )
+        keyword_query = (keyword or "").strip().lower()
+        if keyword_query:
+            pattern = f"%{keyword_query}%"
+            stmt = stmt.where(
+                Candidate.name.ilike(pattern)
+                | Candidate.email.ilike(pattern)
+                | Job.title.ilike(pattern)
+            )
+        status_query = (status or "").strip().lower()
+        if status_query and status_query != "all":
+            stmt = stmt.where(CandidateEmailDelivery.status == status_query)
+        return list(self._session.execute(stmt).all())
+
     def create(
         self,
         *,

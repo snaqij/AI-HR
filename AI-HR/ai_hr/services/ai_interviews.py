@@ -672,26 +672,6 @@ class AIInterviewService:
             },
         )
 
-    def finalize_session_turn(self, session_id: str) -> dict:
-        """Manually trigger the finalization of the current turn (force AI response)."""
-        entity = self._session_repository.get(session_id)
-        if entity.status != InterviewSessionStatus.IN_PROGRESS:
-            raise InvalidStateError(f"AI interview session '{session_id}' is not in progress.")
-
-        # Publish force_finalize event to the bus. 
-        # The agent (orchestrator) will listen for this and trigger immediate processing.
-        DEFAULT_INTERVIEW_EVENT_BUS.publish(
-            session_id=session_id,
-            event_type=InterviewEventType.CANDIDATE_FORCE_FINALIZE,
-            payload={
-                "session_id": session_id,
-                "ts": int(time.time() * 1000),
-                "source": "manual_trigger"
-            },
-        )
-        
-        return {"session_id": session_id, "status": "sent", "event_type": InterviewEventType.CANDIDATE_FORCE_FINALIZE}
-
     def generate_question_set(
         self, 
         session_id: str | None = None, 

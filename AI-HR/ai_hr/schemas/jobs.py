@@ -84,6 +84,18 @@ class JobListResult(BaseModel):
     items: list[JobResponse]
 
 
+class JobBatchDeleteRequest(BaseModel):
+    """Batch delete jobs by ids."""
+
+    job_ids: list[str] = Field(default_factory=list, min_length=1)
+
+
+class JobBatchDeleteResult(BaseModel):
+    """Batch delete result."""
+
+    deleted_count: int
+
+
 class JobPublishRequest(BaseModel):
     """岗位发布请求体。"""
 

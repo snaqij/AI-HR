@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, UTC
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..core.exceptions import ResourceNotFoundError
@@ -41,7 +41,16 @@ class JobRepository:
             raise ResourceNotFoundError(f"Job '{job_id}' was not found")
         return job
 
-    def list_all(self, limit: int = 100, offset: int = 0) -> list[Job]:
+    def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        platform: str | None = None,
+        name: str | None = None,
+        job_type: str | None = None,
+        salary: str | None = None,
+    ) -> list[Job]:
         """查询所有岗位记录及关联候选人计数。"""
         from sqlalchemy import func
         from ..db.models import JobCandidate
@@ -67,7 +76,13 @@ class JobRepository:
             # 动态绑定属性，供 Pydantic JobResponse.model_validate 使用
             job.candidate_count = count or 0
             output.append(job)
-        return output
+        return self._filter_jobs(
+            output,
+            platform=platform,
+            name=name,
+            job_type=job_type,
+            salary=salary,
+        )
 
     def add_publication(
         self,
@@ -226,3 +241,66 @@ class JobRepository:
         self._session.commit()
         self._session.refresh(job)
         return job
+
+    def delete(self, job_id: str) -> None:
+        """Delete one job."""
+        job = self.get(job_id)
+        self._session.delete(job)
+        self._session.commit()
+
+    def delete_many(self, job_ids: list[str]) -> int:
+        """Delete many jobs and return deleted count."""
+        unique_ids = list(dict.fromkeys([item for item in job_ids if item]))
+        if not unique_ids:
+            return 0
+        stmt = delete(Job).where(Job.id.in_(unique_ids))
+        result = self._session.execute(stmt)
+        self._session.commit()
+        return int(result.rowcount or 0)
+
+    def _filter_jobs(
+        self,
+        jobs: list[Job],
+        *,
+        platform: str | None,
+        name: str | None,
+        job_type: str | None,
+        salary: str | None,
+    ) -> list[Job]:
+        platform_query = (platform or "").strip().lower()
+        name_query = (name or "").strip().lower()
+        type_query = (job_type or "").strip().lower()
+        salary_query = (salary or "").strip().lower().replace(" ", "")
+
+        result = jobs
+        if platform_query:
+            result = [
+                job
+                for job in result
+                if any((pub.channel or "").strip().lower() == platform_query for pub in job.publications)
+            ]
+        if name_query:
+            result = [job for job in result if name_query in (job.title or "").lower()]
+        if type_query:
+            result = [job for job in result if self._infer_job_type(job) == type_query]
+        if salary_query:
+            result = [
+                job
+                for job in result
+                if salary_query in ((job.salary_range or "").lower().replace(" ", ""))
+            ]
+        return result
+
+    @staticmethod
+    def _infer_job_type(job: Job) -> str:
+        text = " ".join(
+            [
+                str(job.title or ""),
+                str(job.department or ""),
+                str(job.requirements or ""),
+            ]
+        ).lower()
+        internship_keywords = ("实习", "intern", "应届", "校招", "校园")
+        if any(keyword in text for keyword in internship_keywords):
+            return "intern"
+        return "social"

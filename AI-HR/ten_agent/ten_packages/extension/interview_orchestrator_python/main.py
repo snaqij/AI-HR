@@ -57,7 +57,6 @@ from ai_hr.services.llm.router import ModelRouter
 from ai_hr.services.orchestrator.conversation_arbiter import ConversationArbiter
 from ai_hr.services.orchestrator.streaming_utils import split_sentences, split_sentences_async
 from ai_hr.services.orchestrator.turn_completion import TurnCompletionJudge
-from ai_hr.services.orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS
 
 try:
     from .prompt_builder import InterviewPromptBuilder, PromptBuildInput
@@ -918,7 +917,6 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.event_bridge.start()
         
         # Start background listener for event bus
-        self._create_task(self._listen_for_events(), name="orchestrator-event-bus-listener")
         
         self.session_context = SessionContext(session_id=self.session_id, max_turns=8)
         
@@ -1658,6 +1656,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         await ten_env.send_data(tts_data)
 
     async def _listen_for_events(self) -> None:
+        return
         """监听 Event Bus 上的外部事件，如手动强制结算。"""
         try:
             async for event in DEFAULT_INTERVIEW_EVENT_BUS.subscribe():

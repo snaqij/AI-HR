@@ -34,6 +34,8 @@ from ...schemas.job_sync import (
     JobSyncTaskUpsertRequest,
 )
 from ...schemas.jobs import (
+    JobBatchDeleteRequest,
+    JobBatchDeleteResult,
     JobCandidateItem,
     JobCandidateListResult,
     JobCandidateStageUpdateRequest,
@@ -101,17 +103,49 @@ def update_job_settings(
 def list_jobs(
     limit: int = 20,
     offset: int = 0,
+    platform: str | None = None,
+    name: str | None = None,
+    job_type: str | None = None,
+    salary: str | None = None,
     session: Session = Depends(get_db_session),
 ) -> Envelope[JobListResult]:
     """列出全量已创建/同步的岗位。"""
     service = get_job_service(session)
-    jobs = service.list_jobs(limit=limit, offset=offset)
+    jobs = service.list_jobs(
+        limit=limit,
+        offset=offset,
+        platform=platform,
+        name=name,
+        job_type=job_type,
+        salary=salary,
+    )
     return Envelope.success(
         JobListResult(
-            total=len(jobs),  # Simple count for demo
+            total=len(jobs),
             items=[JobResponse.model_validate(item) for item in jobs],
         )
     )
+
+
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_job(
+    job_id: str,
+    session: Session = Depends(get_db_session),
+) -> None:
+    """Delete one job."""
+    service = get_job_service(session)
+    service.delete_job(job_id)
+
+
+@router.post("/batch-delete", response_model=Envelope[JobBatchDeleteResult])
+def batch_delete_jobs(
+    payload: JobBatchDeleteRequest,
+    session: Session = Depends(get_db_session),
+) -> Envelope[JobBatchDeleteResult]:
+    """Batch delete jobs."""
+    service = get_job_service(session)
+    deleted_count = service.batch_delete_jobs(payload.job_ids)
+    return Envelope.success(JobBatchDeleteResult(deleted_count=deleted_count))
 
 
 @router.post("/{job_id}/publish", response_model=Envelope[JobPublishResult])
@@ -243,14 +277,26 @@ def list_job_candidates(
     job_id: str,
     limit: int = 30,
     cursor: str | None = None,
+    keyword: str | None = None,
+    resume_status: str | None = None,
+    segment: str | None = None,
     session: Session = Depends(get_db_session),
 ) -> Envelope[JobCandidateListResult]:
     """查看岗位下已同步的候选人。"""
     service = get_job_service(session)
-    result = service.list_job_candidates(job_id, limit=limit, cursor=cursor)
+    result = service.list_job_candidates(
+        job_id,
+        limit=limit,
+        cursor=cursor,
+        keyword=keyword,
+        resume_status=resume_status,
+        segment=segment,
+    )
     response = JobCandidateListResult(
         job_id=result["job_id"],
         total=result["total"],
+        evaluated_count=result["evaluated_count"],
+        sent_count=result["sent_count"],
         limit=result["limit"],
         next_cursor=result["next_cursor"],
         has_more=result["has_more"],

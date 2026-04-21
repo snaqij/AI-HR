@@ -113,17 +113,6 @@ def get_ai_interview_session(
     return Envelope.success(AIInterviewSessionResponse.model_validate(result))
 
 
-@router.post("/sessions/{session_id}/finalize", response_model=Envelope[dict])
-def finalize_ai_interview_session(
-    session_id: str,
-    session: Session = Depends(get_db_session),
-) -> Envelope[dict]:
-    """Manually trigger the finalization of the current turn (force AI response)."""
-    service = get_ai_interview_service(session)
-    result = service.finalize_session_turn(session_id)
-    return Envelope.success(result)
-
-
 @router.post("/sessions/{session_id}/start", response_model=Envelope[AIInterviewSessionResponse])
 def start_ai_interview_session(
     session_id: str,

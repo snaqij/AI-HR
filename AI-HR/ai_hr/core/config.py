@@ -1,4 +1,4 @@
-"""应用配置定义。"""
+"""Application configuration definitions."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ ENV_FILE_MAP = {
 
 
 class Settings(BaseSettings):
-    """从环境变量与 env 文件加载的应用配置。"""
+    """Application settings loaded from env vars and env files."""
 
     app_name: str = "AI-HR API"
     app_version: str = "0.1.0"
@@ -117,7 +117,7 @@ class Settings(BaseSettings):
     agora_app_id: str | None = None
     agora_app_certificate: str | None = None
     agora_room_prefix: str = "ai-intv-"
-    agora_token_ttl_seconds: int = 3600
+    agora_token_ttl_seconds: int = 14400
     agora_ten_bot_user_id_prefix: str = "aihr-bot-"
     livekit_base_url: str | None = None
     livekit_api_key: str | None = None
@@ -226,7 +226,7 @@ class Settings(BaseSettings):
 
 
 def _resolve_env_file() -> Path:
-    """根据显式路径或环境别名解析当前 env 文件路径。"""
+    """Resolve env file path from explicit path or environment alias."""
     explicit_env_file = os.getenv("AI_HR_ENV_FILE")
     if explicit_env_file:
         return Path(explicit_env_file).expanduser().resolve()
@@ -238,8 +238,15 @@ def _resolve_env_file() -> Path:
 
 @lru_cache
 def get_settings() -> Settings:
-    """返回进程级缓存的 Settings 实例。"""
+    """Return process-level cached Settings instance."""
     env_file = _resolve_env_file()
     if env_file.exists():
-        return Settings(_env_file=env_file)
+        last_error: UnicodeDecodeError | None = None
+        for encoding in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
+            try:
+                return Settings(_env_file=env_file, _env_file_encoding=encoding)
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
     return Settings()

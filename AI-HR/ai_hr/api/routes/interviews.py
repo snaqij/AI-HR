@@ -21,6 +21,11 @@ from ...schemas.interviews import (
     InterviewSyncStatusRequest,
     InterviewSyncStatusResult,
 )
+from ...schemas.interview_invitation_email import (
+    InterviewInvitationHistoryResult,
+    InterviewInvitationRecordDetailResult,
+)
+from ...services.interview_invitation_email import get_interview_invitation_email_service
 from ...services.interviews import get_interview_service
 
 router = APIRouter(prefix="", tags=["interviews"])
@@ -123,3 +128,27 @@ def get_job_interview_progress(
     service = get_interview_service(session)
     result = service.get_job_interview_progress(job_id)
     return Envelope.success(InterviewProgressResult.model_validate(result))
+
+
+@router.get("/interviews/invitations/history", response_model=Envelope[InterviewInvitationHistoryResult])
+def list_interview_invitation_history(
+    limit: int = 200,
+    keyword: str | None = None,
+    status: str | None = None,
+    session: Session = Depends(get_db_session),
+) -> Envelope[InterviewInvitationHistoryResult]:
+    """List global interview invitation email history."""
+    service = get_interview_invitation_email_service(session)
+    result = service.list_invitation_history(limit=limit, keyword=keyword, status=status)
+    return Envelope.success(result)
+
+
+@router.get("/interviews/invitations/{delivery_id}/record", response_model=Envelope[InterviewInvitationRecordDetailResult])
+def get_interview_invitation_record(
+    delivery_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[InterviewInvitationRecordDetailResult]:
+    """Get interview record detail by invitation delivery id."""
+    service = get_interview_invitation_email_service(session)
+    result = service.get_invitation_record_detail(delivery_id=delivery_id)
+    return Envelope.success(result)

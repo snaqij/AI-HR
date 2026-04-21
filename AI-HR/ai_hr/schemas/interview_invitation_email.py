@@ -64,3 +64,62 @@ class CandidateEmailDeliveryListResult(BaseModel):
     job_id: str
     total: int
     items: list[CandidateEmailDeliveryResponse]
+
+
+class InterviewInvitationHistoryItem(BaseModel):
+    """Global invitation history item with candidate/job display fields."""
+
+    id: str
+    candidate_id: str
+    candidate_name: str
+    candidate_email: str | None = None
+    job_id: str
+    job_title: str
+    delivery_status: str
+    scene: str
+    sent_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class InterviewInvitationHistoryResult(BaseModel):
+    """Global invitation history list."""
+
+    total: int
+    items: list[InterviewInvitationHistoryItem]
+
+
+class InterviewQuestionAnswerItem(BaseModel):
+    """Interview question and candidate answer pair."""
+
+    question_id: str
+    question: str
+    candidate_answer: str | None = None
+    answer_turn_no: int | None = None
+
+
+class InterviewAIAnalysis(BaseModel):
+    """AI interview analysis summary."""
+
+    summary: str | None = None
+    recommendation: str | None = None
+    dimension_scores: dict[str, Any] = Field(default_factory=dict)
+    risk_tags: list[str] = Field(default_factory=list)
+
+
+class InterviewInvitationRecordDetailResult(BaseModel):
+    """Interview record detail for one invitation delivery."""
+
+    delivery_id: str
+    candidate_id: str
+    candidate_name: str
+    candidate_email: str | None = None
+    job_id: str
+    job_title: str
+    delivery_status: str
+    invitation_id: str | None = None
+    session_id: str | None = None
+    has_record: bool = False
+    record_message: str | None = None
+    questions: list[InterviewQuestionAnswerItem] = Field(default_factory=list)
+    analysis: InterviewAIAnalysis = Field(default_factory=InterviewAIAnalysis)

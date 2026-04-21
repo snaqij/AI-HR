@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="max-w-7xl mx-auto flex flex-col gap-5">
     <div class="bg-surface-container-lowest p-6 rounded-2xl border border-outline-variant/10 shadow-sm" v-if="job">
       <div class="flex items-center justify-between mb-5">
@@ -71,7 +71,7 @@
           <button
             v-for="tab in tabs"
             :key="tab.key"
-            @click="activeTab = tab.key"
+            @click="handleTabChange(tab.key)"
             class="px-5 py-2.5 text-xs font-black uppercase tracking-widest rounded-full transition-all"
             :class="
               activeTab === tab.key
@@ -119,9 +119,23 @@
         <div class="col-span-3"><span class="text-[11px] font-black uppercase tracking-widest">候选人基础资料</span></div>
         <div class="col-span-2 text-center"><span class="text-[11px] font-black uppercase tracking-widest">教育与工作背景</span></div>
         <div class="col-span-2 text-center"><span class="text-[11px] font-black uppercase tracking-widest">简历状态</span></div>
-        <div class="col-span-2 text-center"><span class="text-[11px] font-black uppercase tracking-widest">评估结果</span></div>
+        <div class="col-span-2 text-center">
+          <div class="inline-flex items-center gap-1.5">
+            <span class="text-[11px] font-black uppercase tracking-widest">评估结果</span>
+            <button
+              type="button"
+              class="w-5 h-5 rounded-md hover:bg-surface-container-high text-on-surface-variant/70 hover:text-primary transition-colors inline-flex items-center justify-center"
+              :title="scoreSortOrder === 'desc' ? '按分数降序' : '按分数升序'"
+              @click="toggleScoreSort"
+            >
+              <span class="material-symbols-outlined text-sm leading-none">
+                {{ scoreSortOrder === "desc" ? "arrow_downward" : "arrow_upward" }}
+              </span>
+            </button>
+          </div>
+        </div>
         <div class="col-span-1 text-center"><span class="text-[11px] font-black uppercase tracking-widest">邮件</span></div>
-        <div class="col-span-2 text-right"><span class="text-[11px] font-black uppercase tracking-widest">操作</span></div>
+        <div class="col-span-2 text-center"><span class="text-[11px] font-black uppercase tracking-widest">操作</span></div>
       </div>
 
       <div v-if="!isLoading && filteredCandidates.length > 0" class="divide-y divide-outline-variant/5">
@@ -181,9 +195,9 @@
                 </span>
                 <span
                   class="px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase"
-                  :class="getRecommendationBadge(evaluationByCandidateId[item.candidate.id].recommendation)"
+                  :class="getRecommendationBadge(getEffectiveRecommendation(item.candidate.id))"
                 >
-                  {{ getRecommendationText(evaluationByCandidateId[item.candidate.id].recommendation) }}
+                  {{ getRecommendationText(getEffectiveRecommendation(item.candidate.id)) }}
                 </span>
               </div>
             </template>
@@ -204,16 +218,16 @@
             <p v-else class="text-[10px] font-bold text-on-surface-variant/40 uppercase tracking-widest">无</p>
           </div>
 
-          <div class="col-span-2 text-right flex justify-end gap-3">
+          <div class="col-span-2 flex justify-center gap-3">
             <button
-              class="px-4 h-11 rounded-xl hover:bg-primary/10 text-on-surface-variant hover:text-primary transition-all flex items-center justify-center border border-outline-variant/10"
+              class="px-4 h-11 rounded-xl hover:bg-primary/10 text-on-surface-variant hover:text-primary transition-all flex items-center justify-center border border-outline-variant/10 whitespace-nowrap"
               @click="handleViewDetails(item)"
             >
-              查看详情
+              详情
             </button>
             <button
-              class="px-4 h-11 rounded-xl bg-surface-container-low text-primary hover:bg-primary hover:text-white transition-all flex items-center justify-center shadow-md border border-primary/5 disabled:opacity-50 disabled:cursor-not-allowed"
-              :disabled="!canInvite(item.candidate.id) || sendingCandidateId === item.candidate.id"
+              class="px-4 h-11 rounded-xl bg-surface-container-low text-primary hover:bg-primary hover:text-white transition-all flex items-center justify-center shadow-md border border-primary/5 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+              :disabled="sendingCandidateId === item.candidate.id"
               @click="handleManualInvite(item)"
             >
               {{ sendingCandidateId === item.candidate.id ? "发送中" : "发送邀约" }}
@@ -222,7 +236,7 @@
         </div>
       </div>
       <div
-        v-if="!isLoading && hasMoreCandidates && keyword.trim() === ''"
+        v-if="!isLoading && filteredCandidates.length > 0 && hasMoreCandidates && keyword.trim() === ''"
         class="px-8 py-5 border-t border-outline-variant/5 flex justify-center"
       >
         <button
@@ -234,7 +248,7 @@
         </button>
       </div>
 
-      <div v-else-if="jobId && !isLoading && filteredCandidates.length === 0" class="p-40 text-center">
+      <div v-if="jobId && !isLoading && filteredCandidates.length === 0" class="p-40 text-center">
         <div class="w-24 h-24 bg-surface-container-low rounded-full flex items-center justify-center mx-auto mb-6">
           <span class="material-symbols-outlined text-5xl text-on-surface-variant/20">person_add</span>
         </div>
@@ -244,12 +258,12 @@
         </p>
       </div>
 
-      <div v-else-if="jobId && isLoading" class="p-40 text-center">
+      <div v-if="jobId && isLoading" class="p-40 text-center">
         <div class="inline-block w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
         <p class="text-sm font-black text-on-surface-variant mt-6 uppercase tracking-widest">正在加载候选人数据...</p>
       </div>
 
-      <div v-else class="p-40 text-center">
+      <div v-if="!jobId" class="p-40 text-center">
         <div class="w-24 h-24 bg-surface-container-low rounded-full flex items-center justify-center mx-auto mb-6">
           <span class="material-symbols-outlined text-5xl text-on-surface-variant/20 scale-150">work_history</span>
         </div>
@@ -263,9 +277,35 @@
         >
           前往岗位中心
         </router-link>
+      </div>
+    </div>
+
+    <div
+      v-if="inviteDialogVisible"
+      class="fixed top-24 left-1/2 -translate-x-1/2 z-50 px-4 pointer-events-none"
+    >
+      <div class="w-full max-w-md rounded-2xl bg-surface-container-lowest border border-outline-variant/20 shadow-2xl p-6 pointer-events-auto">
+        <h3 class="text-lg font-black text-on-surface">发送邀约确认</h3>
+        <p class="mt-3 text-sm text-on-surface-variant leading-relaxed">{{ inviteDialogMessage }}</p>
+        <div class="mt-6 flex items-center justify-end gap-3">
+          <button
+            class="px-4 h-10 rounded-xl bg-surface-container-low text-on-surface-variant font-bold border border-outline-variant/20 hover:bg-surface-container-high transition-all"
+            :disabled="inviteDialogSending"
+            @click="closeInviteDialog"
+          >
+            取消
+          </button>
+          <button
+            class="px-4 h-10 rounded-xl bg-primary text-white font-bold hover:brightness-110 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            :disabled="!inviteDialogAllowSend || inviteDialogSending"
+            @click="confirmInviteDialog"
+          >
+            {{ inviteDialogSending ? "发送中..." : "确认发送" }}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
-</div>
 </template>
 
 <script setup lang="ts">
@@ -304,7 +344,16 @@ const isLoadingMoreCandidates = ref(false);
 const syncedTotalCandidates = ref(0);
 const evaluatedCount = ref(0);
 const sentDeliveryCount = ref(0);
+const scoreSortOrder = ref<"asc" | "desc">("desc");
+const recommendScoreThreshold = 80;
+const manualInviteScoreThreshold = 75;
+const inviteDialogVisible = ref(false);
+const inviteDialogMessage = ref("");
+const inviteDialogAllowSend = ref(false);
+const inviteDialogCandidate = ref<JobCandidate | null>(null);
 const pageSize = 30;
+const keywordDebounced = ref("");
+let keywordDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const tabs = [
   { key: "all", label: "全部候选人" },
@@ -343,49 +392,70 @@ const latestDeliveryByCandidateId = computed<Record<string, CandidateEmailDelive
 
 const filteredCandidates = computed(() => {
   let result = [...candidates.value];
-  const q = keyword.value.trim().toLowerCase();
-  if (q) {
-    result = result.filter((item) => {
-      const name = item.candidate.name.toLowerCase();
-      const email = (item.candidate.email || "").toLowerCase();
-      return name.includes(q) || email.includes(q);
-    });
-  }
 
   if (activeTab.value === "recommended") {
     result = result.filter((item) => {
-      const evaluation = evaluationByCandidateId.value[item.candidate.id];
-      return evaluation && ["recommend", "strong_recommend"].includes(evaluation.recommendation);
+      const recommendation = getEffectiveRecommendation(item.candidate.id);
+      return recommendation === "recommend" || recommendation === "strong_recommend";
     });
   } else if (activeTab.value === "invited") {
-    result = result.filter((item) => !!latestDeliveryByCandidateId.value[item.candidate.id]);
+    result = result.filter((item) => {
+      const status = latestDeliveryByCandidateId.value[item.candidate.id]?.status;
+      return status ? ["sending", "sent", "delivered", "opened", "clicked"].includes(status) : false;
+    });
   } else if (activeTab.value === "failed") {
     result = result.filter((item) => latestDeliveryByCandidateId.value[item.candidate.id]?.status === "failed");
   }
 
-  if (activeResumeStatus.value !== "all") {
-    result = result.filter((item) => {
-      const status = item.resume_request_status;
-      const download = item.resume_download_status;
+  result.sort((left, right) => {
+    const leftScore = getCandidateFinalScore(left);
+    const rightScore = getCandidateFinalScore(right);
 
-      if (activeResumeStatus.value === "downloaded") {
-        return download === "downloaded";
-      }
-      if (activeResumeStatus.value === "requested") {
-        return status === "requested" && download !== "downloaded";
-      }
-      if (activeResumeStatus.value === "failed") {
-        return status === "failed" && download !== "downloaded";
-      }
-      if (activeResumeStatus.value === "pending") {
-        return !status && !download;
-      }
-      return true;
-    });
-  }
+    if (leftScore === null && rightScore === null) {
+      return 0;
+    }
+    if (leftScore === null) {
+      return 1;
+    }
+    if (rightScore === null) {
+      return -1;
+    }
+    return scoreSortOrder.value === "desc" ? rightScore - leftScore : leftScore - rightScore;
+  });
 
   return result;
 });
+
+const inviteDialogSending = computed(() => {
+  const candidateId = inviteDialogCandidate.value?.candidate.id || "";
+  return Boolean(candidateId && sendingCandidateId.value === candidateId);
+});
+
+function toggleScoreSort() {
+  scoreSortOrder.value = scoreSortOrder.value === "desc" ? "asc" : "desc";
+}
+
+function resolveCandidateSegment() {
+  if (activeTab.value === "recommended" || activeTab.value === "invited" || activeTab.value === "failed") {
+    return activeTab.value;
+  }
+  return "all";
+}
+
+async function handleTabChange(tabKey: string) {
+  if (activeTab.value === tabKey) {
+    return;
+  }
+  activeTab.value = tabKey;
+  candidatesNextCursor.value = null;
+  hasMoreCandidates.value = false;
+  await refreshData();
+}
+
+function getCandidateFinalScore(item: JobCandidate): number | null {
+  const score = evaluationByCandidateId.value[item.candidate.id]?.final_score;
+  return typeof score === "number" && !Number.isNaN(score) ? score : null;
+}
 
 async function fetchJobDetails() {
   if (!jobId.value) {
@@ -403,7 +473,12 @@ async function fetchCandidates() {
     syncedTotalCandidates.value = 0;
     return;
   }
-  const result = await listJobCandidates(jobId.value, { limit: pageSize });
+  const result = await listJobCandidates(jobId.value, {
+    limit: pageSize,
+    keyword: keywordDebounced.value || undefined,
+    resume_status: activeResumeStatus.value,
+    segment: resolveCandidateSegment(),
+  });
   candidates.value = result.candidates;
   candidatesNextCursor.value = result.next_cursor || null;
   hasMoreCandidates.value = result.has_more;
@@ -430,6 +505,9 @@ async function loadMoreCandidates() {
     const result = await listJobCandidates(jobId.value, {
       limit: pageSize,
       cursor: candidatesNextCursor.value,
+      keyword: keywordDebounced.value || undefined,
+      resume_status: activeResumeStatus.value,
+      segment: resolveCandidateSegment(),
     });
     const appendedCandidates = result.candidates;
     candidates.value = [...candidates.value, ...appendedCandidates];
@@ -528,15 +606,59 @@ function canInvite(candidateId: string): boolean {
   if (!evaluation) {
     return false;
   }
-  return ["recommend", "strong_recommend"].includes(evaluation.recommendation);
+  return Number(evaluation.final_score || 0) >= manualInviteScoreThreshold;
 }
 
 async function handleManualInvite(item: JobCandidate) {
-  const candidateId = item.candidate.id;
-  const evaluation = evaluationByCandidateId.value[candidateId];
-  if (!jobId.value || !evaluation || sendingCandidateId.value) {
+  if (!jobId.value || sendingCandidateId.value) {
     return;
   }
+  const candidateId = item.candidate.id;
+  const evaluation = evaluationByCandidateId.value[candidateId];
+  inviteDialogCandidate.value = item;
+  inviteDialogVisible.value = true;
+
+  if (!evaluation) {
+    inviteDialogAllowSend.value = false;
+    inviteDialogMessage.value = "当前候选人暂无评估结果，暂不可发送邀约。";
+    return;
+  }
+
+  if (!canInvite(candidateId)) {
+    inviteDialogAllowSend.value = false;
+    inviteDialogMessage.value = `当前候选人评分低于 ${manualInviteScoreThreshold} 分，暂不可发送邀约。`;
+    return;
+  }
+
+  inviteDialogAllowSend.value = true;
+  inviteDialogMessage.value = `确认向候选人「${item.candidate.name}」发送面试邀约吗？`;
+}
+
+function closeInviteDialog() {
+  if (inviteDialogSending.value) {
+    return;
+  }
+  inviteDialogVisible.value = false;
+  inviteDialogMessage.value = "";
+  inviteDialogAllowSend.value = false;
+  inviteDialogCandidate.value = null;
+}
+
+async function confirmInviteDialog() {
+  const item = inviteDialogCandidate.value;
+  if (!item || !jobId.value || sendingCandidateId.value || !inviteDialogAllowSend.value) {
+    return;
+  }
+  const candidateId = item.candidate.id;
+  const evaluation = evaluationByCandidateId.value[candidateId];
+  if (!evaluation || Number(evaluation.final_score || 0) < manualInviteScoreThreshold) {
+    inviteDialogAllowSend.value = false;
+    inviteDialogMessage.value = `当前候选人评分低于 ${manualInviteScoreThreshold} 分，暂不可发送邀约。`;
+    return;
+  }
+
+  // Non-blocking UX: close dialog first and continue sending in background.
+  closeInviteDialog();
   sendingCandidateId.value = candidateId;
   try {
     await sendCandidateInvitationEmail(jobId.value, candidateId, { evaluation_id: evaluation.id });
@@ -544,6 +666,10 @@ async function handleManualInvite(item: JobCandidate) {
     await fetchEvaluations(candidates.value.map((entry) => entry.candidate.id));
   } catch (error) {
     console.error("Failed to send invitation email", error);
+    inviteDialogCandidate.value = item;
+    inviteDialogAllowSend.value = false;
+    inviteDialogMessage.value = "发送邀约失败，请稍后重试。";
+    inviteDialogVisible.value = true;
   } finally {
     sendingCandidateId.value = "";
   }
@@ -670,6 +796,37 @@ function formatDateTime(dateStr?: string | null) {
   }
   return new Date(dateStr).toLocaleString("zh-CN");
 }
+
+function getEffectiveRecommendation(candidateId: string): string {
+  const evaluation = evaluationByCandidateId.value[candidateId];
+  if (!evaluation) {
+    return "review";
+  }
+  const score = Number(evaluation.final_score || 0);
+  if (score >= 85) {
+    return "strong_recommend";
+  }
+  if (score >= recommendScoreThreshold) {
+    return "recommend";
+  }
+  return evaluation.recommendation;
+}
+
+watch(keyword, (nextValue) => {
+  if (keywordDebounceTimer) {
+    clearTimeout(keywordDebounceTimer);
+  }
+  keywordDebounceTimer = setTimeout(() => {
+    keywordDebounced.value = nextValue.trim();
+  }, 300);
+});
+
+watch([keywordDebounced, activeResumeStatus], async () => {
+  activeTab.value = "all";
+  candidatesNextCursor.value = null;
+  hasMoreCandidates.value = false;
+  await refreshData();
+});
 
 onMounted(() => {
   refreshData();

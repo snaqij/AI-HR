@@ -122,6 +122,8 @@ class TENRuntimeManager:
                     {
                         "app_id": rtc.get("app_id") or self._settings.agora_app_id or "",
                         "app_certificate": self._settings.agora_app_certificate or "",
+                        "token_expire_seconds": int(self._settings.agora_token_ttl_seconds),
+                        "privilege_expire_seconds": int(self._settings.agora_token_ttl_seconds),
                         "channel": rtc.get("channel_name") or rtc.get("room_id") or "",
                         "token": token,
                         "stream_id": int(bot_id_val),

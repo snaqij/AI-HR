@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import re
+import time
 import uuid
 import zipfile
 from datetime import UTC, datetime, timedelta
@@ -312,8 +313,20 @@ class AIResumeService:
         job_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """ Orchestrate 'Smart Bole' automated resume requests based on job thresholds. """
+        bootstrapped_count = self._candidate_job_pipeline_repository.bootstrap_pending_auto_request_pipelines(
+            job_id=job_id,
+            limit=500,
+        )
+        if bootstrapped_count:
+            print(f"DEBUG: [Smart Bole] Bootstrapped {bootstrapped_count} missing pipeline record(s).")
+
+        requested_limit = max(1, int(limit or 10))
+        active_job_ids = self._candidate_job_pipeline_repository.list_active_auto_request_job_ids(job_id=job_id)
+        # Ensure each active job gets a chance in one scheduler cycle (fair polling across jobs).
+        effective_limit = max(requested_limit, len(active_job_ids))
+
         pipelines = self._candidate_job_pipeline_repository.list_pending_auto_requests(
-            limit=limit or 10,
+            limit=effective_limit,
             job_id=job_id,
         )
         
@@ -321,7 +334,10 @@ class AIResumeService:
             print("DEBUG: [Smart Bole] No pending candidates in queue found for automation.")
             return []
             
-        print(f"DEBUG: [Smart Bole] Starting scan for {len(pipelines)} pending candidates...")
+        print(
+            "DEBUG: [Smart Bole] Starting scan for "
+            f"{len(pipelines)} pending candidates across {len(active_job_ids)} active job(s)."
+        )
         results: list[dict[str, Any]] = []
         
         # Cache for job settings and daily counts to avoid redundant queries
@@ -329,6 +345,7 @@ class AIResumeService:
         # NEW: Keep track of jobs that hit quota in this run
         reached_quota_job_ids = set()
         processed_somebody = False
+        last_request_at_monotonic: float | None = None
         
         for pipeline in pipelines:
             # 即刻熔断：如果该岗位已达配额，直接跳过其后续所有候选人
@@ -377,11 +394,18 @@ class AIResumeService:
                 
                 # 5. Execute Request
                 print(f"DEBUG: [Smart Bole] >>> SUCCESS: Requesting resume for {candidate.name} (Job: {job.title})")
+
+                # Throttle outbound resume requests to reduce connector pressure.
+                if last_request_at_monotonic is not None:
+                    elapsed = time.monotonic() - last_request_at_monotonic
+                    if elapsed < 1.0:
+                        time.sleep(1.0 - elapsed)
                 
                 res = self._request_resume_access_for_candidate(
                     candidate.id,
                     sync_attachment_when_ready=True
                 )
+                last_request_at_monotonic = time.monotonic()
                 
                 cache["quota_remaining"] -= 1
                 results.append(res)

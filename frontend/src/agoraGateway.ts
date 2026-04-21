@@ -46,7 +46,10 @@ interface IAgoraRTCClient {
   on(event: "user-published", listener: (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => void): void;
   on(event: "user-unpublished", listener: (user: IAgoraRTCRemoteUser, mediaType: "audio" | "video") => void): void;
   on(event: "connection-state-change", listener: (curState: string, revState: string, reason?: string) => void): void;
+  on(event: "token-privilege-will-expire", listener: () => void): void;
+  on(event: "token-privilege-did-expire", listener: () => void): void;
   join(appId: string, channel: string, token: string | null, uid: number | null): Promise<number>;
+  renewToken(token: string): Promise<void>;
   leave(): Promise<void>;
   publish(tracks: Array<IAgoraRTCLocalAudioTrack | IAgoraRTCLocalVideoTrack>): Promise<void>;
   subscribe(user: IAgoraRTCRemoteUser, mediaType: "audio" | "video"): Promise<void>;
@@ -70,6 +73,8 @@ export interface AgoraGatewayCallbacks {
   onConnectionStateChanged?: (state: string, reason?: string) => void;
   onRemoteAudioSpeakingChanged?: (speaking: boolean) => void;
   onRemoteAudioPlaybackError?: (message: string) => void;
+  onTokenWillExpire?: () => void;
+  onTokenDidExpire?: () => void;
 }
 
 const AGORA_WEB_SDK_URL =
@@ -132,6 +137,7 @@ export class AgoraRTCGateway {
   private remoteAudioTrack: IAgoraRTCRemoteAudioTrack | null = null;
   private remoteAudioLevelTimer: number | null = null;
   private remoteSpeaking = false;
+  private lastJoinParams: AgoraJoinParams | null = null;
   private callbacks: AgoraGatewayCallbacks;
 
   constructor(callbacks: AgoraGatewayCallbacks = {}) {
@@ -166,6 +172,12 @@ export class AgoraRTCGateway {
     client.on("connection-state-change", (state, _prevState, reason) => {
       this.callbacks.onConnectionStateChanged?.(state, reason);
     });
+    client.on("token-privilege-will-expire", () => {
+      this.callbacks.onTokenWillExpire?.();
+    });
+    client.on("token-privilege-did-expire", () => {
+      this.callbacks.onTokenDidExpire?.();
+    });
 
     const uid = toNumericUid(params.uid);
     await client.join(params.appId, params.channel, params.token || null, uid);
@@ -176,6 +188,13 @@ export class AgoraRTCGateway {
     this.client = client;
     this.localAudioTrack = localAudioTrack;
     this.localVideoTrack = localVideoTrack;
+    this.lastJoinParams = { ...params, uid };
+  }
+
+  async renewToken(token: string): Promise<void> {
+    if (!this.client || !token) return;
+    await this.client.renewToken(token);
+    if (this.lastJoinParams) this.lastJoinParams = { ...this.lastJoinParams, token };
   }
 
   async setMicrophoneEnabled(enabled: boolean): Promise<void> {
@@ -269,6 +288,7 @@ export class AgoraRTCGateway {
       }
     } finally {
       this.client = null;
+      this.lastJoinParams = null;
     }
   }
 }

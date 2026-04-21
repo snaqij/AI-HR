@@ -45,8 +45,30 @@ class JobService:
     def get_job(self, job_id: str):
         return self._repository.get(job_id)
 
-    def list_jobs(self, limit: int = 100, offset: int = 0):
-        return self._repository.list_all(limit=limit, offset=offset)
+    def list_jobs(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        *,
+        platform: str | None = None,
+        name: str | None = None,
+        job_type: str | None = None,
+        salary: str | None = None,
+    ):
+        return self._repository.list_all(
+            limit=limit,
+            offset=offset,
+            platform=platform,
+            name=name,
+            job_type=job_type,
+            salary=salary,
+        )
+
+    def delete_job(self, job_id: str) -> None:
+        self._repository.delete(job_id)
+
+    def batch_delete_jobs(self, job_ids: list[str]) -> int:
+        return self._repository.delete_many(job_ids)
 
     def update_job_settings(self, job_id: str, payload: JobUpdateSettingsRequest):
         """更新岗位自动化配置。"""
@@ -269,13 +291,25 @@ class JobService:
             "synced_candidate_ids": synced_candidate_ids,
         }
 
-    def list_job_candidates(self, job_id: str, *, limit: int = 30, cursor: str | None = None):
+    def list_job_candidates(
+        self,
+        job_id: str,
+        *,
+        limit: int = 30,
+        cursor: str | None = None,
+        keyword: str | None = None,
+        resume_status: str | None = None,
+        segment: str | None = None,
+    ):
         self._repository.get(job_id)
         stats = self._job_candidate_repository.get_job_stats(job_id)
         items, next_cursor, has_more = self._job_candidate_repository.list_by_job(
             job_id,
             limit=limit,
             cursor=cursor,
+            keyword=keyword,
+            resume_status=resume_status,
+            candidate_segment=segment,
         )
         return {
             "job_id": job_id,

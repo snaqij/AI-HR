@@ -303,7 +303,7 @@ class JobSyncScheduler:
                 get_job_service(session).enrich_candidate_metadata(limit=5)
 
                 # 4. 自动发起简历请求 (自动伯乐流水线)
-                get_ai_resume_service(session).execute_due_auto_resume_requests(limit=3)
+                get_ai_resume_service(session).execute_due_auto_resume_requests()
 
                 session.commit()
 
