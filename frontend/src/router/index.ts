@@ -42,6 +42,11 @@ const router = createRouter({
             component: () => import('../views/admin/HiringCenter.vue')
         },
         {
+          path: 'agents',
+          name: 'AgentCenter',
+          component: () => import('../views/admin/AgentCenter.vue')
+        },
+        {
             path: 'interview/:id',
             name: 'InterviewDetails',
             component: () => import('../views/admin/InterviewDetails.vue')

@@ -1,169 +1,198 @@
 ﻿<template>
-  <div class="max-w-7xl mx-auto">
-    <div class="flex justify-between items-center mb-10">
-      <h1 class="text-3xl font-black tracking-tight text-on-surface">录用决策中心</h1>
-    </div>
-
-    <div class="grid grid-cols-4 gap-6 mb-12">
-      <div v-for="stat in summaryStats" :key="stat.label" class="bg-surface-container-lowest p-6 rounded-2xl shadow-sm border border-outline-variant/10">
-        <p class="text-on-surface-variant text-[10px] font-black uppercase tracking-wider mb-2">{{ stat.label }}</p>
-        <div class="flex items-baseline gap-2">
-          <span class="text-3xl font-black text-on-surface">{{ stat.value }}</span>
-          <span v-if="stat.subValue" class="text-[10px] font-bold" :class="stat.subValueColor">{{ stat.subValue }}</span>
+  <div class="mx-auto flex w-full max-w-7xl flex-col gap-6 pb-10">
+    <header class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 class="text-2xl font-bold text-on-surface">录用决策中心</h1>
+          <p class="mt-1 text-sm text-on-surface-variant">聚焦待处理候选人，快速完成复核、推进与邀约决策。</p>
         </div>
+        <button
+          class="inline-flex h-10 items-center gap-2 rounded-lg border border-outline-variant/30 bg-surface-container-low px-4 text-sm font-semibold text-on-surface-variant transition-colors hover:bg-surface-container disabled:opacity-50"
+          :disabled="isLoading"
+          @click="loadData"
+        >
+          <span class="material-symbols-outlined text-base" :class="{ 'animate-spin': isLoading }">refresh</span>
+          刷新数据
+        </button>
       </div>
-    </div>
+    </header>
 
-    <div v-if="isLoading" class="bg-surface-container-lowest rounded-3xl p-16 text-center border border-outline-variant/10 mb-16">
-      <div class="inline-block w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
-      <p class="text-xs font-bold text-on-surface-variant mt-4 uppercase tracking-widest">正在加载录用决策数据...</p>
-    </div>
+    <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <button
+        v-for="stat in summaryStats"
+        :key="stat.label"
+        class="rounded-xl border px-4 py-4 text-left transition-colors"
+        :class="[
+          stat.clickable
+            ? activeMetric === stat.metric
+              ? 'border-primary/40 bg-primary/5'
+              : 'border-outline-variant/20 bg-surface-container-lowest hover:bg-surface-container-low'
+            : 'border-outline-variant/20 bg-surface-container-lowest'
+        ]"
+        :disabled="!stat.clickable"
+        @click="stat.clickable && (activeMetric = stat.metric)"
+      >
+        <p class="text-xs font-semibold text-on-surface-variant">{{ stat.label }}</p>
+        <p class="mt-2 text-2xl font-bold text-on-surface">{{ stat.value }}</p>
+        <p class="mt-1 text-xs" :class="stat.subValueColor">{{ stat.subValue }}</p>
+      </button>
+    </section>
 
-    <div v-else-if="loadError" class="bg-surface-container-lowest rounded-3xl p-16 text-center border border-outline-variant/10 mb-16">
-      <p class="text-sm font-black text-rose-600">{{ loadError }}</p>
-    </div>
+    <section v-if="isLoading" class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-12 text-center">
+      <div class="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-4 border-primary/20 border-t-primary"></div>
+      <p class="text-sm font-medium text-on-surface-variant">正在加载录用决策数据...</p>
+    </section>
 
-    <div v-else>
-      <div class="grid grid-cols-3 gap-8 mb-16">
-        <div v-for="card in decisionCards" :key="card.key" class="bg-surface-container-lowest rounded-3xl shadow-sm border border-outline-variant/10 overflow-hidden flex flex-col group hover-lift">
-          <div class="p-8 pb-4">
-            <div class="flex justify-between items-start mb-6">
-              <div class="flex items-center gap-4">
-                <div class="w-16 h-16 rounded-2xl bg-surface-container-high border border-outline-variant/10 flex items-center justify-center text-base font-black text-primary">
-                  {{ card.initials }}
-                </div>
-                <div>
-                  <h3 class="text-lg font-black text-on-surface group-hover:text-primary transition-colors">{{ card.name }}</h3>
-                  <p class="text-xs text-on-surface-variant font-bold mt-0.5">{{ card.title }}</p>
-                  <div class="mt-2 flex gap-2">
-                    <span v-for="tag in card.tags" :key="tag.label" class="px-2 py-0.5 rounded-md text-[9px] font-black tracking-widest uppercase shadow-sm" :class="tag.bg">
-                      {{ tag.label }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <button class="text-on-surface-variant/40 hover:text-on-surface transition-colors" @click="openCandidate(card.jobId, card.candidateId)">
-                <span class="material-symbols-outlined">open_in_new</span>
-              </button>
-            </div>
+    <section v-else-if="loadError" class="rounded-2xl border border-error/20 bg-error-container/40 px-6 py-8">
+      <p class="text-sm font-semibold text-on-error-container">{{ loadError }}</p>
+      <button
+        class="mt-4 h-10 rounded-lg border border-on-error-container/20 bg-white px-4 text-sm font-semibold text-on-error-container"
+        @click="loadData"
+      >
+        重试
+      </button>
+    </section>
 
-            <div class="bg-primary/5 rounded-2xl p-5 border border-primary/10 mb-6 relative">
-              <div class="flex items-center gap-2 mb-3 text-primary">
-                <span class="material-symbols-outlined text-sm material-fill">auto_awesome</span>
-                <span class="text-[10px] font-black uppercase tracking-widest">AI 决策洞察</span>
-              </div>
-              <p class="text-[11px] text-on-surface leading-relaxed font-medium">{{ card.aiInsight }}</p>
-            </div>
-
-            <div class="mb-8">
-              <p class="text-[10px] font-black text-on-surface-variant uppercase tracking-widest mb-4">录用流程进度</p>
-              <div class="flex items-center justify-between relative px-2">
-                <div class="absolute top-1/2 left-4 right-4 h-0.5 bg-surface-container-high -translate-y-1/2 -z-0"></div>
-                <div class="absolute top-1/2 left-4 h-0.5 bg-green-500 -translate-y-1/2 transition-all duration-1000" :style="{ width: card.progressWidth }"></div>
-                <div v-for="(step, idx) in card.steps" :key="idx" class="relative z-10 flex flex-col items-center gap-2">
-                  <div class="w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center transition-all duration-500"
-                    :class="[
-                      step.status === 'completed' ? 'bg-green-500 border-green-500 text-white' :
-                      step.status === 'active' ? 'bg-white border-primary shadow-[0_0_8px_rgba(0,58,162,0.3)]' :
-                      'bg-white border-outline-variant'
-                    ]"
-                  >
-                    <span v-if="step.status === 'completed'" class="material-symbols-outlined text-[10px] font-black">check</span>
-                    <div v-if="step.status === 'active'" class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></div>
-                  </div>
-                  <span class="text-[8px] font-black uppercase tracking-tighter" :class="step.status === 'completed' ? 'text-green-600' : 'text-on-surface-variant opacity-60'">{{ step.label }}</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-6 mb-8 border-t border-b border-outline-variant/5 py-6">
-              <div>
-                <p class="text-[9px] font-black text-on-surface-variant uppercase tracking-widest mb-1">期望薪资</p>
-                <p class="text-sm font-black text-on-surface">{{ card.salary }}</p>
-              </div>
-              <div>
-                <p class="text-[9px] font-black text-on-surface-variant uppercase tracking-widest mb-1">评估时间</p>
-                <p class="text-sm font-black text-on-surface">{{ card.date }}</p>
-              </div>
-            </div>
-
-            <div class="bg-surface p-4 rounded-xl mb-8 border border-outline-variant/10 italic">
-              <p class="text-[10px] text-on-surface-variant leading-relaxed">
-                "{{ card.note }}" <span class="not-italic font-bold ml-1 opacity-60">- AI 评估引擎</span>
-              </p>
-            </div>
-          </div>
-
-          <div class="mt-auto p-8 pt-0 space-y-3">
-            <button class="w-full py-3.5 rounded-xl bg-primary text-white text-xs font-black shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all" @click="openCandidate(card.jobId, card.candidateId)">
-              {{ card.primaryAction }}
-            </button>
-            <div class="grid grid-cols-2 gap-3">
-              <button class="py-2.5 rounded-xl bg-surface-container-high text-on-surface-variant text-[10px] font-black hover:bg-outline-variant/30 transition-all uppercase tracking-widest" @click="openCandidate(card.jobId, card.candidateId)">
-                {{ card.secondaryAction }}
-              </button>
-              <button class="py-2.5 rounded-xl bg-surface-container-high text-on-surface-variant text-[10px] font-black hover:bg-outline-variant/30 transition-all uppercase tracking-widest" @click="openCandidate(card.jobId, card.candidateId)">
-                查看完整报告
-              </button>
-            </div>
-          </div>
+    <template v-else>
+      <section class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-base font-semibold text-on-surface">高优先级候选人</h2>
+          <p class="text-xs text-on-surface-variant">当前展示 {{ visibleDecisionCards.length }} 人</p>
         </div>
-      </div>
 
-      <div class="bg-surface-container-lowest rounded-3xl p-8 shadow-sm border border-outline-variant/10">
-        <div class="flex justify-between items-center mb-8">
+        <div v-if="visibleDecisionCards.length" class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          <article
+            v-for="card in visibleDecisionCards"
+            :key="card.key"
+            class="rounded-xl border border-outline-variant/20 bg-surface px-4 py-4"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="truncate text-base font-semibold text-on-surface">{{ card.name }}</p>
+                <p class="truncate text-sm text-on-surface-variant">{{ card.title }}</p>
+              </div>
+              <span class="rounded-full px-2 py-1 text-xs font-semibold" :class="card.tagClass">{{ card.tagLabel }}</span>
+            </div>
+
+            <div class="mt-4 flex items-end justify-between gap-3">
+              <div>
+                <p class="text-xs text-on-surface-variant">AI 评分</p>
+                <p class="text-3xl font-bold text-on-surface">{{ card.score }}</p>
+              </div>
+              <div class="text-right">
+                <p class="text-xs text-on-surface-variant">更新时间</p>
+                <p class="text-sm font-medium text-on-surface">{{ card.date }}</p>
+              </div>
+            </div>
+
+            <p class="summary-clamp mt-4 text-sm leading-6 text-on-surface-variant">{{ card.aiInsight }}</p>
+
+            <div class="mt-4 grid grid-cols-2 gap-2">
+              <button
+                class="h-10 rounded-lg bg-primary px-3 text-sm font-semibold text-white"
+                @click="openCandidate(card.jobId, card.candidateId)"
+              >
+                进入详情决策
+              </button>
+              <button
+                class="h-10 rounded-lg border border-outline-variant/30 bg-surface-container-low px-3 text-sm font-semibold text-on-surface-variant"
+                @click="focusQueue(card.name)"
+              >
+                定位队列
+              </button>
+            </div>
+          </article>
+        </div>
+
+        <div v-else class="rounded-lg border border-dashed border-outline-variant/35 px-4 py-8 text-center text-sm text-on-surface-variant">
+          当前筛选条件下暂无高优先级候选人。
+        </div>
+      </section>
+
+      <section id="decision-queue" class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 class="text-xl font-black text-on-surface">待处理决策队列</h3>
-            <p class="text-xs text-on-surface-variant font-bold mt-1">系统从数据库中筛选待复核候选人，请尽快处理。</p>
+            <h2 class="text-base font-semibold text-on-surface">待处理决策队列</h2>
+            <p class="mt-1 text-xs text-on-surface-variant">按优先级处理待复核与待推进候选人。</p>
           </div>
-          <div class="flex gap-3">
-            <button class="px-5 py-2.5 bg-surface-container-high rounded-xl text-[11px] font-black text-on-surface-variant flex items-center gap-2" @click="loadData">
-              <span class="material-symbols-outlined text-base">refresh</span> 刷新
-            </button>
-          </div>
+          <p class="text-xs text-on-surface-variant">共 {{ filteredQueue.length }} 条</p>
         </div>
 
-        <div class="overflow-x-auto">
-          <table class="w-full text-left">
-            <thead>
-              <tr class="bg-surface-container-low/50 text-on-surface-variant border-b border-outline-variant/10">
-                <th class="px-6 py-4 text-[10px] font-black uppercase tracking-widest">候选人</th>
-                <th class="px-6 py-4 text-[10px] font-black uppercase tracking-widest">职位</th>
-                <th class="px-6 py-4 text-[10px] font-black uppercase tracking-widest">期望薪资</th>
-                <th class="px-6 py-4 text-[10px] font-black uppercase tracking-widest">AI 评分</th>
-                <th class="px-6 py-4 text-[10px] font-black uppercase tracking-widest text-right">操作</th>
+        <div class="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-4">
+          <div class="lg:col-span-2">
+            <input
+              v-model.trim="keyword"
+              type="text"
+              placeholder="搜索候选人/岗位"
+              class="h-10 w-full rounded-lg border border-outline-variant/30 bg-white px-3 text-sm text-on-surface focus:border-primary focus:outline-none"
+            >
+          </div>
+          <select
+            v-model="recommendationFilter"
+            class="h-10 rounded-lg border border-outline-variant/30 bg-white px-3 text-sm text-on-surface focus:border-primary focus:outline-none"
+          >
+            <option value="all">全部推荐状态</option>
+            <option value="strong_recommend">强烈推荐</option>
+            <option value="recommend">推荐</option>
+            <option value="review">待复核</option>
+            <option value="reject">不推荐</option>
+          </select>
+          <select
+            v-model="sortBy"
+            class="h-10 rounded-lg border border-outline-variant/30 bg-white px-3 text-sm text-on-surface focus:border-primary focus:outline-none"
+          >
+            <option value="score_desc">评分从高到低</option>
+            <option value="score_asc">评分从低到高</option>
+            <option value="updated_desc">最近更新优先</option>
+            <option value="updated_asc">最早更新优先</option>
+          </select>
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-outline-variant/20">
+          <table class="min-w-full text-left">
+            <thead class="bg-surface-container-low">
+              <tr>
+                <th class="px-4 py-3 text-xs font-semibold text-on-surface-variant">候选人</th>
+                <th class="px-4 py-3 text-xs font-semibold text-on-surface-variant">岗位</th>
+                <th class="px-4 py-3 text-xs font-semibold text-on-surface-variant">推荐结论</th>
+                <th class="px-4 py-3 text-xs font-semibold text-on-surface-variant">评分</th>
+                <th class="px-4 py-3 text-xs font-semibold text-on-surface-variant">更新时间</th>
+                <th class="px-4 py-3 text-xs font-semibold text-on-surface-variant text-right">操作</th>
               </tr>
             </thead>
-            <tbody class="text-sm divide-y divide-outline-variant/5">
-              <tr v-for="item in decisionQueue" :key="item.key" class="group hover:bg-surface transition-colors">
-                <td class="px-6 py-5 flex items-center gap-3">
-                  <div class="w-10 h-10 rounded-xl bg-surface-container-high flex items-center justify-center font-black text-xs text-on-surface-variant border border-outline-variant/10">
-                    {{ item.initials }}
-                  </div>
-                  <span class="font-black text-on-surface">{{ item.name }}</span>
-                </td>
-                <td class="px-6 py-5 font-bold text-on-surface-variant">{{ item.job }}</td>
-                <td class="px-6 py-5 font-black text-on-surface">{{ item.salary }}</td>
-                <td class="px-6 py-5">
-                  <div class="flex items-center gap-4">
-                    <div class="flex items-center gap-1 text-primary">
-                      <span v-for="i in 5" :key="i" class="material-symbols-outlined text-base" :class="{ 'material-fill': i <= item.rating }">star</span>
+            <tbody class="divide-y divide-outline-variant/15 bg-white">
+              <tr v-for="item in filteredQueue" :key="item.key" class="hover:bg-surface-container-low/40">
+                <td class="px-4 py-3">
+                  <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-surface-container-low text-xs font-semibold text-on-surface-variant">
+                      {{ item.initials }}
                     </div>
-                    <span class="px-2 py-0.5 bg-primary/5 text-primary text-[10px] font-black rounded border border-primary/10 tracking-widest uppercase">{{ item.analysis }}</span>
+                    <div>
+                      <p class="text-sm font-semibold text-on-surface">{{ item.name }}</p>
+                      <p class="text-xs text-on-surface-variant">{{ item.salary }}</p>
+                    </div>
                   </div>
                 </td>
-                <td class="px-6 py-5 text-right">
-                  <button class="text-xs font-black text-primary hover:underline tracking-widest uppercase" @click="openCandidate(item.jobId, item.candidateId)">立即处理</button>
+                <td class="px-4 py-3 text-sm text-on-surface-variant">{{ item.job }}</td>
+                <td class="px-4 py-3">
+                  <span class="rounded-full px-2 py-1 text-xs font-semibold" :class="item.recommendationClass">{{ item.analysis }}</span>
+                </td>
+                <td class="px-4 py-3 text-sm font-semibold text-on-surface">{{ item.scoreText }}</td>
+                <td class="px-4 py-3 text-sm text-on-surface-variant">{{ item.updatedAtText }}</td>
+                <td class="px-4 py-3 text-right">
+                  <button class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-white" @click="openCandidate(item.jobId, item.candidateId)">
+                    立即处理
+                  </button>
                 </td>
               </tr>
-              <tr v-if="!decisionQueue.length">
-                <td colspan="5" class="px-6 py-10 text-center text-sm font-bold text-on-surface-variant">当前没有待处理决策。</td>
+              <tr v-if="!filteredQueue.length">
+                <td colspan="6" class="px-4 py-10 text-center text-sm text-on-surface-variant">当前条件下没有待处理决策。</td>
               </tr>
             </tbody>
           </table>
         </div>
-      </div>
-    </div>
+      </section>
+    </template>
   </div>
 </template>
 
@@ -176,27 +205,21 @@ import {
   type HiringCenterOverviewResult,
 } from "../../api";
 
-type DecisionStep = {
-  label: string;
-  status: "completed" | "active" | "pending";
-};
+type MetricFilter = "all" | "review" | "recommended" | "invited";
 
 type DecisionCard = {
   key: string;
   candidateId: string;
   jobId: string;
-  initials: string;
   name: string;
   title: string;
-  tags: Array<{ label: string; bg: string }>;
   aiInsight: string;
-  progressWidth: string;
-  steps: DecisionStep[];
-  salary: string;
+  score: string;
   date: string;
-  note: string;
-  primaryAction: string;
-  secondaryAction: string;
+  tagLabel: string;
+  tagClass: string;
+  recommendation: string;
+  invited: boolean;
 };
 
 type QueueItem = {
@@ -207,16 +230,28 @@ type QueueItem = {
   name: string;
   job: string;
   salary: string;
-  rating: number;
+  score: number;
+  scoreText: string;
   analysis: string;
+  recommendation: string;
+  recommendationClass: string;
+  updatedAt: number;
+  updatedAtText: string;
+  invited: boolean;
 };
 
 const router = useRouter();
+
 const isLoading = ref(false);
 const loadError = ref("");
 const overview = ref<HiringCenterOverviewResult | null>(null);
-const decisionCards = ref<DecisionCard[]>([]);
-const decisionQueue = ref<QueueItem[]>([]);
+const rawDecisionCards = ref<DecisionCard[]>([]);
+const rawQueue = ref<QueueItem[]>([]);
+
+const activeMetric = ref<MetricFilter>("review");
+const keyword = ref("");
+const recommendationFilter = ref("all");
+const sortBy = ref("score_desc");
 
 const summaryStats = computed(() => {
   const snapshot = overview.value;
@@ -225,13 +260,105 @@ const summaryStats = computed(() => {
   const invitedCount = snapshot?.invited_count || 0;
   const recommendedCount = snapshot?.recommended_count || 0;
   const conversion = String(snapshot?.conversion_rate ?? 0);
+
   return [
-    { label: "待处理决策", value: String(reviewCount).padStart(2, "0"), subValue: `总计 ${total}`, subValueColor: "text-primary" },
-    { label: "已发面试邀约", value: String(invitedCount).padStart(2, "0"), subValue: `${recommendedCount} 人推荐`, subValueColor: "text-green-600" },
-    { label: "高优先级候选人", value: String(recommendedCount).padStart(2, "0"), subValue: "来自评估结果", subValueColor: "text-on-surface-variant/50" },
-    { label: "邀约转化率", value: `${conversion}%`, subValue: "基于数据库数据", subValueColor: "text-green-600" },
+    {
+      label: "待处理决策",
+      value: String(reviewCount).padStart(2, "0"),
+      subValue: `总计 ${total}`,
+      subValueColor: "text-primary",
+      metric: "review" as MetricFilter,
+      clickable: true,
+    },
+    {
+      label: "已发面试邀约",
+      value: String(invitedCount).padStart(2, "0"),
+      subValue: `${recommendedCount} 人推荐`,
+      subValueColor: "text-emerald-600",
+      metric: "invited" as MetricFilter,
+      clickable: true,
+    },
+    {
+      label: "高优先级候选人",
+      value: String(recommendedCount).padStart(2, "0"),
+      subValue: "来自评估结果",
+      subValueColor: "text-on-surface-variant",
+      metric: "recommended" as MetricFilter,
+      clickable: true,
+    },
+    {
+      label: "邀约转化率",
+      value: `${conversion}%`,
+      subValue: "基于数据库数据",
+      subValueColor: "text-emerald-600",
+      metric: "all" as MetricFilter,
+      clickable: false,
+    },
   ];
 });
+
+const filteredQueue = computed(() => {
+  let list = [...rawQueue.value];
+
+  list = list.filter((item) => matchMetric(item.recommendation, item.invited));
+
+  const kw = keyword.value.trim().toLowerCase();
+  if (kw) {
+    list = list.filter((item) => {
+      return item.name.toLowerCase().includes(kw) || item.job.toLowerCase().includes(kw);
+    });
+  }
+
+  if (recommendationFilter.value !== "all") {
+    list = list.filter((item) => item.recommendation === recommendationFilter.value);
+  }
+
+  switch (sortBy.value) {
+    case "score_asc":
+      list.sort((a, b) => a.score - b.score);
+      break;
+    case "updated_desc":
+      list.sort((a, b) => b.updatedAt - a.updatedAt);
+      break;
+    case "updated_asc":
+      list.sort((a, b) => a.updatedAt - b.updatedAt);
+      break;
+    case "score_desc":
+    default:
+      list.sort((a, b) => b.score - a.score);
+      break;
+  }
+
+  return list;
+});
+
+const visibleDecisionCards = computed(() => {
+  let list = [...rawDecisionCards.value].filter((item) => matchMetric(item.recommendation, item.invited));
+
+  const kw = keyword.value.trim().toLowerCase();
+  if (kw) {
+    list = list.filter((item) => item.name.toLowerCase().includes(kw) || item.title.toLowerCase().includes(kw));
+  }
+
+  if (recommendationFilter.value !== "all") {
+    list = list.filter((item) => item.recommendation === recommendationFilter.value);
+  }
+
+  return list.slice(0, 3);
+});
+
+function matchMetric(recommendation: string, invited: boolean) {
+  if (activeMetric.value === "review") {
+    return recommendation === "review";
+  }
+  if (activeMetric.value === "recommended") {
+    return recommendation === "recommend" || recommendation === "strong_recommend";
+  }
+  if (activeMetric.value === "invited") {
+    return invited;
+  }
+  return true;
+}
 
 function toInitials(name: string): string {
   const raw = (name || "").trim();
@@ -250,91 +377,69 @@ function toInitials(name: string): string {
 
 function formatSalary(value?: string | null): string {
   const text = (value || "").trim();
-  if (!text) {
-    return "待沟通";
-  }
-  return text;
+  return text || "待沟通";
 }
 
-function recommendationTag(recommendation: string): { label: string; bg: string } {
+function toTimestamp(value?: string | null): number {
+  const d = new Date(value || "");
+  const ts = d.getTime();
+  return Number.isNaN(ts) ? 0 : ts;
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) {
+    return "--";
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return "--";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+function recommendationMeta(recommendation: string): { label: string; cardClass: string; queueClass: string } {
   if (recommendation === "strong_recommend") {
-    return { label: "强烈推荐", bg: "bg-green-100 text-green-700" };
+    return { label: "强烈推荐", cardClass: "bg-emerald-100 text-emerald-700", queueClass: "bg-emerald-50 text-emerald-700" };
   }
   if (recommendation === "recommend") {
-    return { label: "推荐", bg: "bg-primary/10 text-primary" };
+    return { label: "推荐", cardClass: "bg-blue-100 text-blue-700", queueClass: "bg-blue-50 text-blue-700" };
   }
   if (recommendation === "reject") {
-    return { label: "不推荐", bg: "bg-rose-100 text-rose-700" };
+    return { label: "不推荐", cardClass: "bg-rose-100 text-rose-700", queueClass: "bg-rose-50 text-rose-700" };
   }
-  return { label: "待复核", bg: "bg-amber-100 text-amber-700" };
-}
-
-function buildSteps(item: HiringCenterEvaluationItem): DecisionStep[] {
-  const stage = String(item.candidate_stage || "").toLowerCase();
-  const flags = [
-    item.evaluation_status === "completed" || item.evaluation_status === "reviewed",
-    ["recommend", "strong_recommend"].includes(item.recommendation),
-    Boolean(item.invited_flag),
-    ["offer", "hired"].includes(stage),
-  ];
-  const labels = ["评估完成", "进入推荐", "已发邀约", "最终决策"];
-  const firstPendingIndex = flags.findIndex((done) => !done);
-  return labels.map((label, idx) => {
-    if (flags[idx]) {
-      return { label, status: "completed" };
-    }
-    if (firstPendingIndex === idx) {
-      return { label, status: "active" };
-    }
-    return { label, status: "pending" };
-  });
-}
-
-function buildProgressWidth(steps: DecisionStep[]): string {
-  const completedCount = steps.filter((step) => step.status === "completed").length;
-  const width = Math.max(0, Math.min(100, (completedCount / Math.max(1, steps.length - 1)) * 100));
-  return `${width}%`;
+  return { label: "待复核", cardClass: "bg-amber-100 text-amber-700", queueClass: "bg-amber-50 text-amber-700" };
 }
 
 function toCard(item: HiringCenterEvaluationItem): DecisionCard {
-  const steps = buildSteps(item);
-  const tag = recommendationTag(item.recommendation);
+  const meta = recommendationMeta(item.recommendation);
   return {
     key: `${item.job_id}-${item.candidate_id}`,
     candidateId: item.candidate_id,
     jobId: item.job_id,
-    initials: toInitials(item.candidate_name),
     name: item.candidate_name,
     title: item.job_title,
-    tags: [tag],
-    aiInsight: item.summary || item.candidate_score_explanation || "暂无评估总结，建议人工复核候选人核心能力。",
-    progressWidth: buildProgressWidth(steps),
-    steps,
-    salary: formatSalary(item.candidate_expected_salary || item.job_salary_range),
-    date: new Date(item.updated_at || item.created_at).toLocaleDateString("zh-CN"),
-    note: item.highlights?.length ? item.highlights.join("；") : "暂无补充备注。",
-    primaryAction: ["recommend", "strong_recommend"].includes(item.recommendation) ? "进入候选人详情" : "发起人工复核",
-    secondaryAction: "查看候选人",
+    aiInsight: item.summary || item.candidate_score_explanation || "暂无评估摘要，建议人工查看关键维度后决策。",
+    score: Number(item.final_score || 0).toFixed(1),
+    date: formatDateTime(item.updated_at || item.created_at),
+    tagLabel: meta.label,
+    tagClass: meta.cardClass,
+    recommendation: item.recommendation,
+    invited: Boolean(item.invited_flag),
   };
 }
 
-function scoreToRating(score: number): number {
-  if (score >= 90) {
-    return 5;
-  }
-  if (score >= 80) {
-    return 4;
-  }
-  if (score >= 70) {
-    return 3;
-  }
-  if (score >= 60) {
-    return 2;
-  }
-  return 1;
-}
-
 function toQueueItem(item: HiringCenterEvaluationItem): QueueItem {
+  const score = Number(item.final_score || 0);
+  const meta = recommendationMeta(item.recommendation);
+  const updated = item.updated_at || item.created_at;
+
   return {
     key: `${item.job_id}-${item.candidate_id}`,
     candidateId: item.candidate_id,
@@ -343,9 +448,23 @@ function toQueueItem(item: HiringCenterEvaluationItem): QueueItem {
     name: item.candidate_name,
     job: item.job_title,
     salary: formatSalary(item.candidate_expected_salary || item.job_salary_range),
-    rating: scoreToRating(Number(item.final_score || 0)),
-    analysis: recommendationTag(item.recommendation).label,
+    score,
+    scoreText: score.toFixed(1),
+    analysis: meta.label,
+    recommendation: item.recommendation,
+    recommendationClass: meta.queueClass,
+    updatedAt: toTimestamp(updated),
+    updatedAtText: formatDateTime(updated),
+    invited: Boolean(item.invited_flag),
   };
+}
+
+function focusQueue(keywordValue: string) {
+  keyword.value = keywordValue;
+  const el = document.getElementById("decision-queue");
+  if (el) {
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 function openCandidate(jobId: string, candidateId: string) {
@@ -356,22 +475,29 @@ async function loadData() {
   isLoading.value = true;
   loadError.value = "";
   try {
-    const result = await fetchHiringCenterOverview({ top_n: 3, queue_limit: 20, max_scan: 3000 });
+    const result = await fetchHiringCenterOverview({ top_n: 6, queue_limit: 50, max_scan: 3000 });
     overview.value = result;
-    decisionCards.value = result.top_items.map(toCard);
-    decisionQueue.value = result.queue_items.map(toQueueItem);
+    rawDecisionCards.value = (result.top_items || []).map(toCard);
+    rawQueue.value = (result.queue_items || []).map(toQueueItem);
   } catch (error) {
     console.error("Failed to load hiring center data", error);
     loadError.value = "加载录用决策数据失败，请稍后重试。";
     overview.value = null;
-    decisionCards.value = [];
-    decisionQueue.value = [];
+    rawDecisionCards.value = [];
+    rawQueue.value = [];
   } finally {
     isLoading.value = false;
   }
 }
 
-onMounted(() => {
-  loadData();
-});
+onMounted(loadData);
 </script>
+
+<style scoped>
+.summary-clamp {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+</style>

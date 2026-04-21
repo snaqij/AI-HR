@@ -94,21 +94,30 @@
       class="fixed inset-0 z-[70] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4"
       @click.self="closeInterviewRecord"
     >
-      <div class="w-full max-w-5xl max-h-[90vh] overflow-hidden bg-surface-container-lowest rounded-3xl border border-outline-variant/10 shadow-2xl">
-        <div class="px-8 py-5 border-b border-outline-variant/10 flex items-center justify-between">
+      <div class="w-full max-w-6xl max-h-[90vh] overflow-hidden bg-surface-container-lowest rounded-3xl border border-outline-variant/10 shadow-2xl">
+        <div class="px-8 py-5 border-b border-outline-variant/10 flex items-center justify-between bg-surface-container-low/40">
           <div>
-            <h3 class="text-xl font-black text-on-surface">面试记录</h3>
+            <h3 class="text-xl font-black text-on-surface">面试记录与决策摘要</h3>
             <p class="text-xs font-bold text-on-surface-variant mt-1">
               {{ selectedInvite?.candidate_name || "-" }} · {{ selectedInvite?.job_title || "-" }}
             </p>
           </div>
-          <button
-            class="w-10 h-10 rounded-xl hover:bg-surface-container-high text-on-surface-variant flex items-center justify-center"
-            @click="closeInterviewRecord"
-            title="关闭"
-          >
-            <span class="material-symbols-outlined">close</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              v-if="selectedInvite"
+              class="h-10 px-4 rounded-xl border border-outline-variant/20 bg-surface-container-low text-xs font-black text-on-surface-variant uppercase tracking-widest"
+              @click="$router.push(`/admin/candidate-detail?jobId=${selectedInvite.job_id}&candidateId=${selectedInvite.candidate_id}`)"
+            >
+              打开候选人详情
+            </button>
+            <button
+              class="w-10 h-10 rounded-xl hover:bg-surface-container-high text-on-surface-variant flex items-center justify-center"
+              @click="closeInterviewRecord"
+              title="关闭"
+            >
+              <span class="material-symbols-outlined">close</span>
+            </button>
+          </div>
         </div>
 
         <div class="p-8 overflow-y-auto max-h-[calc(90vh-84px)]">
@@ -119,17 +128,31 @@
 
           <div v-else-if="recordError" class="py-20 text-center">
             <p class="text-sm font-bold text-rose-600">{{ recordError }}</p>
+            <button
+              class="mt-4 px-5 py-2.5 rounded-lg bg-primary text-white text-xs font-black uppercase tracking-widest"
+              @click="selectedInvite && openInterviewRecord(selectedInvite)"
+            >
+              重试加载
+            </button>
           </div>
 
           <template v-else>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40">
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">邀请状态</p>
                 <p class="text-sm font-bold mt-2 text-on-surface">{{ getStatusText(recordDetail?.delivery_status || "") }}</p>
               </div>
-              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40">
+              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">会话 ID</p>
                 <p class="text-sm font-bold mt-2 text-on-surface break-all">{{ recordDetail?.session_id || "尚未开始" }}</p>
+              </div>
+              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
+                <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">已作答题数</p>
+                <p class="text-sm font-bold mt-2 text-on-surface">{{ answeredCount }} / {{ recordDetail?.questions.length || 0 }}</p>
+              </div>
+              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
+                <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">平均维度分</p>
+                <p class="text-sm font-bold mt-2 text-on-surface">{{ averageDimensionScore }}</p>
               </div>
             </div>
 
@@ -137,58 +160,69 @@
               <p class="text-sm font-bold text-on-surface-variant">{{ recordDetail.record_message }}</p>
             </div>
 
-            <div class="mb-8">
-              <div class="flex items-center justify-between mb-4">
-                <h4 class="text-base font-black text-on-surface">题目与作答</h4>
-                <span class="text-[11px] font-bold text-on-surface-variant">共 {{ recordDetail?.questions.length || 0 }} 题</span>
-              </div>
-
-              <div v-if="!recordDetail?.questions.length" class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40 text-sm font-bold text-on-surface-variant">
-                暂无作答记录
-              </div>
-
-              <div v-else class="space-y-4">
-                <div
-                  v-for="(item, index) in recordDetail.questions"
-                  :key="`${item.question_id}-${index}`"
-                  class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40"
-                >
-                  <p class="text-xs font-black tracking-widest uppercase text-primary mb-2">题目 {{ index + 1 }}</p>
-                  <p class="text-sm font-bold text-on-surface leading-relaxed">{{ item.question }}</p>
-                  <div class="mt-4 pt-4 border-t border-outline-variant/10">
-                    <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-2">候选人回答</p>
-                    <p class="text-sm font-medium text-on-surface whitespace-pre-wrap break-words">{{ item.candidate_answer || "候选人尚未作答" }}</p>
-                  </div>
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              <section class="lg:col-span-7">
+                <div class="flex items-center justify-between mb-4">
+                  <h4 class="text-base font-black text-on-surface">问答时间线</h4>
+                  <span class="text-[11px] font-bold text-on-surface-variant">共 {{ recordDetail?.questions.length || 0 }} 题</span>
                 </div>
-              </div>
-            </div>
 
-            <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
-              <h4 class="text-base font-black text-on-surface mb-4">AI 分析结果</h4>
-              <div class="space-y-4">
-                <div>
-                  <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-1">综合结论</p>
-                  <p class="text-sm font-medium text-on-surface whitespace-pre-wrap break-words">{{ recordDetail?.analysis.summary || "暂无 AI 分析结论" }}</p>
+                <div v-if="!recordDetail?.questions.length" class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40 text-sm font-bold text-on-surface-variant">
+                  暂无作答记录
                 </div>
-                <div>
-                  <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-1">推荐建议</p>
-                  <p class="text-sm font-bold text-on-surface">{{ formatRecommendation(recordDetail?.analysis.recommendation) }}</p>
+
+                <div v-else class="space-y-3">
+                  <article
+                    v-for="(item, index) in recordDetail.questions"
+                    :key="`${item.question_id}-${index}`"
+                    class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40"
+                  >
+                    <div class="flex items-center justify-between mb-2">
+                      <p class="text-xs font-black tracking-widest uppercase text-primary">题目 {{ index + 1 }}</p>
+                      <span class="text-[11px] font-bold text-on-surface-variant">
+                        {{ item.answer_turn_no ? `轮次 #${item.answer_turn_no}` : "未记录轮次" }}
+                      </span>
+                    </div>
+                    <p class="text-sm font-bold text-on-surface leading-relaxed">{{ item.question }}</p>
+                    <div class="mt-4 pt-4 border-t border-outline-variant/10">
+                      <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-2">候选人回答</p>
+                      <p class="text-sm font-medium text-on-surface whitespace-pre-wrap break-words">{{ item.candidate_answer || "候选人尚未作答" }}</p>
+                    </div>
+                  </article>
                 </div>
-                <div>
-                  <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-2">维度得分</p>
-                  <div v-if="dimensionScoreEntries.length" class="flex flex-wrap gap-2">
-                    <span
-                      v-for="item in dimensionScoreEntries"
-                      :key="item.key"
-                      class="px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-black"
-                    >
-                      {{ item.key }}: {{ item.value }}
+              </section>
+
+              <aside class="lg:col-span-5 space-y-4">
+                <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
+                  <div class="flex items-center justify-between mb-3">
+                    <h4 class="text-base font-black text-on-surface">AI 结论</h4>
+                    <span class="px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border" :class="recommendationClass">
+                      {{ formatRecommendation(recordDetail?.analysis.recommendation) }}
                     </span>
+                  </div>
+                  <p class="text-sm font-medium text-on-surface whitespace-pre-wrap break-words">
+                    {{ recordDetail?.analysis.summary || "暂无 AI 分析结论" }}
+                  </p>
+                </div>
+
+                <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
+                  <h4 class="text-base font-black text-on-surface mb-3">维度得分</h4>
+                  <div v-if="dimensionScoreEntries.length" class="space-y-3">
+                    <div v-for="item in dimensionScoreEntries" :key="item.key">
+                      <div class="flex items-center justify-between mb-1">
+                        <span class="text-xs font-bold text-on-surface-variant">{{ formatDimensionLabel(item.key) }}</span>
+                        <span class="text-xs font-black text-on-surface">{{ item.display }}</span>
+                      </div>
+                      <div class="h-2 w-full bg-surface-container-high rounded-full overflow-hidden">
+                        <div class="h-full bg-primary rounded-full" :style="{ width: `${item.percent}%` }"></div>
+                      </div>
+                    </div>
                   </div>
                   <p v-else class="text-sm font-medium text-on-surface-variant">暂无维度评分</p>
                 </div>
-                <div>
-                  <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-2">风险标签</p>
+
+                <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
+                  <h4 class="text-base font-black text-on-surface mb-3">风险标签</h4>
                   <div v-if="recordDetail?.analysis.risk_tags?.length" class="flex flex-wrap gap-2">
                     <span
                       v-for="tag in recordDetail.analysis.risk_tags"
@@ -200,7 +234,7 @@
                   </div>
                   <p v-else class="text-sm font-medium text-on-surface-variant">暂无风险标签</p>
                 </div>
-              </div>
+              </aside>
             </div>
           </template>
         </div>
@@ -232,8 +266,41 @@ let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const dimensionScoreEntries = computed(() => {
   const source = recordDetail.value?.analysis?.dimension_scores || {};
   return Object.keys(source)
-    .map((key) => ({ key, value: source[key] }))
-    .sort((a, b) => Number(b.value || 0) - Number(a.value || 0));
+    .map((key) => {
+      const raw = Number(source[key] || 0);
+      const normalized = Math.max(0, Math.min(raw, 100));
+      return {
+        key,
+        value: raw,
+        percent: normalized,
+        display: Number.isFinite(raw) ? raw.toFixed(1) : "--",
+      };
+    })
+    .sort((a, b) => b.value - a.value);
+});
+
+const answeredCount = computed(() => {
+  return (recordDetail.value?.questions || []).filter((item) => (item.candidate_answer || "").trim()).length;
+});
+
+const averageDimensionScore = computed(() => {
+  const items = dimensionScoreEntries.value;
+  if (!items.length) {
+    return "--";
+  }
+  const avg = items.reduce((sum, item) => sum + item.value, 0) / items.length;
+  return avg.toFixed(1);
+});
+
+const recommendationClass = computed(() => {
+  const value = recordDetail.value?.analysis?.recommendation;
+  if (value === "strong_recommend" || value === "recommend") {
+    return "bg-green-50 text-green-700 border-green-100";
+  }
+  if (value === "reject") {
+    return "bg-rose-50 text-rose-700 border-rose-100";
+  }
+  return "bg-amber-50 text-amber-700 border-amber-100";
 });
 
 async function loadHistory() {
@@ -283,6 +350,7 @@ function formatRecommendation(value?: string | null): string {
       return "强烈推荐";
     case "recommend":
       return "推荐";
+    case "review":
     case "manual_review":
       return "待复核";
     case "reject":
@@ -290,6 +358,12 @@ function formatRecommendation(value?: string | null): string {
     default:
       return value || "暂无";
   }
+}
+
+function formatDimensionLabel(value: string): string {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function getStatusText(status: string): string {

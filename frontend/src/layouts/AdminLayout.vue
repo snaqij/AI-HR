@@ -181,6 +181,7 @@ onUnmounted(() => {
 
 const menuItems = [
   { label: '控制台概览', path: '/admin', icon: 'dashboard' },
+  { label: 'Agent 运行中心', path: '/admin/agents', icon: 'support_agent' },
   { label: '职位管理', path: '/admin/jobs', icon: 'work' },
   { label: '面试邀请记录', path: '/admin/interview-history', icon: 'event' },
   { label: '录用决策中心', path: '/admin/hiring', icon: 'person_add' },
