@@ -1,0 +1,120 @@
+# UI设计师岗位配置
+
+version: "1.0"
+extends: "_base"
+
+role:
+  id: "ui_designer"
+  family: "design"
+  display_name:
+    zh: "UI设计师"
+    en: "UI Designer"
+  
+  match_rules:
+    keywords:
+      - "ui设计"
+      - "ui designer"
+      - "界面设计"
+      - "视觉设计"
+      - "visual design"
+    skills:
+      - "figma"
+      - "sketch"
+      - "photoshop"
+      - "illustrator"
+      - "axure"
+      - "principle"
+      - "after effects"
+
+# 岗位特定能力
+role_competencies:
+  visual_design:
+    weight: 0.35
+    description: "视觉设计能力"
+    evidence_types:
+      - "layout_design"
+      - "color_theory"
+      - "typography"
+      - "icon_design"
+      - "illustration"
+  
+  interaction_design:
+    weight: 0.25
+    description: "交互设计能力"
+    evidence_types:
+      - "user_flow"
+      - "interaction_pattern"
+      - "micro_interaction"
+      - "animation"
+  
+  design_system:
+    weight: 0.20
+    description: "设计系统"
+    evidence_types:
+      - "component_library"
+      - "design_token"
+      - "design_guideline"
+      - "consistency"
+  
+  user_empathy:
+    weight: 0.20
+    description: "用户同理心"
+    evidence_types:
+      - "user_research"
+      - "usability_testing"
+      - "accessibility"
+      - "user_feedback"
+
+# 阶段权重
+stage_weights:
+  S1: 0.05
+  S2: 0.20
+  S3: 0.35
+  S4: 0.35
+  S5: 0.05
+  # S6-S8: 按需触发或固定流程
+
+# 题目生成策略
+question_generation:
+  distribution:
+    from_resume: 0.60
+    from_jd: 0.30
+    from_template: 0.10
+  
+  anchor_project:
+    required: true
+    min_duration_months: 2
+
+# 追问策略
+followup_strategy:
+  max_per_question: 3
+  evidence_threshold: 0.70
+  priority:
+    - "visual_design"
+    - "interaction_design"
+    - "design_system"
+    - "user_empathy"
+
+# Prompt增强
+prompt_enhancements:
+  role_context: |
+    候选人应聘UI设计师岗位。请重点评估其：
+    1. 视觉设计：布局、配色、字体、图标等视觉能力
+    2. 交互设计：用户流程和交互模式设计能力
+    3. 设计系统：组件库和设计规范建设能力
+    4. 用户同理心：用户研究和可用性测试能力
+  
+  question_focus: |
+    题目应围绕候选人的设计项目经历，重点关注：
+    - 设计作品的视觉呈现
+    - 设计决策的思考过程
+    - 用户体验的优化方法
+    - 设计规范的建立和维护
+    - 与产品和开发的协作
+  
+  followup_focus: |
+    追问应深入设计思维和方法：
+    - 设计风格的选择依据
+    - 如何平衡美观和可用性
+    - 如何收集和应用用户反馈
+    - 如何保证设计的一致性

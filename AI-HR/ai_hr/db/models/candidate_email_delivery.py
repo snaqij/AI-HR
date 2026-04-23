@@ -17,6 +17,8 @@ class CandidateEmailDelivery(TimestampMixin, Base):
 
     __tablename__ = "candidate_email_deliveries"
     __table_args__ = (
+        Index("idx_candidate_email_delivery_workspace", "workspace_id"),
+        Index("idx_candidate_email_delivery_created_by", "created_by_user_id"),
         Index("idx_candidate_email_delivery_candidate", "candidate_id"),
         Index("idx_candidate_email_delivery_job", "job_id"),
         Index("idx_candidate_email_delivery_status", "status"),
@@ -26,6 +28,8 @@ class CandidateEmailDelivery(TimestampMixin, Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     candidate_id: Mapped[str] = mapped_column(String(36), nullable=False)
     job_id: Mapped[str] = mapped_column(String(36), nullable=False)
     evaluation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ...core.auth_dependencies import require_workspace_context
 from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.ai_resume import (
@@ -24,7 +25,7 @@ from ...schemas.candidates import (
 from ...services.ai_resume import get_ai_resume_service
 from ...services.candidates import get_candidate_service
 
-router = APIRouter(prefix="/candidates", tags=["candidates"])
+router = APIRouter(prefix="/candidates", tags=["candidates"], dependencies=[Depends(require_workspace_context)])
 
 
 @router.post("/import", response_model=Envelope[CandidateImportResult], status_code=status.HTTP_201_CREATED)

@@ -117,6 +117,7 @@ from ..rtc.factory import create_rtc_gateway
 from ..speech.base import ASRProvider, TTSProvider
 from ..speech.factory import create_asr_provider, create_tts_provider
 from ..ten_runtime import TENRuntimeManager
+from ..enterprise_assessment import EnterpriseAssessmentService, get_enterprise_assessment_service
 
 # NOTE: cleaned mojibake comment.
 # NOTE: cleaned mojibake comment.

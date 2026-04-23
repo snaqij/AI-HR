@@ -17,6 +17,7 @@ from ..db.models import (
     AIInterviewSession,
     AIInterviewTurn,
 )
+from .workspace_scope import get_workspace_id
 
 
 class AIInterviewSessionRepository:
@@ -38,6 +39,7 @@ class AIInterviewSessionRepository:
         payload: dict[str, Any] | None = None,
     ) -> AIInterviewSession:
         entity = AIInterviewSession(
+            workspace_id=get_workspace_id(self._session),
             candidate_id=candidate_id,
             job_id=job_id,
             status="created",
@@ -55,6 +57,9 @@ class AIInterviewSessionRepository:
 
     def get(self, session_id: str) -> AIInterviewSession:
         stmt = select(AIInterviewSession).where(AIInterviewSession.id == session_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(AIInterviewSession.workspace_id == workspace_id)
         entity = self._session.execute(stmt).scalar_one_or_none()
         if entity is None:
             raise ResourceNotFoundError(f"AI interview session '{session_id}' was not found")
@@ -62,6 +67,9 @@ class AIInterviewSessionRepository:
 
     def get_by_room_id(self, room_id: str) -> AIInterviewSession | None:
         stmt = select(AIInterviewSession).where(AIInterviewSession.rtc_room_id == room_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(AIInterviewSession.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def update_status(
@@ -84,6 +92,15 @@ class AIInterviewSessionRepository:
         merged_payload = dict(entity.payload or {})
         if payload_patch:
             merged_payload.update(payload_patch)
+        entity.payload = merged_payload
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity
+
+    def update_payload(self, session_id: str, *, payload_patch: dict[str, Any]) -> AIInterviewSession:
+        entity = self.get(session_id)
+        merged_payload = dict(entity.payload or {})
+        merged_payload.update(payload_patch or {})
         entity.payload = merged_payload
         self._session.commit()
         self._session.refresh(entity)
@@ -122,8 +139,12 @@ class AIInterviewSessionRepository:
         audio_uri: str | None,
         confidence: float | None,
         latency_ms: int | None,
-        policy_flags: list[str] | None,
-        payload: dict[str, Any] | None,
+        question_attempt_id: str | None = None,
+        question_id: str | None = None,
+        question_seq: int | None = None,
+        ingest_trace_id: str | None = None,
+        policy_flags: list[str] | None = None,
+        payload: dict[str, Any] | None = None,
         transcript_ttl_days: int = 180,
         audio_ttl_days: int = 30,
     ) -> tuple[AIInterviewTurn | None, bool]:
@@ -143,11 +164,15 @@ class AIInterviewSessionRepository:
         turn_entity = AIInterviewTurn(
             session_id=session_id,
             turn_no=next_turn_no,
+            question_attempt_id=question_attempt_id,
+            question_id=question_id,
+            question_seq=question_seq,
             speaker=speaker,
             transcript=transcript,
             audio_uri=audio_uri,
             confidence=confidence,
             latency_ms=latency_ms,
+            ingest_trace_id=ingest_trace_id,
             policy_flags=policy_flags or [],
             payload=turn_payload,
             transcript_expires_at=now + timedelta(days=max(1, transcript_ttl_days)),
@@ -225,6 +250,9 @@ class AIInterviewSessionRepository:
     def list_sessions(self, *, window_minutes: int) -> list[AIInterviewSession]:
         since = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=max(1, window_minutes))
         stmt = select(AIInterviewSession).where(AIInterviewSession.created_at >= since).order_by(AIInterviewSession.created_at.desc())
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(AIInterviewSession.workspace_id == workspace_id)
         return list(self._session.execute(stmt).scalars().all())
 
     def list_candidate_latencies(self, *, window_minutes: int) -> list[int]:
@@ -235,6 +263,11 @@ class AIInterviewSessionRepository:
             .where(AIInterviewTurn.speaker == "candidate")
             .where(AIInterviewTurn.latency_ms.is_not(None))
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(AIInterviewSession, AIInterviewSession.id == AIInterviewTurn.session_id).where(
+                AIInterviewSession.workspace_id == workspace_id
+            )
         return [int(item) for item in self._session.execute(stmt).scalars().all()]
 
     def list_candidate_turns(self, *, window_minutes: int) -> list[AIInterviewTurn]:
@@ -245,6 +278,11 @@ class AIInterviewSessionRepository:
             .where(AIInterviewTurn.speaker == "candidate")
             .order_by(AIInterviewTurn.created_at.desc())
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(AIInterviewSession, AIInterviewSession.id == AIInterviewTurn.session_id).where(
+                AIInterviewSession.workspace_id == workspace_id
+            )
         return list(self._session.execute(stmt).scalars().all())
 
     def get_latest_report(self, session_id: str) -> AIInterviewReport | None:
@@ -342,6 +380,18 @@ class AIInterviewInvitationRepository:
         if entity is None:
             raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
         entity.status = status
+        self._session.commit()
+        self._session.refresh(entity)
+        return entity
+
+    def update_payload(self, invitation_id: str, *, payload_patch: dict[str, Any]) -> AIInterviewInvitation:
+        stmt = select(AIInterviewInvitation).where(AIInterviewInvitation.id == invitation_id)
+        entity = self._session.execute(stmt).scalar_one_or_none()
+        if entity is None:
+            raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
+        merged = dict(entity.payload or {})
+        merged.update(payload_patch or {})
+        entity.payload = merged
         self._session.commit()
         self._session.refresh(entity)
         return entity

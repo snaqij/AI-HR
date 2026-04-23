@@ -816,7 +816,7 @@ class CandidateEvaluationService:
             final_score = min(final_score, 69.0)
         elif skill_coverage_ratio < 0.5:
             final_score = min(final_score, 74.0)
-        # 增加市场对标点评
+        # Add market-benchmark commentary
         summary_raw = str(llm_output.get("summary") or heuristic["summary"])
         market_benchmark = llm_output.get("market_benchmark")
         if market_benchmark:

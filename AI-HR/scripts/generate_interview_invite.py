@@ -1,16 +1,21 @@
 """Create a real interview invitation link from a resume in data/ and optionally open it.
 
 Usage:
+  python scripts/generate_interview_invite.py --token YOUR_TOKEN
+  python scripts/generate_interview_invite.py --token YOUR_TOKEN --no-send-email
+  python scripts/generate_interview_invite.py --token YOUR_TOKEN --open --activate
+  python scripts/generate_interview_invite.py --resume data/sample.pdf --token YOUR_TOKEN
+  
+  # Or use environment variable:
+  export AI_HR_TOKEN="v1.eyJ0eXAiOiJhY2Nlc3MiLCJzaWQiOi..."
   python scripts/generate_interview_invite.py
-  python scripts/generate_interview_invite.py --no-send-email
-  python scripts/generate_interview_invite.py --open --activate
-  python scripts/generate_interview_invite.py --resume data/sample.pdf --api-base http://127.0.0.1:8000/api/v1
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import traceback
 import sys
 import time
@@ -29,7 +34,7 @@ except Exception:  # noqa: BLE001
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data"
-DEFAULT_TEST_RESUME = DEFAULT_DATA_DIR / "测试文本简历"
+DEFAULT_TEST_RESUME = DEFAULT_DATA_DIR / "resume_civil_servant"
 
 
 def _extract_text_from_pdf(pdf_path: Path) -> str:
@@ -130,6 +135,7 @@ def main() -> int:
     parser.add_argument("--api-base", default="http://127.0.0.1:8000/api/v1", help="Backend API base URL.")
     parser.add_argument("--frontend-base", default="http://localhost:5173", help="Frontend base URL.")
     parser.add_argument("--resume", default="", help="Optional resume path. Default: auto-pick from data/.")
+    parser.add_argument("--token", default="", help="Bearer token for API authentication. Can also use AI_HR_TOKEN env var.")
     parser.add_argument("--open", action="store_true", help="Open invitation URL in browser.")
     parser.add_argument("--activate", action="store_true", help="Activate invitation and print session join URL.")
     parser.add_argument(
@@ -164,6 +170,19 @@ def main() -> int:
         f"[invite] timeout={args.timeout}s invitation_timeout={args.invitation_timeout}s "
         f"activate={args.activate} open={args.open} send_email={args.send_email}"
     )
+
+    # Get bearer token from args or environment variable or use hardcoded default
+    bearer_token = (args.token or "").strip() or os.environ.get("AI_HR_TOKEN", "").strip()
+    
+    # Hardcoded default token
+    if not bearer_token:
+        bearer_token = "v1.eyJ0eXAiOiJhY2Nlc3MiLCJzaWQiOiI0NTgwZWYzNC1mNGI4LTQyZjAtOWRjNS04YmRmODc5NDc1Y2QiLCJ1aWQiOiJjZGI0OTFhOS0wZjJlLTRkZTItOGI5My1kN2YzNjZhMTNiMDMiLCJleHAiOjE3NzY4NjU4NzgsIm4iOiJpYWpHeHB1S0dnZmktb2c2OWIyT3lBIn0.I6asek8CbGF5A0ZzsCsqnC4bMe8XDcIn2SNgNXINnjk"
+
+    # Ensure token has Bearer prefix
+    if not bearer_token.startswith("Bearer "):
+        bearer_token = f"Bearer {bearer_token}"
+    
+    print(f"[invite] auth_token={'*' * 20}...{bearer_token[-8:]}")  # Mask token for security
 
     if args.resume:
         resume_path = Path(args.resume).resolve()
@@ -215,7 +234,8 @@ def main() -> int:
     }
 
     timeout = httpx.Timeout(timeout=args.timeout)
-    with httpx.Client(base_url=args.api_base.rstrip("/"), timeout=timeout) as client:
+    headers = {"Authorization": bearer_token}
+    with httpx.Client(base_url=args.api_base.rstrip("/"), timeout=timeout, headers=headers) as client:
         health_url = args.api_base.rstrip("/") + "/jobs"
         print(f"[invite] probing_api={health_url}")
         probe_start = time.perf_counter()

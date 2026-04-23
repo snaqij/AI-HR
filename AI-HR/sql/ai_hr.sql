@@ -365,6 +365,8 @@ CREATE TABLE `automation_task_logs`  (
 DROP TABLE IF EXISTS `candidate_email_deliveries`;
 CREATE TABLE `candidate_email_deliveries`  (
   `id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `workspace_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL,
+  `created_by_user_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL,
   `candidate_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `job_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `evaluation_id` varchar(36) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL,
@@ -391,6 +393,8 @@ CREATE TABLE `candidate_email_deliveries`  (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`) USING BTREE,
+  INDEX `idx_candidate_email_delivery_workspace`(`workspace_id` ASC) USING BTREE,
+  INDEX `idx_candidate_email_delivery_created_by`(`created_by_user_id` ASC) USING BTREE,
   INDEX `idx_candidate_email_delivery_candidate`(`candidate_id` ASC) USING BTREE,
   INDEX `idx_candidate_email_delivery_job`(`job_id` ASC) USING BTREE,
   INDEX `idx_candidate_email_delivery_status`(`status` ASC) USING BTREE,

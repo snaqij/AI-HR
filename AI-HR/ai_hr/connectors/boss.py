@@ -101,7 +101,7 @@ class BossConnector:
         if not list_jobs_path:
             raise InvalidConnectorConfigError("BOSS list_jobs_path is required in live mode")
 
-        # 对齐抓包到的真实参数
+        # Align with real parameters captured from traffic
         payload = {
             "position": 0,
             "type": 0,
@@ -349,7 +349,7 @@ class BossConnector:
                 "raw_payload": response_payload,
             }
 
-        # --- 第 1 步：解锁并回复投递意向 (block/v2) ---
+        # --- Step 1: unlock and send delivery-intent reply (block/v2) ---
         logger.info("boss_connector.send_message.step1_unblock_start target_id=%s job_id=%s", target_id, job_id or "")
         unblock_path = "/wapi/zpblock/chat/reply/block/v2"
         unblock_payload = {
@@ -357,12 +357,12 @@ class BossConnector:
             "encryptJid": job_id or "",
             "autoRelease": 1,
             "bgSource": 1,
-            "msg": message,       # 兼容一些老版本的直发
-            "message": message    # 冗余
+            "msg": message,       # Compatible with direct-send behavior in some legacy versions
+            "message": message    # Redundant field kept for compatibility
         }
         
         try:
-            # 第一步不一定要成功（如果已经解锁过），报错则忽略并进入下一步
+            # Step 1 is best-effort; if already unlocked, ignore errors and continue
             unblock_resp = self._send_live_request(
                 self._build_live_url(unblock_path),
                 unblock_payload,
@@ -375,15 +375,15 @@ class BossConnector:
                 unblock_resp.get("message", "Success"),
             )
         except Exception as e:
-            # 特别处理 121 报错，告知用户这通常是因为重复解锁
+            # Special handling for error 121: usually caused by repeated unlock attempts
             logger.warning(
                 "boss_connector.send_message.step1_unblock_skipped target_id=%s error=%s",
                 target_id,
                 e,
             )
 
-        # --- 第 2 步：核心投递 (send.json) ---
-        # 如果有 UID，这一步是产生 App 聊天记录的关键
+        # --- Step 2: core delivery request (send.json) ---
+        # If UID is present, this step is key to creating app chat records
         if not numeric_uid:
             logger.warning("boss_connector.send_message.step2_missing_numeric_uid target_id=%s", target_id)
 
@@ -581,7 +581,7 @@ class BossConnector:
 
         data = self._fetch_boss_geek_detail(raw_profile)
         
-        # 详情报文解析逻辑
+        # Detail-payload parsing logic
         detail_info = {
             "school": self._pick_first(data, ("school", "schoolName", "university")),
             "degree": self._pick_first(data, ("degree", "edu", "degreeName", "education")),
@@ -591,7 +591,7 @@ class BossConnector:
             "raw_profile": data,
         }
 
-        # 深度回溯：如果关键字段缺失，尝试从列表字段中提取
+        # Deep fallback: extract from list fields when critical fields are missing
         if not detail_info["degree"]:
             edu_list = data.get("eduExpList") or data.get("educationList")
             if edu_list and isinstance(edu_list, list) and len(edu_list) > 0:
@@ -858,11 +858,11 @@ class BossConnector:
         return self._send_live_request(self._build_live_url(self._credentials.publish_path), payload, method="POST")
 
     def _send_status_request(self, external_job_id: str) -> dict[str, Any]:
-        # BOSS 状态查询通常是 GET
+        # BOSS status lookup is usually a GET request
         return self._send_live_request(self._build_live_url(self._credentials.status_path), {"jobId": external_job_id}, method="GET")
 
     def _send_list_applicants_request(self, job_external_id: str | None = None, cursor: str | None = None) -> dict[str, Any]:
-        # 用户提供的最新抓包结果显示，该列表是 POST 请求
+        # Latest captured traffic indicates this list API is a POST request
         payload: dict[str, Any] = {
             "page": 1,
             "pageSize": 50
@@ -871,7 +871,7 @@ class BossConnector:
             payload["jobId"] = job_external_id
             
         if cursor:
-            payload["page"] = cursor # 或其他分页逻辑
+            payload["page"] = cursor # or other pagination logic
             
         return self._send_live_request(self._build_live_url(self._credentials.applicants_path), payload, method="POST", is_json=False)
 
@@ -879,14 +879,14 @@ class BossConnector:
         """增强型请求处理器，支持 JSON 和 Form-Data 双模态。"""
         headers = self._build_headers()
 
-        # 动态处理 Content-Type
+        # Handle Content-Type dynamically
         if is_json:
             headers["Content-Type"] = "application/json; charset=UTF-8"
             body = json.dumps(payload) if method.upper() == "POST" else None
             params = payload if method.upper() == "GET" else None
         else:
-            # application/x-www-form-urlencoded 是列表类接口的标配
-            # requests.request(data=payload) 且不设置 Content-Type 时会自动填充
+            # application/x-www-form-urlencoded is standard for list-style endpoints
+            # requests.request(data=payload) auto-fills Content-Type when omitted
             body = payload if method.upper() == "POST" else None
             params = payload if method.upper() == "GET" else None
 
@@ -900,7 +900,7 @@ class BossConnector:
                 timeout=12
             )
             
-            # 记录原始文本用于调试
+            # Record raw response text for debugging
             raw_text = response.text
             response.raise_for_status()
             
@@ -1110,13 +1110,13 @@ class BossConnector:
             if not isinstance(item, dict):
                 continue
             
-            # 如果提供了职位 ID，则过滤出对应岗位的候选人
+            # If job ID is provided, filter candidates for that job only
             item_job_id = self._pick_first(item, ("encryptJobId", "jobId"))
             if filter_job_id and item_job_id and str(item_job_id) != str(filter_job_id):
                 continue
 
-            # 使用稳定 ID：优先使用 encryptUid (全局唯一且固定)
-            # securityId 在 BOSS 中是加密动态 ID，同一人在不同时间/上下文中可能不同，会导致重复抓取
+            # Use a stable ID: prefer encryptUid (globally unique and stable)
+            # securityId in BOSS is dynamic/encrypted and may vary by context, causing duplicates
             external_candidate_id = self._pick_first(item, ("encryptUid", "uid", "encryptExpectId", "candidateId", "geekId", "userId", "id", "securityId"))
             if not external_candidate_id:
                 continue
@@ -1139,7 +1139,7 @@ class BossConnector:
                 }
             )
             
-            # 如果元数据为空但存在摘要字段，则尝试从摘要中解包信息 (BOSS 常用模式: "公司 · 5年 · 本科")
+            # If metadata is empty but summary exists, unpack info from summary (common BOSS pattern)
             summary_expr = item.get("lastWorkExpr")
             if summary_expr and isinstance(summary_expr, str):
                 parts = [p.strip() for p in summary_expr.split("·")]
@@ -1230,7 +1230,7 @@ class BossConnector:
         if ts is None:
             return None
         try:
-            # BOSS 经常返回 13 位毫秒级时间戳
+            # BOSS often returns 13-digit millisecond timestamps
             val = int(ts)
             if val > 10**11:
                 val /= 1000

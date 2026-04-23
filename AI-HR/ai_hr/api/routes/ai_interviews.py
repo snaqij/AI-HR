@@ -198,7 +198,7 @@ def generate_ai_interview_question_set(
 ) -> Envelope[AIInterviewQuestionGenerateResult]:
     """Route handler."""
     service = get_ai_interview_service(session)
-    result = service.generate_question_set(session_id, payload)
+    result = service.generate_question_set(session_id=session_id, payload=payload)
     return Envelope.success(AIInterviewQuestionGenerateResult.model_validate(result))
 
 

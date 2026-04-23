@@ -45,7 +45,7 @@ class RedisInterviewEventBus(InterviewEventBus):
         }
         self._publish_local(event)
         try:
-            # 仅在发布到 Redis 时进行序列化安全处理，本地订阅仍可保留原始字节用于高效分发
+            # Apply serialization safety only when publishing to Redis; local subscribers can keep raw bytes for efficient fan-out
             safe_event = self._make_json_safe(event)
             self._client.publish(self._channel_for_session(session_id), json.dumps(safe_event, ensure_ascii=False))
         except Exception as e:

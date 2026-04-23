@@ -5,21 +5,25 @@ from .ai_interviews_shared import *
 
 class AIInterviewQuestionGenerationMixin:
     def generate_question_set(
-        self, 
-        session_id: str | None = None, 
+        self,
+        session_id: str | None = None,
         invitation_id: str | None = None,
-        force_regenerate: bool = False
+        payload: AIInterviewQuestionGenerateRequest | None = None,
+        force_regenerate: bool | None = None,
     ) -> AIInterviewQuestionGenerateResult:
-        """生成或获取面试题目集。支持通过 session_id 或 invitation_id。"""
+        """Generate or fetch the latest question set for a session or invitation."""
         context_id = session_id or invitation_id
         if not context_id:
             raise ValueError("Either session_id or invitation_id must be provided")
 
-        # 1. 尝试获取现有题目
-        if not force_regenerate:
+        request = payload or AIInterviewQuestionGenerateRequest()
+        should_regenerate = request.force_regenerate if force_regenerate is None else bool(force_regenerate)
+        question_count = max(1, int(request.question_count))
+
+        if not should_regenerate:
             existing = self._session_repository.get_latest_question_set(
-                session_id=session_id, 
-                invitation_id=invitation_id
+                session_id=session_id,
+                invitation_id=invitation_id,
             )
             if existing:
                 return AIInterviewQuestionGenerateResult(
@@ -30,40 +34,60 @@ class AIInterviewQuestionGenerationMixin:
                     questions=existing.questions_json or [],
                 )
 
-        # 2. 获取业务基础数据
         if session_id:
             session_entity = self._session_repository.get(session_id)
             candidate_id = session_entity.candidate_id
             job_id = session_entity.job_id
             language = session_entity.language
+            persisted_payload = dict(session_entity.payload or {})
         else:
             invitation_entity = self._invitation_repository.get_by_id(invitation_id)
             candidate_id = invitation_entity.candidate_id
             job_id = invitation_entity.job_id
             language = "zh-CN"
+            persisted_payload = dict(invitation_entity.payload or {})
 
         candidate = self._candidate_repository.get(candidate_id)
         job = self._job_repository.get(job_id)
+        role_context = self._resolve_role_context(
+            candidate=candidate,
+            job=job,
+            explicit_role_id=request.explicit_role_id,
+            persisted_payload=persisted_payload,
+        )
+        role_payload_patch = self._build_role_payload_patch(role_context)
+        role_config = role_context["config"]
 
-        # 3. 执行生成
+        if session_id:
+            self._session_repository.update_payload(session_id, payload_patch=role_payload_patch)
+            self._hydrate_session_role_config(session_id=session_id, persisted_payload=role_payload_patch)
+            logger.info(
+                "ai_interview.role_identified session_id=%s role_id=%s role_source=%s",
+                session_id,
+                role_context["role_id"],
+                role_context["source"],
+            )
+        elif invitation_id:
+            self._invitation_repository.update_payload(invitation_id, payload_patch=role_payload_patch)
+
         questions, mode = self._generate_questions_with_fallback(
             session_id=context_id,
             job_title=job.title or "",
             resume_text=candidate.resume_text or "",
             job_requirements=job.requirements or "",
             skills=(candidate.raw_profile or {}).get("skills", []),
-            question_count=14,
-            language=language
+            question_count=question_count,
+            language=language,
+            role_config=role_config,
         )
 
-        # 4. 保存
-        version = self._session_repository.get_latest_question_set_version(session_id) + 1 if session_id else 1
+        version = self._session_repository.get_latest_question_set_version(session_id, invitation_id) + 1
         entity = self._session_repository.create_question_set(
             session_id=session_id,
             invitation_id=invitation_id,
             version=version,
             source=f"{mode}:invitation" if invitation_id else mode,
-            questions=questions
+            questions=questions,
         )
 
         return AIInterviewQuestionGenerateResult(
@@ -75,13 +99,19 @@ class AIInterviewQuestionGenerationMixin:
         )
 
     def prebuild_question_pack(self, payload: AIInterviewQuestionPackPrebuildRequest) -> dict:
-        """预生成题包并缓存到运行时存储。"""
+        """Prebuild a role-aware question pack and cache it in runtime storage."""
         candidate = self._candidate_repository.get(payload.candidate_id)
         job = self._job_repository.get(payload.job_id)
         resume_text = candidate.resume_text or ""
         job_requirements = job.requirements or ""
         skills = (candidate.raw_profile or {}).get("skills", [])
-        
+        role_context = self._resolve_role_context(
+            candidate=candidate,
+            job=job,
+            explicit_role_id=payload.explicit_role_id,
+            persisted_payload=None,
+        )
+
         questions, generation_mode = self._generate_questions_with_fallback(
             session_id=f"prebuild:{payload.candidate_id}:{payload.job_id}",
             job_title=job.title or "",
@@ -90,8 +120,9 @@ class AIInterviewQuestionGenerationMixin:
             skills=skills,
             question_count=payload.question_count,
             language=payload.language,
+            role_config=role_context["config"],
         )
-        
+
         resume_hash = self._compute_prebuild_resume_hash(
             resume_text=resume_text,
             job_requirements=job_requirements,
@@ -103,7 +134,7 @@ class AIInterviewQuestionGenerationMixin:
             language=payload.language,
             resume_hash=resume_hash,
         )
-        
+
         question_pack = normalize_question_pack({
             PayloadKey.CANDIDATE_ID: payload.candidate_id,
             PayloadKey.JOB_ID: payload.job_id,
@@ -111,15 +142,16 @@ class AIInterviewQuestionGenerationMixin:
             "source": payload.source,
             "questions": questions,
             "resume_hash": resume_hash,
+            "role": role_context["payload"]["role"],
         })
-        
+
         ttl_seconds = int(self._settings.ai_interview_prebuild_pack_ttl_seconds)
         self._runtime_store.save_prebuilt_pack(
             key=cache_key,
             question_pack=question_pack,
             ttl_seconds=ttl_seconds,
         )
-        
+
         return {
             "cache_key": cache_key,
             "question_count": len(questions),
@@ -138,6 +170,7 @@ class AIInterviewQuestionGenerationMixin:
         skills: list[str],
         question_count: int,
         language: str = "zh-CN",
+        role_config: dict = None,  # 新增参数
     ) -> tuple[list[dict], str]:
         """优先使用 LLM 生成题目，仅在 LLM 异常或题目不足时回退到规则驱动。"""
         llm_questions = []
@@ -160,6 +193,7 @@ class AIInterviewQuestionGenerationMixin:
                     skills=skills,
                     question_count=question_count,
                     language=language,
+                    role_config=role_config,  # 传递岗位配置
                 )
                 logger.info(
                     "ai_interview.llm_question_generation_result session_id=%s llm_question_count=%s threshold=%s",
@@ -167,7 +201,7 @@ class AIInterviewQuestionGenerationMixin:
                     len(llm_questions),
                     max(3, question_count // 2),
                 )
-                # 如果 LLM 生成了足够的题目，直接使用 LLM 结果
+                # If LLM generated enough questions, use LLM output directly
                 if len(llm_questions) >= max(3, question_count // 2):
                     return list(llm_questions), "llm"
             except Exception as e:
@@ -178,7 +212,7 @@ class AIInterviewQuestionGenerationMixin:
                 session_id,
             )
 
-        # 回退逻辑：生成规则题目
+        # Fallback path: generate rule-based questions
         rule_questions = self._build_questions(
             resume_text=resume_text,
             job_requirements=job_requirements,
@@ -187,7 +221,7 @@ class AIInterviewQuestionGenerationMixin:
             language=language,
         )
 
-        # 如果有部分 LLM 题目但不足，尝试混合（增强版）
+        # If partial LLM output is insufficient, try mixed mode (enhanced)
         if llm_questions:
             try:
                 merged = self._merge_question_candidates(
@@ -204,7 +238,7 @@ class AIInterviewQuestionGenerationMixin:
                 logger.error(f"ai_interview.question_merge_failed session_id={session_id} error={e}")
                 return list(llm_questions) if len(llm_questions) >= 3 else list(rule_questions), "llm_hybrid_fallback"
 
-        # 完全规则回退
+        # Full rule-based fallback
         logger.warning(
             "ai_interview.question_generation_fallback_rule session_id=%s llm_enabled=%s llm_question_count=%s",
             session_id,
@@ -223,6 +257,7 @@ class AIInterviewQuestionGenerationMixin:
         skills: list[str],
         question_count: int,
         language: str = "zh-CN",
+        role_config: dict = None,  # 新增参数
     ) -> list[dict]:
         """使用 LLM (v4) 生成结构化面试题目，采用更稳建的正则解析方式。"""
         route = self._llm_client._router.resolve_route(PromptTaskKey.INTERVIEW_QUESTION_SET)
@@ -238,6 +273,10 @@ class AIInterviewQuestionGenerationMixin:
             task_key=PromptTaskKey.INTERVIEW_QUESTION_SET,
             default_version="v4"
         )
+        
+        # 构建岗位上下文
+        role_context = self._build_role_context(role_config) if role_config else ""
+        
         rendered = template.render(
             language=language,
             job_title=job_title,
@@ -245,6 +284,7 @@ class AIInterviewQuestionGenerationMixin:
             resume_text=resume_text[:4000],
             skills=skills or [],
             question_count=question_count,
+            role_context=role_context,  # 注入岗位上下文
         )
 
         context = InvokeContext(
@@ -255,7 +295,7 @@ class AIInterviewQuestionGenerationMixin:
             entity_id=session_id,
         )
 
-        # 采用文本模式调用，绕过 Pydantic 契约限制（v4 模板字段多于契约定义）
+        # Use text-mode call to bypass Pydantic contract limits (v4 template has extra fields)
         response = self._llm_client.invoke(context)
         raw_text = response.content.get("text", "") if response.content else ""
         
@@ -272,12 +312,12 @@ class AIInterviewQuestionGenerationMixin:
             )
             return []
 
-        # 标准化题目格式，保留 LLM 生成的额外业务字段
+        # Normalize question format while preserving extra business fields from LLM output
         normalized = []
         for item in questions:
             q = self._normalize_question_item(item)
             if q:
-                # 保留 LLM 输出中可能包含的、但标准归一化逻辑未涵盖的字段 (如 module, role_type 等)
+                # Preserve possible LLM fields not covered by standard normalization (e.g., module, role_type)
                 if isinstance(item, dict):
                     q.update({k: v for k, v in item.items() if k not in q})
                 normalized.append(q)
@@ -400,6 +440,7 @@ class AIInterviewQuestionGenerationMixin:
 
         latest = self._session_repository.get_latest_question_set(session_id)
         if latest is not None:
+            session_entity = self._session_repository.get(session_id)
             questions = [item for item in (latest.questions_json or []) if isinstance(item, dict)]
             question_pack = {
                 "session_id": session_id,
@@ -407,6 +448,7 @@ class AIInterviewQuestionGenerationMixin:
                 "source": str(latest.source or "session_latest"),
                 "question_count": len(questions),
                 "questions": questions,
+                "role": self._extract_role_payload(session_entity.payload or {}),
             }
             self._runtime_store.save_question_pack(
                 session_id=session_id,
@@ -437,6 +479,12 @@ class AIInterviewQuestionGenerationMixin:
         candidate = self._candidate_repository.get(session_entity.candidate_id)
         job = self._job_repository.get(session_entity.job_id)
         question_count = max(1, int((session_entity.payload or {}).get("question_count") or 14))
+        role_context = self._resolve_role_context(
+            candidate=candidate,
+            job=job,
+            persisted_payload=dict(session_entity.payload or {}),
+        )
+        self._hydrate_session_role_config(session_id=session_id, persisted_payload=dict(session_entity.payload or {}))
         questions, generation_mode = self._generate_questions_with_fallback(
             session_id=session_id,
             job_title=job.title or "",
@@ -445,6 +493,7 @@ class AIInterviewQuestionGenerationMixin:
             skills=(candidate.raw_profile or {}).get("skills", []),
             question_count=question_count,
             language=session_entity.language,
+            role_config=role_context["config"],
         )
         if not questions:
             logger.warning("ai_interview.question_pack_auto_generate_empty session_id=%s", session_id)
@@ -465,6 +514,7 @@ class AIInterviewQuestionGenerationMixin:
                 "source": source,
                 "language": session_entity.language,
                 "questions": questions,
+                "role": role_context["payload"]["role"],
             }
         )
         self._runtime_store.save_question_pack(
@@ -637,6 +687,7 @@ class AIInterviewQuestionGenerationMixin:
                 "question_count": len(questions),
                 "questions": questions,
                 "cache_key": cache_key,
+                "role": self._extract_role_payload(session_entity.payload or {}) or prebuilt_pack.get("role") or {},
             }
             self._runtime_store.save_question_pack(
                 session_id=session_id,
@@ -686,12 +737,14 @@ class AIInterviewQuestionGenerationMixin:
         if latest is None:
             return None
         questions = [item for item in (latest.questions_json or []) if isinstance(item, dict)]
+        session_entity = self._session_repository.get(session_id)
         question_pack = {
             "session_id": session_id,
             "version": int(latest.version),
             "source": latest.source,
             "question_count": len(questions),
             "questions": questions,
+            "role": self._extract_role_payload(session_entity.payload or {}),
         }
         self._runtime_store.save_question_pack(
             session_id=session_id,
@@ -707,3 +760,137 @@ class AIInterviewQuestionGenerationMixin:
             "questions": questions,
         }
 
+
+    def _resolve_role_context(
+        self,
+        *,
+        candidate,
+        job,
+        explicit_role_id: str | None = None,
+        persisted_payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        stored_role = self._extract_role_payload(persisted_payload)
+        effective_role_id = str(explicit_role_id or stored_role.get("id") or "").strip() or None
+        profile = self._role_profiler.identify_role_profile(
+            job_title=job.title or "",
+            jd=job.requirements or "",
+            skills=(candidate.raw_profile or {}).get("skills", []),
+            explicit_role_id=effective_role_id,
+        )
+        role = profile.config.get("role", {}) if isinstance(profile.config, dict) else {}
+        role_payload = {
+            "id": str(role.get("id") or profile.role_id or "_base"),
+            "family": str(role.get("family") or stored_role.get("family") or ""),
+            "display_name": role.get("display_name") or stored_role.get("display_name") or {},
+            "source": profile.source,
+            "score": float(profile.score),
+            "match_details": dict(profile.match_details or {}),
+            "config_version": str(profile.config.get("version") or ""),
+        }
+        return {
+            "config": profile.config,
+            "role_id": role_payload["id"],
+            "source": profile.source,
+            "payload": {"role": role_payload},
+        }
+
+    @staticmethod
+    def _extract_role_payload(payload: dict[str, object] | None) -> dict[str, object]:
+        raw_payload = dict(payload or {})
+        raw_role = raw_payload.get("role")
+        if isinstance(raw_role, dict):
+            return dict(raw_role)
+        display_name = raw_payload.get("role_display_name")
+        return {
+            "id": raw_payload.get("role_id"),
+            "family": raw_payload.get("role_family"),
+            "display_name": display_name if isinstance(display_name, dict) else {},
+            "source": raw_payload.get("role_source"),
+            "score": raw_payload.get("role_score"),
+            "match_details": raw_payload.get("role_match_details") if isinstance(raw_payload.get("role_match_details"), dict) else {},
+            "config_version": raw_payload.get("role_config_version"),
+        }
+
+    def _build_role_payload_patch(self, role_context: dict[str, object]) -> dict[str, object]:
+        role = dict((role_context.get("payload") or {}).get("role") or {})
+        return {
+            "role": role,
+            "role_id": role.get("id"),
+            "role_family": role.get("family"),
+            "role_display_name": role.get("display_name"),
+            "role_source": role.get("source"),
+            "role_score": role.get("score"),
+            "role_match_details": role.get("match_details"),
+            "role_config_version": role.get("config_version"),
+        }
+
+    def _hydrate_session_role_config(self, *, session_id: str, persisted_payload: dict[str, object] | None = None) -> dict | None:
+        from ..interview_runtime.flow_policy import set_role_config_for_session
+        from ..role_strategy import RoleConfigLoader
+
+        role = self._extract_role_payload(persisted_payload)
+        role_id = str(role.get("id") or "").strip()
+        if not role_id:
+            try:
+                entity = self._session_repository.get(session_id)
+            except Exception:
+                return None
+            role = self._extract_role_payload(entity.payload or {})
+            role_id = str(role.get("id") or "").strip()
+        if not role_id:
+            return None
+
+        loader = RoleConfigLoader()
+        role_config = loader.load_config(role_id)
+        if role_config:
+            set_role_config_for_session(session_id, role_config)
+        return role_config
+
+
+    def _build_role_context(self, role_config: dict) -> str:
+        """
+        构建岗位上下文信息，用于增强LLM prompt
+        
+        Args:
+            role_config: 岗位配置字典
+        
+        Returns:
+            岗位上下文字符串
+        """
+        if not role_config:
+            return ""
+        
+        role_info = role_config.get("role", {})
+        prompt_enhancements = role_config.get("prompt_enhancements", {})
+        
+        # 获取岗位基本信息
+        role_id = role_info.get("id", "")
+        display_name = role_info.get("display_name", {})
+        role_name_zh = display_name.get("zh", "")
+        role_name_en = display_name.get("en", "")
+        
+        # 构建上下文
+        context_parts = []
+        
+        # 岗位名称
+        if role_name_zh:
+            context_parts.append(f"岗位：{role_name_zh}")
+        
+        # Prompt增强 - 岗位上下文
+        if prompt_enhancements.get("role_context"):
+            context_parts.append(f"\n{prompt_enhancements['role_context']}")
+        
+        # Prompt增强 - 题目焦点
+        if prompt_enhancements.get("question_focus"):
+            context_parts.append(f"\n{prompt_enhancements['question_focus']}")
+        
+        # 岗位能力要求
+        role_competencies = role_config.get("role_competencies", {})
+        if role_competencies:
+            context_parts.append("\n重点评估能力：")
+            for comp_name, comp_config in role_competencies.items():
+                desc = comp_config.get("description", comp_name)
+                weight = comp_config.get("weight", 0)
+                context_parts.append(f"- {desc} (权重: {weight:.0%})")
+        
+        return "\n".join(context_parts)

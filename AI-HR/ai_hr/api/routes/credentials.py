@@ -7,34 +7,35 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ...core.auth_dependencies import require_workspace_context
+from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.credentials import CredentialResponse, CredentialUpdateRequest
 from ...services.credentials import get_credential_service
 
 
-router = APIRouter(prefix="/credentials", tags=["credentials"])
+router = APIRouter(prefix="/credentials", tags=["credentials"], dependencies=[Depends(require_workspace_context)])
 
 
-@router.get("/{channel}", response_model=CredentialResponse)
+@router.get("/{channel}", response_model=Envelope[CredentialResponse])
 def get_channel_credential(
     channel: str,
     session: Session = Depends(get_db_session),
-) -> Any:
-    """Get the active credential for a channel (redacted)."""
+) -> Envelope[CredentialResponse]:
+    """Get the active credential for the current platform user (redacted)."""
     service = get_credential_service(session)
-    # We use the internal repo through the service for this simple GET
-    credential = service._repository.get_active_by_channel(channel)
+    credential = service.get_current_channel_credential(channel)
     if not credential:
-        raise HTTPException(status_code=404, detail=f"No active credential found for channel '{channel}'")
-    return credential
+        raise HTTPException(status_code=404, detail=f"No active credential found for current user on channel '{channel}'")
+    return Envelope.success(CredentialResponse.model_validate(credential))
 
 
-@router.post("/{channel}")
+@router.post("/{channel}", response_model=Envelope[dict[str, str]])
 def update_channel_credential(
     channel: str,
     payload: CredentialUpdateRequest,
     session: Session = Depends(get_db_session),
-) -> Any:
+) -> Envelope[dict[str, str]]:
     """Update the credential (cookie) for a channel."""
     if channel != "boss":
         raise HTTPException(status_code=400, detail="Only 'boss' channel is supported currently")
@@ -47,5 +48,7 @@ def update_channel_credential(
     
     if not success:
         raise HTTPException(status_code=500, detail="Failed to update credential")
-        
-    return {"status": "success", "message": f"Credential for '{channel}' updated successfully"}
+
+    return Envelope.success(
+        {"status": "success", "message": f"Credential for '{channel}' updated successfully"}
+    )

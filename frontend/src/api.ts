@@ -1,6 +1,11 @@
 export interface Envelope<T> {
+  ok: boolean;
+  schema_version?: string;
   data: T;
-  accepted?: boolean;
+  error?: {
+    code: string;
+    message: string;
+  } | null;
 }
 
 export interface InterviewRTCInfo {
@@ -276,6 +281,8 @@ export interface InterviewInvitationEmailSendResult {
 
 export interface InterviewInvitationHistoryItem {
   id: string;
+  workspace_id?: string | null;
+  created_by_user_id?: string | null;
   candidate_id: string;
   candidate_name: string;
   candidate_email?: string | null;
@@ -315,6 +322,8 @@ export interface InterviewAIAnalysis {
 
 export interface InterviewInvitationRecordDetailResult {
   delivery_id: string;
+  workspace_id?: string | null;
+  created_by_user_id?: string | null;
   candidate_id: string;
   candidate_name: string;
   candidate_email?: string | null;
@@ -387,22 +396,342 @@ export interface CredentialStatus {
   failure_count: number;
 }
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000/api/v1";
+export interface AuthWorkspaceSummary {
+  id: string;
+  workspace_code: string;
+  name: string;
+  role: string;
+  status: string;
+}
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {})
-    }
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`HTTP ${res.status}: ${text}`);
+export interface AuthSessionPayload {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  workspace_id: string;
+  workspaces: AuthWorkspaceSummary[];
+}
+
+export interface AuthRegisterRequest {
+  email: string;
+  verification_code: string;
+  password: string;
+  display_name: string;
+  workspace_name?: string;
+}
+
+export interface AuthSendRegisterEmailCodeRequest {
+  email: string;
+}
+
+export interface AuthSendRegisterEmailCodeResponse {
+  email: string;
+  expires_in: number;
+  resend_cooldown_seconds: number;
+  sent: boolean;
+}
+
+export interface AuthRegisterResponse {
+  user_id: string;
+  email: string;
+  display_name: string;
+  workspace: AuthWorkspaceSummary;
+  session: AuthSessionPayload;
+}
+
+export interface AuthLoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface AuthLoginResponse {
+  user_id: string;
+  email: string;
+  display_name: string;
+  session: AuthSessionPayload;
+}
+
+export interface AuthRefreshResponse {
+  session: AuthSessionPayload;
+}
+
+export interface AuthLogoutResponse {
+  logged_out: boolean;
+}
+
+export interface AuthMeResponse {
+  user_id: string;
+  email: string;
+  display_name: string;
+  status: string;
+  current_workspace_id: string;
+  workspaces: AuthWorkspaceSummary[];
+}
+
+export interface WorkspaceCreateRequest {
+  name: string;
+}
+
+export interface WorkspaceCreateResponse {
+  workspace: AuthWorkspaceSummary;
+  created_at: string;
+}
+
+function resolveDefaultApiBaseUrl(): string {
+  if (typeof window === "undefined") {
+    return "http://127.0.0.1:8000/api/v1";
   }
+  const protocol = window.location.protocol || "http:";
+  const hostname = window.location.hostname || "127.0.0.1";
+  return `${protocol}//${hostname}:8000/api/v1`;
+}
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || resolveDefaultApiBaseUrl();
+const WORKSPACE_STORAGE_KEY = "ai_hr_workspace_id";
+const ACCESS_TOKEN_SKEW_MS = 10_000;
+
+let accessToken: string | null = null;
+let accessTokenExpiresAtMs: number | null = null;
+let activeWorkspaceId: string | null = null;
+let refreshInFlight: Promise<boolean> | null = null;
+
+if (typeof window !== "undefined") {
+  const storedWorkspace = window.localStorage.getItem(WORKSPACE_STORAGE_KEY);
+  activeWorkspaceId = storedWorkspace ? storedWorkspace.trim() || null : null;
+}
+
+interface RequestOptions {
+  auth?: boolean;
+  retryOnUnauthorized?: boolean;
+}
+
+function updateWorkspaceSelection(workspaceId: string | null): void {
+  const normalized = String(workspaceId || "").trim() || null;
+  activeWorkspaceId = normalized;
+  if (typeof window !== "undefined") {
+    if (normalized) {
+      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, normalized);
+    } else {
+      window.localStorage.removeItem(WORKSPACE_STORAGE_KEY);
+    }
+  }
+}
+
+function applyAuthSession(session: AuthSessionPayload | null): void {
+  if (!session?.access_token) {
+    accessToken = null;
+    accessTokenExpiresAtMs = null;
+    return;
+  }
+  accessToken = session.access_token;
+  accessTokenExpiresAtMs = Date.now() + Math.max(1, Number(session.expires_in || 0)) * 1000;
+  const preferredWorkspaceId = String(session.workspace_id || "").trim();
+  if (preferredWorkspaceId) {
+    updateWorkspaceSelection(preferredWorkspaceId);
+    return;
+  }
+  const firstWorkspaceId = String(session.workspaces?.[0]?.id || "").trim();
+  if (firstWorkspaceId) {
+    updateWorkspaceSelection(firstWorkspaceId);
+  }
+}
+
+function clearAuthSession(): void {
+  accessToken = null;
+  accessTokenExpiresAtMs = null;
+}
+
+async function extractErrorText(res: Response): Promise<string> {
+  let rawText = "";
+  try {
+    rawText = await res.text();
+  } catch {
+    return `HTTP ${res.status}`;
+  }
+  if (!rawText) {
+    return `HTTP ${res.status}`;
+  }
+  try {
+    const parsed = JSON.parse(rawText) as Envelope<unknown>;
+    const message = parsed?.error?.message || rawText;
+    return `HTTP ${res.status}: ${message}`;
+  } catch {
+    return `HTTP ${res.status}: ${rawText}`;
+  }
+}
+
+function parseEnvelope<T>(payload: Envelope<T>): T {
+  if (payload.ok !== true) {
+    const message = payload.error?.message || "Request failed";
+    throw new Error(message);
+  }
+  return payload.data as T;
+}
+
+async function executeRefreshFlow(): Promise<boolean> {
+  if (refreshInFlight) {
+    return refreshInFlight;
+  }
+  refreshInFlight = (async () => {
+    try {
+      const data = await request<AuthRefreshResponse>(
+        "/auth/refresh",
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+        { auth: false, retryOnUnauthorized: false },
+      );
+      applyAuthSession(data.session);
+      return true;
+    } catch {
+      clearAuthSession();
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const authRequired = options.auth ?? true;
+  const retryOnUnauthorized = options.retryOnUnauthorized ?? authRequired;
+
+  const doFetch = async (): Promise<Response> => {
+    const headers = new Headers(init?.headers || {});
+    const hasBinaryBody = typeof FormData !== "undefined" && init?.body instanceof FormData;
+    if (!headers.has("Content-Type") && init?.body != null && !hasBinaryBody) {
+      headers.set("Content-Type", "application/json");
+    }
+    if (authRequired && accessToken) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+    if (authRequired && activeWorkspaceId) {
+      headers.set("X-Workspace-Id", activeWorkspaceId);
+    }
+    return fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      credentials: "include",
+      headers,
+    });
+  };
+
+  if (authRequired && accessToken && accessTokenExpiresAtMs && accessTokenExpiresAtMs - Date.now() <= ACCESS_TOKEN_SKEW_MS) {
+    await executeRefreshFlow();
+  }
+
+  let res = await doFetch();
+  if (res.status === 401 && authRequired && retryOnUnauthorized) {
+    const refreshed = await executeRefreshFlow();
+    if (refreshed) {
+      res = await doFetch();
+    }
+  }
+
+  if (!res.ok) {
+    throw new Error(await extractErrorText(res));
+  }
+
   const payload = (await res.json()) as Envelope<T>;
-  return payload.data;
+  return parseEnvelope(payload);
+}
+
+export function hasActiveAccessToken(): boolean {
+  return Boolean(accessToken);
+}
+
+export function getActiveWorkspaceId(): string | null {
+  return activeWorkspaceId;
+}
+
+export function selectWorkspace(workspaceId: string): void {
+  updateWorkspaceSelection(workspaceId);
+}
+
+export function clearWorkspaceSelection(): void {
+  updateWorkspaceSelection(null);
+}
+
+export function clearClientAuthState(): void {
+  clearAuthSession();
+  clearWorkspaceSelection();
+}
+
+export async function login(payload: AuthLoginRequest): Promise<AuthLoginResponse> {
+  const data = await request<AuthLoginResponse>(
+    "/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
+  applyAuthSession(data.session);
+  return data;
+}
+
+export async function register(payload: AuthRegisterRequest): Promise<AuthRegisterResponse> {
+  const data = await request<AuthRegisterResponse>(
+    "/auth/register",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
+  applyAuthSession(data.session);
+  return data;
+}
+
+export async function sendRegisterEmailCode(
+  payload: AuthSendRegisterEmailCodeRequest
+): Promise<AuthSendRegisterEmailCodeResponse> {
+  return request<AuthSendRegisterEmailCodeResponse>(
+    "/auth/register/email-code",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
+}
+
+export async function refreshSession(): Promise<AuthRefreshResponse> {
+  const data = await request<AuthRefreshResponse>(
+    "/auth/refresh",
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
+  applyAuthSession(data.session);
+  return data;
+}
+
+export async function fetchCurrentUser(): Promise<AuthMeResponse> {
+  return request<AuthMeResponse>("/auth/me");
+}
+
+export async function logout(): Promise<AuthLogoutResponse> {
+  try {
+    return await request<AuthLogoutResponse>("/auth/logout", { method: "POST", body: JSON.stringify({}) });
+  } finally {
+    clearAuthSession();
+    clearWorkspaceSelection();
+  }
+}
+
+export async function listWorkspaces(): Promise<AuthWorkspaceSummary[]> {
+  return request<AuthWorkspaceSummary[]>("/workspaces");
+}
+
+export async function createWorkspace(payload: WorkspaceCreateRequest): Promise<WorkspaceCreateResponse> {
+  return request<WorkspaceCreateResponse>("/workspaces", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 // Credentials
@@ -470,10 +799,23 @@ export async function updateJobSettings(jobId: string, settings: Partial<Job>): 
   });
 }
 
-export async function syncJobCandidates(jobId: string): Promise<any> {
+export async function syncJobCandidates(
+  jobId: string,
+  payload: {
+    max_pages?: number;
+    auto_request_resume?: boolean;
+    auto_sync_resume_attachment?: boolean;
+    reset_cursor?: boolean;
+  } = {}
+): Promise<any> {
   return request(`/jobs/${jobId}/candidates/sync`, {
     method: "POST",
-    body: JSON.stringify({ max_pages: 5 })
+    body: JSON.stringify({
+      max_pages: payload.max_pages ?? 5,
+      auto_request_resume: Boolean(payload.auto_request_resume),
+      auto_sync_resume_attachment: Boolean(payload.auto_sync_resume_attachment),
+      reset_cursor: Boolean(payload.reset_cursor),
+    })
   });
 }
 
@@ -625,7 +967,11 @@ export async function fetchJobShortlist(jobId: string): Promise<any> {
 
 // Interviews & Replay
 export async function loadReplayItems(sessionId: string): Promise<any[]> {
-  const data = await request<{ items: any[] }>(`/ai/interviews/sessions/${sessionId}/replay?limit=200&offset=0`);
+  const data = await request<{ items: any[] }>(
+    `/ai/interviews/sessions/${sessionId}/replay?limit=200&offset=0`,
+    undefined,
+    { auth: false, retryOnUnauthorized: false },
+  );
   return data.items || [];
 }
 
@@ -643,33 +989,49 @@ export async function createInterviewSession(candidateId: string, jobId: string)
 }
 
 export async function activateInterviewInvitation(token: string): Promise<InterviewSession> {
-  return request<InterviewSession>(`/ai-interviews/invitations/token/${encodeURIComponent(token)}/activate`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
+  return request<InterviewSession>(
+    `/ai-interviews/invitations/token/${encodeURIComponent(token)}/activate`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export async function getInterviewSession(sessionId: string): Promise<InterviewSession> {
-  return request<InterviewSession>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}`);
+  return request<InterviewSession>(
+    `/ai/interviews/sessions/${encodeURIComponent(sessionId)}`,
+    undefined,
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export async function startInterviewSession(sessionId: string, operator = "system"): Promise<InterviewSession> {
-  return request<InterviewSession>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/start`, {
-    method: "POST",
-    body: JSON.stringify({ operator })
-  });
+  return request<InterviewSession>(
+    `/ai/interviews/sessions/${encodeURIComponent(sessionId)}/start`,
+    {
+      method: "POST",
+      body: JSON.stringify({ operator }),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export async function finishInterviewSession(
   sessionId: string,
   payload: { result_status?: "completed" | "failed"; operator?: string; note?: string } = {}
 ): Promise<InterviewSession> {
-  return request<InterviewSession>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/finish`, {
-    method: "POST",
-    body: JSON.stringify({
-      result_status: payload.result_status || "completed",
-    })
-  });
+  return request<InterviewSession>(
+    `/ai/interviews/sessions/${encodeURIComponent(sessionId)}/finish`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        result_status: payload.result_status || "completed",
+      }),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export async function joinInterviewRTC(
@@ -677,13 +1039,17 @@ export async function joinInterviewRTC(
   candidateId: string,
   clientId = "web"
 ): Promise<InterviewRTCJoinInfo> {
-  return request<InterviewRTCJoinInfo>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/rtc/join`, {
-    method: "POST",
-    body: JSON.stringify({
-      candidate_id: candidateId,
-      client_id: clientId,
-    }),
-  });
+  return request<InterviewRTCJoinInfo>(
+    `/ai/interviews/sessions/${encodeURIComponent(sessionId)}/rtc/join`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        candidate_id: candidateId,
+        client_id: clientId,
+      }),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export async function renewInterviewRTCToken(
@@ -703,14 +1069,22 @@ export async function joinInterviewRTCPreflight(
 }
 
 export async function getTenRuntimeConfig(sessionId: string): Promise<InterviewTENRuntimeConfig> {
-  return request<InterviewTENRuntimeConfig>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/ten/runtime-config`);
+  return request<InterviewTENRuntimeConfig>(
+    `/ai/interviews/sessions/${encodeURIComponent(sessionId)}/ten/runtime-config`,
+    undefined,
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export async function launchTenSession(sessionId: string): Promise<InterviewTENRuntimeConfig> {
-  return request<InterviewTENRuntimeConfig>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/ten/launch`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
+  return request<InterviewTENRuntimeConfig>(
+    `/ai/interviews/sessions/${encodeURIComponent(sessionId)}/ten/launch`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    },
+    { auth: false, retryOnUnauthorized: false },
+  );
 }
 
 export function buildInterviewEventsWsUrl(sessionId: string): string {

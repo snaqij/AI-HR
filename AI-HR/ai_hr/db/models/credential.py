@@ -18,12 +18,14 @@ class ChannelCredential(TimestampMixin, Base):
     __tablename__ = "channel_credentials"
     __table_args__ = (
         Index("idx_channel_credentials_channel_provider", "channel", "provider"),
+        Index("idx_channel_credentials_owner_user_channel", "owner_user_id", "channel"),
         Index("idx_channel_credentials_is_active", "is_active"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     channel: Mapped[str] = mapped_column(String(64), nullable=False)  # e.g., 'boss'
     provider: Mapped[str] = mapped_column(String(64), nullable=False, default="default")
+    owner_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     account_name: Mapped[str] = mapped_column(String(128), nullable=False)  # e.g., 'Primary Account'
     
     # Encrypted JSON string containing the sensitive data (cookies, tokens, etc.)

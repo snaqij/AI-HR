@@ -18,12 +18,13 @@ class ChannelCredentialRepository:
     def __init__(self, session: Session):
         self._session = session
 
-    def get_active_by_channel(self, channel: str) -> ChannelCredential | None:
-        """Fetch the active credential for a specific channel."""
+    def get_active_by_channel(self, channel: str, *, owner_user_id: str) -> ChannelCredential | None:
+        """Fetch the active credential for a specific channel under one platform user."""
         stmt = (
             select(ChannelCredential)
             .where(ChannelCredential.channel == channel)
-            .where(ChannelCredential.is_active == True)
+            .where(ChannelCredential.owner_user_id == owner_user_id)
+            .where(ChannelCredential.is_active.is_(True))
             .order_by(ChannelCredential.updated_at.desc())
             .limit(1)
         )
@@ -33,21 +34,25 @@ class ChannelCredentialRepository:
         self,
         channel: str,
         encrypted_config: str,
+        *,
+        owner_user_id: str,
         account_name: str = "Default Account",
         metadata: dict[str, Any] | None = None,
     ) -> ChannelCredential:
         """Create or update a channel credential."""
-        # Deactivate existing active credentials for this channel
+        # Deactivate existing active credentials for this channel under the same user only.
         self._session.execute(
             update(ChannelCredential)
             .where(ChannelCredential.channel == channel)
+            .where(ChannelCredential.owner_user_id == owner_user_id)
             .values(is_active=False)
         )
         
-        # Check if we have an existing record to reuse or create new
+        # Check if we have an existing record for this user/account to reuse or create new.
         existing = (
             select(ChannelCredential)
             .where(ChannelCredential.channel == channel)
+            .where(ChannelCredential.owner_user_id == owner_user_id)
             .where(ChannelCredential.account_name == account_name)
             .limit(1)
         )
@@ -64,6 +69,7 @@ class ChannelCredentialRepository:
         else:
             entity = ChannelCredential(
                 channel=channel,
+                owner_user_id=owner_user_id,
                 account_name=account_name,
                 encrypted_config=encrypted_config,
                 is_active=True,

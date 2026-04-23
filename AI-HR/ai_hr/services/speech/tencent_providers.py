@@ -741,7 +741,7 @@ class TencentTTSProvider(TTSProvider):
             
             try:
                 ws_url = self._build_tts_ws_url()
-                # 禁用内置 ping_interval，防止后台心跳超时抛错（由我们自己通过获取时的 ws.ping() 管理）
+                # Disable built-in ping_interval to avoid background heartbeat timeout errors (managed by our own ws.ping())
                 ws = ws_connect(
                     ws_url, 
                     open_timeout=self._ws_open_timeout_seconds,
@@ -785,8 +785,8 @@ class TencentTTSProvider(TTSProvider):
         while not self._ws_pool.empty():
             try:
                 ws = self._ws_pool.get(timeout=0.01)
-                # 优化：不再使用阻塞式的 ws.ping()，因为它会增加 50-100ms 的网络往返延迟。
-                # 改为直接返回，如果发送数据时报错，由 synthesization 逻辑重试。
+                # Optimization: stop using blocking ws.ping(), which adds 50-100ms round-trip latency.
+                # Return directly; if send fails, retry via synthesis logic.
                 logger.debug("[Tencent TTS Pool] Using pre-warmed WebSocket (ping-check skipped for latency).")
                 return ws, True
             except queue.Empty:

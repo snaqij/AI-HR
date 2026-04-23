@@ -83,11 +83,12 @@ class JobSyncService:
             max_pages=payload.max_pages,
             reset_cursor=payload.reset_cursor,
         )
+        run_id = run.id
         try:
             result = self._job_service.sync_candidates(job_id, payload)
             result["resume_access"] = self._maybe_sync_resume_access(job_id, payload, result)
             run = self._run_repository.complete(
-                run.id,
+                run_id,
                 status="success",
                 total_pulled=result["total_pulled"],
                 total_created=result["total_created"],
@@ -104,8 +105,9 @@ class JobSyncService:
             )
             return result
         except Exception as exc:
+            self._session.rollback()
             self._run_repository.complete(
-                run.id,
+                run_id,
                 status="failed",
                 total_pulled=0,
                 total_created=0,
@@ -116,7 +118,7 @@ class JobSyncService:
             self._event_repository.create(
                 event_type="job.sync.manual.failed",
                 entity_type="job_sync_run",
-                entity_id=run.id,
+                entity_id=run_id,
                 status="failed",
                 job_id=job_id,
                 channel=primary_channel,
@@ -141,11 +143,12 @@ class JobSyncService:
             max_pages=task.max_pages,
             reset_cursor=task.reset_cursor_on_next_run,
         )
+        run_id = run.id
         try:
             result = self._job_service.sync_candidates(task.job_id, payload)
             result["resume_access"] = self._maybe_sync_resume_access(task.job_id, payload, result)
             run = self._run_repository.complete(
-                run.id,
+                run_id,
                 status="success",
                 total_pulled=result["total_pulled"],
                 total_created=result["total_created"],
@@ -168,6 +171,7 @@ class JobSyncService:
             )
             return {"task": task, "run": run, "summary": result}
         except Exception as exc:
+            self._session.rollback()
             task = self._task_repository.mark_result(
                 task.id,
                 status="failed",
@@ -176,7 +180,7 @@ class JobSyncService:
                 clear_reset_cursor=False,
             )
             run = self._run_repository.complete(
-                run.id,
+                run_id,
                 status="failed",
                 total_pulled=0,
                 total_created=0,
@@ -187,7 +191,7 @@ class JobSyncService:
             self._event_repository.create(
                 event_type="job.sync.scheduled.failed",
                 entity_type="job_sync_run",
-                entity_id=run.id,
+                entity_id=run_id,
                 status="failed",
                 job_id=task.job_id,
                 channel=task.channel,
@@ -211,7 +215,7 @@ class JobSyncService:
 
     def execute_global_job_sync(self):
         """同步渠道侧新发布的岗位到本地库。"""
-        channels = ["boss"]  # 目前仅支持 boss，后续可扩展
+        channels = ["boss"]  # Currently only supports boss; extensible later
         results = []
         for channel in channels:
             try:
@@ -231,7 +235,11 @@ class JobSyncService:
         payload: JobCandidateSyncRequest,
         sync_result: dict,
     ):
-        if not (payload.auto_request_resume or payload.auto_sync_resume_attachment):
+        job = self._job_repository.get(job_id)
+        should_request_resume = bool(payload.auto_request_resume or getattr(job, "auto_request_resume", False))
+        should_sync_attachment = bool(payload.auto_sync_resume_attachment)
+
+        if not (should_request_resume or should_sync_attachment):
             return None
         candidate_ids = list(dict.fromkeys(sync_result.get("synced_candidate_ids", [])))
         if not candidate_ids:
@@ -240,7 +248,7 @@ class JobSyncService:
             job_id,
             ResumeAccessBatchSyncRequest(
                 candidate_ids=candidate_ids,
-                sync_attachment_when_ready=payload.auto_sync_resume_attachment,
+                sync_attachment_when_ready=should_sync_attachment,
             ),
         )
         return result.model_dump(mode="json")
@@ -265,6 +273,7 @@ class JobSyncScheduler:
     stop_event: threading.Event
     thread: threading.Thread | None = None
     _last_global_sync_at: float = 0.0
+    _boss_paused: bool = False
 
     def start(self) -> None:
         settings = get_settings()
@@ -284,34 +293,45 @@ class JobSyncScheduler:
             session = SessionLocal()
             try:
                 service = get_job_sync_service(session)
-                # 1. 候选人增量同步
-                service.execute_due_tasks(limit=settings.job_sync_scheduler_batch_size)
-                
-                # 2. 简历附件下载重试
-                get_ai_resume_service(session).execute_due_resume_access_retries(
-                    limit=settings.resume_access_retry_batch_size
-                )
+                credential_service = get_credential_service(session)
+                boss_paused = credential_service.is_channel_paused("boss")
 
-                # 3. 简历下载完成后自动评估
+                if boss_paused and not self._boss_paused:
+                    logger.warning("JobSyncScheduler: BOSS sync paused because credentials are expired")
+                if (not boss_paused) and self._boss_paused:
+                    logger.info("JobSyncScheduler: BOSS sync resumed after credential update")
+                self._boss_paused = boss_paused
+
+                if not boss_paused:
+                    # 1. Incremental candidate sync
+                    service.execute_due_tasks(limit=settings.job_sync_scheduler_batch_size)
+                    
+                    # 2. Retry resume attachment downloads
+                    get_ai_resume_service(session).execute_due_resume_access_retries(
+                        limit=settings.resume_access_retry_batch_size
+                    )
+
+                # 3. Auto-evaluate after resume download completes
                 get_recruitment_automation_service(session).execute_due_candidate_evaluations(
                     limit=settings.ai_candidate_evaluation_batch_size
                 )
 
-                # 4. 达标候选人自动发送面试邀请邮件 (暂时注释掉，只保留到评估分析)
+                # 4. Auto-send interview invites for qualified candidates (currently disabled; keep evaluation only)
                 # get_recruitment_automation_service(session).execute_due_invitation_emails(
                 #     limit=settings.ai_auto_invitation_batch_size
                 # )
 
-                # 3. 补全元数据 (后台执行)
-                get_job_service(session).enrich_candidate_metadata(limit=5)
+                if not boss_paused:
+                    # 3. Backfill metadata (background job)
+                    get_job_service(session).enrich_candidate_metadata(limit=5)
 
-                # 4. 自动发起简历请求 (自动伯乐流水线)
-                get_ai_resume_service(session).execute_due_auto_resume_requests()
+                    # 4. Auto-request resumes (automated sourcing pipeline)
+                    get_ai_resume_service(session).execute_due_auto_resume_requests()
 
                 session.commit()
 
-                # 6. 全局岗位发现同步 (Timed Sync)
-                if settings.job_global_sync_enabled:
+                # 6. Global job-discovery sync (Timed Sync)
+                if settings.job_global_sync_enabled and not boss_paused:
                     now_ts = time.time()
                     interval_sec = settings.job_global_sync_interval_minutes * 60
                     if now_ts - self._last_global_sync_at >= interval_sec:

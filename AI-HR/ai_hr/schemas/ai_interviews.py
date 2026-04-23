@@ -15,6 +15,7 @@ class AIInterviewSessionCreateRequest(BaseModel):
     job_id: str = Field(min_length=1)
     channel: str = Field(default="self_hosted_rtc", min_length=1, max_length=64)
     language: str = Field(default="zh-CN", pattern="^(zh-CN|en-US)$")
+    explicit_role_id: str | None = Field(default=None, min_length=1)
     note: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -141,6 +142,7 @@ class AIInterviewSessionEventResult(BaseModel):
     accepted: bool
     deduplicated: bool
     turn_id: str | None = None
+    question_attempt_id: str | None = None
     action: str | None = None
     decision_reason: str | None = None
     policy_flags: list[str] = Field(default_factory=list)
@@ -165,6 +167,7 @@ class AIInterviewQuestionGenerateRequest(BaseModel):
 
     question_count: int = Field(default=14, ge=1, le=20)
     source: str = Field(default="resume+jd", min_length=1, max_length=64)
+    explicit_role_id: str | None = Field(default=None, min_length=1)
     force_regenerate: bool = True
 
 
@@ -198,6 +201,7 @@ class AIInterviewQuestionPackPrebuildRequest(BaseModel):
     language: str = Field(default="zh-CN", pattern="^(zh-CN|en-US)$")
     question_count: int = Field(default=14, ge=1, le=20)
     source: str = Field(default="resume+jd", min_length=1, max_length=64)
+    explicit_role_id: str | None = Field(default=None, min_length=1)
 
 
 class AIInterviewQuestionPackPrebuildResult(BaseModel):

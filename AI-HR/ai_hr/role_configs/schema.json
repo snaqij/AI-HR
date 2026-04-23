@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Role Configuration Schema",
+  "description": "Schema for AI-HR role configuration files",
+  "type": "object",
+  "required": ["version", "role"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Configuration version"
+    },
+    "extends": {
+      "type": "string",
+      "description": "Base configuration to extend from"
+    },
+    "role": {
+      "type": "object",
+      "required": ["id", "family", "display_name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z_]+$",
+          "description": "Unique role identifier"
+        },
+        "family": {
+          "type": "string",
+          "enum": ["engineering", "product", "design", "business", "general"],
+          "description": "Role family category"
+        },
+        "display_name": {
+          "type": "object",
+          "required": ["zh", "en"],
+          "properties": {
+            "zh": {"type": "string"},
+            "en": {"type": "string"}
+          }
+        },
+        "match_rules": {
+          "type": "object",
+          "properties": {
+            "keywords": {
+              "type": "array",
+              "items": {"type": "string"},
+              "minItems": 1
+            },
+            "skills": {
+              "type": "array",
+              "items": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "universal_competencies": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "$ref": "#/definitions/competency"
+        }
+      }
+    },
+    "role_competencies": {
+      "type": "object",
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "$ref": "#/definitions/competency"
+        }
+      }
+    },
+    "stage_weights": {
+      "type": "object",
+      "patternProperties": {
+        "^S[1-5]$": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "question_generation": {
+      "type": "object",
+      "properties": {
+        "distribution": {
+          "type": "object",
+          "properties": {
+            "from_resume": {"type": "number", "minimum": 0, "maximum": 1},
+            "from_jd": {"type": "number", "minimum": 0, "maximum": 1},
+            "from_template": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "anchor_project": {
+          "type": "object",
+          "properties": {
+            "required": {"type": "boolean"},
+            "min_duration_months": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "followup_strategy": {
+      "type": "object",
+      "properties": {
+        "max_per_question": {"type": "integer", "minimum": 0},
+        "evidence_threshold": {"type": "number", "minimum": 0, "maximum": 1},
+        "priority": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "prompt_enhancements": {
+      "type": "object",
+      "properties": {
+        "role_context": {"type": "string"},
+        "question_focus": {"type": "string"},
+        "followup_focus": {"type": "string"}
+      }
+    }
+  },
+  "definitions": {
+    "competency": {
+      "type": "object",
+      "required": ["weight", "description"],
+      "properties": {
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_types": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

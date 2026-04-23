@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -8,8 +9,21 @@ const router = createRouter({
       redirect: '/admin'
     },
     {
+      path: '/login',
+      name: 'Login',
+      component: () => import('../views/auth/Login.vue'),
+      meta: { publicOnly: true }
+    },
+    {
+      path: '/register',
+      name: 'Register',
+      component: () => import('../views/auth/Register.vue'),
+      meta: { publicOnly: true }
+    },
+    {
       path: '/admin',
       component: () => import('../layouts/AdminLayout.vue'),
+      meta: { requiresAuth: true },
       children: [
         {
           path: '',
@@ -74,6 +88,39 @@ const router = createRouter({
       component: () => import('../views/interview/InterviewInvitationEntry.vue')
     }
   ]
+})
+
+function resolveSafeRedirect(raw: unknown): string {
+  const value = String(raw || '').trim()
+  if (!value || !value.startsWith('/')) {
+    return '/admin'
+  }
+  if (!value.startsWith('/admin')) {
+    return '/admin'
+  }
+  return value
+}
+
+router.beforeEach(async (to) => {
+  const auth = useAuthStore()
+  if (!auth.ready) {
+    await auth.bootstrap()
+  }
+
+  const requiresAuth = to.matched.some((item) => Boolean(item.meta?.requiresAuth))
+  if (requiresAuth && !auth.isAuthenticated) {
+    return {
+      path: '/login',
+      query: { redirect: to.fullPath }
+    }
+  }
+
+  const publicOnly = to.matched.some((item) => Boolean(item.meta?.publicOnly))
+  if (publicOnly && auth.isAuthenticated) {
+    return resolveSafeRedirect(to.query.redirect)
+  }
+
+  return true
 })
 
 export default router

@@ -76,14 +76,6 @@
           >
             {{ zh.batchDelete }} ({{ selectedJobIds.length }})
           </button>
-          <div class="flex bg-surface-container-low p-1 rounded-xl border border-outline-variant/10 shadow-inner">
-            <button class="p-2 rounded-lg transition-all" :class="viewMode === 'grid' ? 'bg-white shadow-sm text-primary' : 'text-on-surface-variant/50'" @click="viewMode = 'grid'">
-              <span class="material-symbols-outlined">grid_view</span>
-            </button>
-            <button class="p-2 rounded-lg transition-all" :class="viewMode === 'list' ? 'bg-white shadow-sm text-primary' : 'text-on-surface-variant/50'" @click="viewMode = 'list'">
-              <span class="material-symbols-outlined">list</span>
-            </button>
-          </div>
         </div>
       </div>
 
@@ -402,7 +394,11 @@ const handleGlobalSync = async () => {
 const handleSync = async (jobId: string) => {
   syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncJobStart} ${jobId}...`);
   try {
-    await syncJobCandidates(jobId);
+    const job = jobs.value.find((item) => item.id === jobId);
+    await syncJobCandidates(jobId, {
+      max_pages: 5,
+      auto_request_resume: Boolean(job?.auto_request_resume),
+    });
     syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncJobStart} ${jobId} ${zh.syncJobSuccess}`);
     await fetchJobs();
   } catch (e) {

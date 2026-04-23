@@ -11,14 +11,12 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from xml.etree import ElementTree as ET
-
 from sqlalchemy.orm import Session
 from ..db import models as from_models
-
 from ..connectors.base import ConnectorCredentials
 from ..connectors.registry import registry
 from ..core.config import get_settings
-from ..core.exceptions import ConnectorOperationError, InvalidStateError, ObjectStorageError, ResourceNotFoundError
+from ..core.exceptions import ConnectorOperationError, CredentialsExpiredError, InvalidStateError, ObjectStorageError, ResourceNotFoundError
 from ..repositories.ai_observability import AIObservabilityRepository
 from ..repositories.ai_runtime import AIRuntimeRepository
 from ..repositories.candidates import CandidateRepository
@@ -53,7 +51,6 @@ from .llm.prompts import get_prompt_template
 from .llm.router import ModelRouter
 from .object_storage import MinioResumeStorage, build_resume_storage_key
 from .credentials import get_credential_service, CredentialService
-
 PARSER_VERSION_HEURISTIC = "heuristic-v1"
 PARSER_VERSION_LLM = "llm-v1"
 
@@ -223,6 +220,10 @@ class AIResumeService:
         job_id: str,
         payload: ResumeAccessBatchSyncRequest,
     ) -> ResumeAccessBatchSyncResult:
+        job = self._session.get(from_models.Job, job_id)
+        if job is None:
+            raise ResourceNotFoundError(f"Job '{job_id}' was not found")
+
         job_candidates, _, _ = self._job_candidate_repository.list_by_job(job_id, limit=10000)
         selected_items = job_candidates
         if payload.candidate_ids:
@@ -234,8 +235,21 @@ class AIResumeService:
         results: list[ResumeAccessBatchItemResult] = []
         succeeded_count = 0
         failed_count = 0
+        current_requests = self._candidate_job_pipeline_repository.count_requests_today(job_id)
+        daily_quota = max(0, int(job.max_daily_resume_requests or 0))
+        quota_remaining = max(0, daily_quota - current_requests)
 
         for item in selected_items:
+            if quota_remaining <= 0:
+                results.append(
+                    ResumeAccessBatchItemResult(
+                        candidate_id=item.candidate_id,
+                        external_candidate_id=item.external_candidate_id,
+                        status="skipped",
+                        error_message="quota_exceeded",
+                    )
+                )
+                continue
             try:
                 sync_result = self._request_resume_access_for_candidate(
                     item.candidate_id,
@@ -255,6 +269,8 @@ class AIResumeService:
                         raw_payload=sync_result["raw_payload"],
                     )
                 )
+                if sync_result["request_sent"]:
+                    quota_remaining -= 1
                 succeeded_count += 1
             except Exception as exc:  # noqa: BLE001
                 results.append(
@@ -362,7 +378,7 @@ class AIResumeService:
         last_request_at_monotonic: float | None = None
         
         for pipeline in pipelines:
-            # 即刻熔断：如果该岗位已达配额，直接跳过其后续所有候选人
+            # Immediate circuit-break: if job quota is reached, skip remaining candidates for this job
             if pipeline.job_id in reached_quota_job_ids:
                 continue
 
@@ -445,6 +461,17 @@ class AIResumeService:
                 results.append(res)
                 processed_somebody = True
                 
+            except CredentialsExpiredError as exc:
+                self._session.rollback()
+                logger.warning(
+                    "ai_resume.auto_request.credentials_expired trace_id=%s candidate_id=%s job_id=%s error=%s action=abort_batch",
+                    trace_id,
+                    pipeline.candidate_id,
+                    pipeline.job_id,
+                    str(exc),
+                )
+                # Bubble up so scheduler can handle credential failure once per cycle.
+                raise
             except Exception as exc:
                 self._session.rollback()
                 logger.exception(
@@ -777,7 +804,16 @@ class AIResumeService:
                 external_candidate_id=link.external_candidate_id,
                 payload={"job_candidate_id": link.id},
             )
-            if request_sent:
+            if resume_visible:
+                self._candidate_job_pipeline_repository.mark_resume_visible(
+                    pipeline.id,
+                    next_retry_at=next_retry_at,
+                    payload_patch={
+                        "resume_access_request_status": request_result.get("request_status"),
+                        "resume_visible": True,
+                    },
+                )
+            elif request_sent:
                 self._candidate_job_pipeline_repository.mark_resume_requested(
                     pipeline.id,
                     next_retry_at=next_retry_at,
@@ -1090,19 +1126,19 @@ class AIResumeService:
         return None
 
     def _resolve_candidate_email_from_resume(self, *, resume_text: str, raw_profile: dict[str, Any]) -> str | None:
-        # 1. 优先从三方画像中提取
+        # 1. Prefer extraction from third-party profile data
         email = self._extract_email_from_profile(raw_profile)
         if email:
             return email
             
-        # 2. 启发式正则提取 (快速且高频)
+        # 2. Heuristic regex extraction (fast and common)
         email = self._extract_email_from_text(resume_text)
         if email:
             return email
             
-        # 3. LLM 兜底解析 (处理混淆、错位或非标准格式)
+        # 3. LLM fallback parsing (handles noisy/misaligned/non-standard formats)
         if self._is_llm_enabled() and resume_text.strip():
-            # 仅取简历开头和结尾，联系方式通常出现在该位置
+            # Only sample the start/end of resume text where contact info usually appears
             sample = resume_text[:2000] + "\n...\n" + resume_text[-1000:] if len(resume_text) > 3000 else resume_text
             try:
                 from .llm.prompts import PromptTaskKey, get_prompt_template
@@ -1129,7 +1165,7 @@ class AIResumeService:
     def _extract_email_from_profile(self, raw_profile: dict[str, Any]) -> str | None:
         if not isinstance(raw_profile, dict):
             return None
-        # 增加对常见中文标签的支持
+        # Add support for common Chinese labels
         for key in ("email", "mail", "contact_email", "邮箱", "电子邮箱"):
             value = raw_profile.get(key)
             if isinstance(value, str):
@@ -1148,13 +1184,13 @@ class AIResumeService:
     def _extract_email_from_text(self, text: str) -> str | None:
         if not text:
             return None
-        # 优化正则：支持更多后缀，处理某些混淆情况
+        # Optimize regex: support more suffixes and ambiguous cases
         pattern = r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[A-Za-z]{2,6}\b"
         match = re.search(pattern, text)
         if match:
             return match.group(0).strip().lower()
         
-        # 处理 (at) 等混淆格式
+        # Handle obfuscated formats like (at)
         confused = re.search(r"\b[a-zA-Z0-9._%+\-]+(?:\(at\)|@)[a-zA-Z0-9.\-]+\.(?:[A-Za-z]{2,6})\b", text, re.IGNORECASE)
         if confused:
             return confused.group(0).replace("(at)", "@").strip().lower()

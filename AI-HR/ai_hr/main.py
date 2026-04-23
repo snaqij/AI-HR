@@ -46,10 +46,11 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url="/redoc",
     )
+    allow_credentials = bool(settings.cors_allow_credentials or settings.auth_enabled)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_allow_origins,
-        allow_credentials=settings.cors_allow_credentials,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

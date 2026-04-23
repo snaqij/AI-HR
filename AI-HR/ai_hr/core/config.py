@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     port: int = 8000
     cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     cors_allow_credentials: bool = False
+    auth_enabled: bool = True
+    auth_token_signing_key: str = "change-this-dev-signing-key"
+    auth_access_token_ttl_seconds: int = 900
+    auth_refresh_token_ttl_seconds: int = 60 * 60 * 24 * 30
+    auth_password_pbkdf2_iterations: int = 310000
+    auth_email_verification_code_ttl_seconds: int = 600
+    auth_email_verification_resend_cooldown_seconds: int = 60
+    auth_refresh_cookie_name: str = "aihr_refresh_token"
+    auth_refresh_cookie_secure: bool = False
+    auth_refresh_cookie_samesite: str = "lax"
     database_url: str = Field(default="mysql+pymysql://root:password@127.0.0.1:3306/ai_hr")
     ai_interview_auth_required: bool = False
     ai_interview_api_keys: str | None = None
@@ -98,6 +108,7 @@ class Settings(BaseSettings):
     email_smtp_use_ssl: bool = False
     email_from_name: str = "深澜智远招聘"
     email_from_address: str | None = None
+    credential_expired_alert_cooldown_minutes: int = 360
     ai_reply_llm_enabled: bool = False
     ai_interview_llm_enabled: bool = False
     ai_reply_auto_min_confidence: float = 0.65

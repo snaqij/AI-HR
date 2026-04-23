@@ -116,19 +116,11 @@ class TurnCompletionJudge:
         hold_satisfied = speaking_elapsed_ms >= policy.min_speaking_hold_ms
         early_close = semantic_score >= 0.92
 
-        # ── Semantic Hold Bypass ──────────────────────────────────────────────────
-        # When a candidate finishes with a well-formed, substantive sentence
-        # (≥30 chars, ends in punctuation, no continuation signals) and has
-        # already been silent for likely_done_ms, we allow finalization even if
-        # min_speaking_hold_ms hasn't been accumulated yet.
-        # Threshold 0.28 is reachable by any clean sentence ending in 。/！/？
-        # with no red-flag continuation/thinking-pause markers.
         hold_bypass = (
             silence_ms >= policy.likely_done_ms
             and semantic_score >= 0.28
             and len(text) >= 30
         )
-        # ─────────────────────────────────────────────────────────────────────────
 
         if resumed_recently:
             return FinalizeDecision(
@@ -148,12 +140,6 @@ class TurnCompletionJudge:
                 semantic_completion_score=semantic_score,
             )
 
-        # ── Minimum Content Length Guard ──────────────────────────────────────────
-        # A very short transcript (< 30 chars) almost certainly represents an
-        # incomplete sentence fragment from a mid-turn ASR event (e.g. a single
-        # short sentence while the candidate is still speaking their full answer).
-        # Require 2x likely_done_ms of silence before allowing finalization on
-        # such short content, unless the candidate explicitly says they're done.
         MIN_CONTENT_CHARS_FOR_EARLY_CLOSE = 30
         if len(text) < MIN_CONTENT_CHARS_FOR_EARLY_CLOSE and not any(
             phrase in text for phrase in self._STRONG_ENDINGS
@@ -167,7 +153,6 @@ class TurnCompletionJudge:
                     need_more_wait_ms=max(200, extended_wait_ms - silence_ms),
                     semantic_completion_score=semantic_score,
                 )
-        # ─────────────────────────────────────────────────────────────────────────
 
         if silence_ms >= policy.max_force_finalize_ms:
             confidence = min(0.98, 0.70 + semantic_score * 0.15)
@@ -208,8 +193,6 @@ class TurnCompletionJudge:
                 semantic_completion_score=semantic_score,
             )
 
-        # Semantic hold bypass: well-formed sentence + likely_done silence reached.
-        # Lower confidence than hard_pause because we're relaxing the hold constraint.
         if silence_ms >= policy.likely_done_ms and hold_bypass:
             confidence = min(0.82, 0.38 + pause_confidence * 0.18 + semantic_score * 0.25)
             return FinalizeDecision(
@@ -244,9 +227,6 @@ class TurnCompletionJudge:
         elif any(phrase in text for phrase in self._WEAK_CONTINUATIONS):
             score -= 0.18
 
-        # Suppress finalization when candidate shows clear thinking / hesitation signals.
-        # These commonly appear mid-answer during technical questions and must not trigger
-        # early completion even if the sentence superficially sounds finished.
         if any(phrase in text for phrase in self._THINKING_PAUSE_STRONG):
             score -= 0.55
         elif any(phrase in text for phrase in self._THINKING_PAUSE_WEAK):
@@ -255,8 +235,6 @@ class TurnCompletionJudge:
         if text.endswith(("然后", "还有", "另外")):
             score -= 0.25
 
-        # Length bonuses: reward substantive answers so they reach completion naturally.
-        # This also prevents very short answers from accidentally scoring high.
         n = len(text)
         if n >= 200:
             score += 0.18

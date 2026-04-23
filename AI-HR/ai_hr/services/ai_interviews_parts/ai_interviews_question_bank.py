@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+import random
+
 from .ai_interviews_shared import *
 
 
 class AIInterviewQuestionBankMixin:
+    _OPENING_GREETING_TEMPLATES_ZH = (
+        "你好，先确认下音频是否清晰。如果能听到，请先做一个1到2分钟的自我介绍，重点讲最近经历和你的核心职责。",
+        "你好，欢迎参加面试。先确认一下你这边声音正常吗？没问题的话，请做一个1到2分钟的自我介绍。",
+        "你好，我们先做个声音确认。听得到的话，请你先用1到2分钟介绍一下自己，聚焦最近项目和角色定位。",
+        "你好，很高兴和你交流。先确认音频可以吗？可以的话先来一个1到2分钟的自我介绍，重点说近期经验。",
+        "你好，面试开始前先确认一下通话质量。若声音正常，请先做1到2分钟自我介绍，讲清你最近负责的方向。",
+    )
+    _OPENING_GREETING_TEMPLATES_EN = (
+        "Hi, before we start, can you hear me clearly? If yes, please give a 1-2 minute self-introduction focused on your recent experience and role.",
+        "Hello, quick audio check first. If the sound is clear, please start with a 1-2 minute self-introduction about your recent projects and ownership.",
+        "Hi, nice to meet you. Can you hear me well? If yes, please do a 1-2 minute self-introduction, focusing on what you recently worked on.",
+        "Hello, let's do a quick sound check. If everything is good, please give a 1-2 minute self-introduction with your current direction and main responsibilities.",
+    )
+
+    @classmethod
+    def _build_opening_greeting_question(cls, *, language: str) -> str:
+        if language == "en-US":
+            return random.choice(cls._OPENING_GREETING_TEMPLATES_EN)
+        return random.choice(cls._OPENING_GREETING_TEMPLATES_ZH)
+
     @staticmethod
     def _shorten_question_text(question: str) -> str:
         """Lightly normalize question text without aggressive truncation."""
@@ -279,6 +301,13 @@ class AIInterviewQuestionBankMixin:
             skills=skills,
             language=language,
         )
+        # Randomize opening greeting template each generation to avoid repetitive first-turn wording.
+        opening_seed = self._build_opening_greeting_question(language=language)
+        for seed_item in stage_seeds:
+            if str(seed_item.get("stage") or "").strip() == InterviewStage.SELF_INTRO:
+                seed_item["question"] = opening_seed
+                break
+
         for source, questions in (("rule", rule_questions), ("llm", llm_questions), ("seed", stage_seeds)):
             for raw in questions:
                 normalized = self._normalize_question_item(raw)

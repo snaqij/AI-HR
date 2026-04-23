@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ...core.auth_dependencies import require_workspace_context
 from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.conversations import (
@@ -19,7 +20,7 @@ from ...schemas.conversations import (
 )
 from ...services.conversations import get_conversation_service
 
-router = APIRouter(prefix="/conversations", tags=["conversations"])
+router = APIRouter(prefix="/conversations", tags=["conversations"], dependencies=[Depends(require_workspace_context)])
 
 
 @router.post("/greet", response_model=Envelope[ConversationGreetResult], status_code=status.HTTP_201_CREATED)

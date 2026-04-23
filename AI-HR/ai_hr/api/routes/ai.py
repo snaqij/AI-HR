@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from ...core.auth_dependencies import require_workspace_context
 from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.ai_scoring import (
@@ -26,7 +27,7 @@ from ...services.ai_scoring import get_ai_scoring_service
 from ...services.ai_reply_llm import get_ai_reply_llm_service
 from ...services.ai_resume import get_ai_resume_service
 
-router = APIRouter(prefix="/ai", tags=["ai"])
+router = APIRouter(prefix="/ai", tags=["ai"], dependencies=[Depends(require_workspace_context)])
 
 
 @router.post("/resume/parse", response_model=Envelope[ResumeParseResult])

@@ -3,12 +3,21 @@
 This module owns stage semantics and transition-related defaults.
 The runtime state engine should consume these policies instead of
 hard-coding interview behavior.
+
+Role Configuration Integration:
+- Supports session-level role configuration storage
+- Allows stage policy overrides based on role config
+- Maintains backward compatibility with existing code
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Dict, Optional
+
+# Session-level role configuration storage
+# Format: {session_id: role_config_dict}
+_SESSION_ROLE_CONFIGS: Dict[str, Dict[str, Any]] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,10 +210,30 @@ def normalize_stage_code(stage_code: str | None) -> str:
     return DEFAULT_STAGE_CODE
 
 
-def get_stage_policy(stage_code: str | None) -> StagePolicy:
-    """Fetch stage policy with graceful fallback."""
-
-    return STAGE_POLICIES[normalize_stage_code(stage_code)]
+def get_stage_policy(stage_code: str | None, session_id: str | None = None) -> StagePolicy:
+    """
+    Fetch stage policy with graceful fallback and optional role config override.
+    
+    Args:
+        stage_code: Stage code (e.g., "S1", "S2")
+        session_id: Optional session ID for role-specific overrides
+    
+    Returns:
+        StagePolicy with role config overrides applied if available
+    """
+    base_policy = STAGE_POLICIES[normalize_stage_code(stage_code)]
+    
+    # If no session_id provided, return base policy
+    if not session_id:
+        return base_policy
+    
+    # Try to get role config for this session
+    role_config = get_role_config_for_session(session_id)
+    if not role_config:
+        return base_policy
+    
+    # Apply role config overrides
+    return _apply_role_config_overrides(base_policy, role_config)
 
 
 def get_stage_definition(stage_code: str | None) -> dict[str, Any]:
@@ -242,10 +271,24 @@ def resolve_followup_limit(
     stage_code: str | None,
     question: dict[str, Any] | None = None,
     default: int | None = None,
+    session_id: str | None = None,
 ) -> int:
-    """Resolve max follow-up count for the active topic."""
-
-    policy_limit = get_stage_policy(stage_code).max_followups
+    """
+    Resolve max follow-up count for the active topic.
+    
+    Priority order:
+    1. Question-specific limit (highest priority)
+    2. Explicit default parameter
+    3. Role config override (from session)
+    4. Stage policy limit (lowest priority)
+    
+    Args:
+        stage_code: Stage code
+        question: Question dictionary with optional max_followups
+        default: Explicit default value
+        session_id: Optional session ID for role config overrides
+    """
+    # 1. Check question-specific limit
     question_limit = None
     if isinstance(question, dict):
         raw_limit = question.get("max_followups")
@@ -254,11 +297,28 @@ def resolve_followup_limit(
                 question_limit = max(0, int(raw_limit))
             except (TypeError, ValueError):
                 question_limit = None
-
+    
     if question_limit is not None:
         return question_limit
+    
+    # 2. Check explicit default
     if default is not None:
         return max(0, int(default))
+    
+    # 3. Check role config override
+    if session_id:
+        role_config = get_role_config_for_session(session_id)
+        if role_config:
+            followup_strategy = role_config.get("followup_strategy", {})
+            role_limit = followup_strategy.get("max_per_question")
+            if role_limit is not None:
+                try:
+                    return max(0, int(role_limit))
+                except (TypeError, ValueError):
+                    pass
+    
+    # 4. Fall back to stage policy limit
+    policy_limit = get_stage_policy(stage_code, session_id).max_followups
     return policy_limit
 
 
@@ -304,10 +364,19 @@ def build_stage_state_patch(
     question: dict[str, Any] | None = None,
     previous_state: dict[str, Any] | None = None,
     transition_reason: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build consistent stage-related state metadata."""
-
-    policy = get_stage_policy(stage_code)
+    """
+    Build consistent stage-related state metadata.
+    
+    Args:
+        stage_code: Stage code
+        question: Current question dictionary
+        previous_state: Previous state dictionary
+        transition_reason: Reason for stage transition
+        session_id: Optional session ID for role config overrides
+    """
+    policy = get_stage_policy(stage_code, session_id)
     prior = previous_state or {}
     difficulty_level = str(prior.get("difficulty_level") or "normal")
     if difficulty_level not in {"normal", "fallback", "deep"}:
@@ -322,7 +391,138 @@ def build_stage_state_patch(
         "difficulty_level": difficulty_level,
         "missing_evidence": derive_missing_evidence(question=question),
         "transition_reason": str(transition_reason or prior.get("transition_reason") or ""),
-        "stage_max_followups": resolve_followup_limit(stage_code=policy.code, question=question),
+        "stage_max_followups": resolve_followup_limit(
+            stage_code=policy.code,
+            question=question,
+            session_id=session_id
+        ),
         "active_question_type": str((question or {}).get("question_type") or prior.get("active_question_type") or ""),
         "active_topic_name": str((question or {}).get("topic_name") or prior.get("active_topic_name") or ""),
     }
+
+
+# ============================================================================
+# Role Configuration Session Management
+# ============================================================================
+
+
+# ============================================================================
+# Role Configuration Session Management
+# ============================================================================
+
+
+def _apply_role_config_overrides(base_policy: StagePolicy, role_config: Dict[str, Any]) -> StagePolicy:
+    """
+    Apply role configuration overrides to a base stage policy.
+    
+    Currently supports overriding:
+    - max_followups: from role_config.followup_strategy.max_per_question
+    - hard_max_turns / topic_round_limit / allow_deep_dive / completion_mode /
+      requires_question_pack / goal: from role_config.stage_policy_overrides[stage_code]
+    
+    Args:
+        base_policy: Base stage policy
+        role_config: Role configuration dictionary
+    
+    Returns:
+        New StagePolicy with overrides applied
+    """
+    # Extract override values from role config
+    followup_strategy = role_config.get("followup_strategy", {})
+    max_followups_override = followup_strategy.get("max_per_question")
+    stage_policy_overrides = role_config.get("stage_policy_overrides", {})
+    stage_override = stage_policy_overrides.get(base_policy.code, {}) if isinstance(stage_policy_overrides, dict) else {}
+
+    # If no overrides, return base policy
+    if max_followups_override is None and (not isinstance(stage_override, dict) or not stage_override):
+        return base_policy
+
+    # Create new policy with overrides
+    # We use asdict to convert to dict, apply changes, then create new StagePolicy
+    policy_dict = asdict(base_policy)
+
+    if max_followups_override is not None:
+        try:
+            policy_dict["max_followups"] = max(0, int(max_followups_override))
+        except (TypeError, ValueError):
+            pass  # Keep original value if conversion fails
+
+    if isinstance(stage_override, dict):
+        int_fields = ("hard_max_turns", "topic_round_limit", "max_followups")
+        bool_fields = ("allow_deep_dive", "requires_question_pack", "fallback_allowed", "allow_llm_transition_signal")
+        str_fields = ("completion_mode", "goal", "description", "label", "next_stage")
+
+        for field in int_fields:
+            raw = stage_override.get(field)
+            if raw is None:
+                continue
+            try:
+                policy_dict[field] = max(0, int(raw))
+            except (TypeError, ValueError):
+                pass
+
+        for field in bool_fields:
+            raw = stage_override.get(field)
+            if raw is not None:
+                policy_dict[field] = bool(raw)
+
+        for field in str_fields:
+            raw = stage_override.get(field)
+            if raw is not None:
+                policy_dict[field] = str(raw)
+
+    return StagePolicy(**policy_dict)
+
+
+def set_role_config_for_session(session_id: str, role_config: Dict[str, Any]) -> None:
+    """
+    Store role configuration for a specific session.
+    
+    This allows stage policies to be customized based on the candidate's role.
+    
+    Args:
+        session_id: Unique session identifier
+        role_config: Role configuration dictionary from RoleConfigLoader
+    
+    Example:
+        >>> role_config = role_profiler.identify_role(job_title="Backend Engineer")
+        >>> set_role_config_for_session("session_123", role_config)
+    """
+    if not session_id:
+        return
+    
+    _SESSION_ROLE_CONFIGS[session_id] = role_config or {}
+
+
+def get_role_config_for_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve role configuration for a specific session.
+    
+    Args:
+        session_id: Unique session identifier
+    
+    Returns:
+        Role configuration dictionary, or None if not found
+    
+    Example:
+        >>> role_config = get_role_config_for_session("session_123")
+        >>> if role_config:
+        ...     max_followups = role_config.get("followup_strategy", {}).get("max_per_question", 3)
+    """
+    if not session_id:
+        return None
+    
+    return _SESSION_ROLE_CONFIGS.get(session_id)
+
+
+def clear_role_config_for_session(session_id: str) -> None:
+    """
+    Clear role configuration for a specific session.
+    
+    Should be called when a session ends to prevent memory leaks.
+    
+    Args:
+        session_id: Unique session identifier
+    """
+    if session_id in _SESSION_ROLE_CONFIGS:
+        del _SESSION_ROLE_CONFIGS[session_id]

@@ -1,0 +1,1 @@
+"""Business role configurations."""

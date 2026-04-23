@@ -2,7 +2,7 @@
 
 import random
 
-# P1: 开场引导模板 (直接引导自我介绍)
+# P1: Opening prompt template (directly guides self-introduction)
 P1_TEMPLATES = [
     "你好，我是今天的面试官。我已经看过了你的简历，感觉背景非常契合。为了互相了解，请先做一个简短的自我介绍吧。",
     "你好，很高兴能和你交流。我看过你的简历，非常有竞争力。我们直接进入正题，请先结合简历介绍一下你自己。",
@@ -10,7 +10,7 @@ P1_TEMPLATES = [
     "你好！我看过你的简历，对你在项目中的表现很感兴趣。首先请你先花几分钟做个自我介绍吧。"
 ]
 
-# P5: 非技术类综合素质题库
+# P5: Non-technical comprehensive competency question bank
 P5_QUESTIONS = [
     {
         "question": "如果你通过了面试，最快什么时候能到岗？",
@@ -39,7 +39,7 @@ P5_QUESTIONS = [
     }
 ]
 
-# P6: 企业介绍与收尾模板
+# P6: Company introduction and closing template
 P6_TEMPLATES = [
     (
         "在面试结束前，我简单介绍一下我们公司。我们专注于 AI 与人力资源领域的结合，致力于用顶级技术提升招聘效率，目前正处于高速发展期。\n"

@@ -148,7 +148,7 @@ class RealtimeOrchestrator:
                 try:
                     # BE-013: Relaxed streaming check. If on_audio_packet is present, we assume the caller wants streaming if the provider/task allows it.
                     if tts_enabled and on_audio_packet:
-                        # 流式路径：出一句合一句。使用生产者-消费者模式并发拉取 LLM 句子，减少句间延迟。
+                        # Streaming path: synthesize per sentence. Use producer-consumer concurrency to reduce inter-sentence latency.
                         text_stream = build_llm_followup(transcript, confidence, interview_stage, language)
                         if text_stream:
                             sentence_queue = queue.Queue(maxsize=16)
@@ -216,15 +216,15 @@ class RealtimeOrchestrator:
                                         if abort_event and abort_event.is_set():
                                             break
                                         
-                                        # 针对 PCM 编码进行首句去噪/去静音，让切换更无感
+                                        # For PCM, trim noise/silence on the first sentence for smoother handoff
                                         if is_sentence_start and packet.get("audio_bytes"):
-                                            # 只对每一句合出来的第一个包进行头部去静音
+                                            # Apply leading silence trim only to the first chunk of each synthesized sentence
                                             trimmed = self._trim_pcm_silence(packet["audio_bytes"], threshold=150)
                                             if trimmed:
                                                 packet["audio_bytes"] = trimmed
                                                 is_sentence_start = False
                                             else:
-                                                # 如果整包都是静音，继续等下一个包再切
+                                                # If a whole chunk is silent, wait for the next chunk before switching
                                                 continue
                                         
                                         if packet.get("audio_uri") or (isinstance(packet.get("audio_bytes"), bytes) and len(packet.get("audio_bytes")) > 0):
@@ -275,7 +275,7 @@ class RealtimeOrchestrator:
             try:
                 if not streamed_in_llm_block:
                     if on_audio_packet:
-                        # 对于由于缓存命中或预取跳过 LLM 流的场景，不分句，直接全文合成以保证连贯性
+                        # When LLM streaming is skipped by cache/prefetch hits, synthesize the full text to preserve coherence
                         # Debug hook reserved for TTS replay tracing.
                         for packet in self._tts_provider.synthesize_stream_iter(
                             session_id=session_id,
@@ -289,7 +289,7 @@ class RealtimeOrchestrator:
                             if packet.get("audio_uri"):
                                 followup_audio_uris.append(packet["audio_uri"])
                     else:
-                        # 兼容非流式路径
+                        # Compatible with non-streaming path
                         tts_result = self._tts_provider.synthesize_stream(
                             session_id=session_id,
                             text=followup_question,
@@ -305,7 +305,7 @@ class RealtimeOrchestrator:
         if warmup_executor is not None:
             warmup_executor.shutdown(wait=True, cancel_futures=True)
 
-        # 回合结束，清理 ASR 累积状态，防止下一轮回合串音
+        # At turn end, clear ASR accumulated state to prevent cross-turn bleed-through
         try:
             self._asr_provider.flush(session_id=session_id)
         except Exception:

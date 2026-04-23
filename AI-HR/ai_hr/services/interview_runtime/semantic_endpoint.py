@@ -43,7 +43,7 @@ def is_thinking_filler(text: str) -> bool:
         
     if len(cleaned) <= 6:
         for filler in THINKING_FILLERS:
-            # For short phrases like "呃那个", if any known filler spans most of the string
+            # For short phrases like "um...", if any known filler spans most of the string
             if filler in cleaned:
                 return True
                 

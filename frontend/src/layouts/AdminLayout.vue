@@ -32,16 +32,7 @@
 
     <main class="ml-64 flex min-h-screen flex-1 flex-col">
       <header class="fixed left-64 right-0 top-0 z-40 flex h-16 items-center justify-between border-b border-outline-variant/5 bg-surface/80 px-8 backdrop-blur-md">
-        <div class="flex flex-1 items-center gap-6">
-          <div class="relative w-full max-w-md">
-            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-xl text-on-surface-variant">search</span>
-            <input
-              type="text"
-              placeholder="搜索人才、职位或报告..."
-              class="w-full rounded-full border-none bg-surface-container-low py-2 pl-10 pr-4 text-base font-body shadow-inner transition-all focus:ring-2 focus:ring-primary/20"
-            />
-          </div>
-        </div>
+        <div class="flex flex-1 items-center"></div>
 
         <div class="flex items-center gap-4">
           <router-link
@@ -54,14 +45,22 @@
             <span>{{ credentialText }}</span>
           </router-link>
 
-          <button class="relative rounded-full p-2 transition-colors hover:bg-surface-container-high">
-            <span class="material-symbols-outlined text-on-surface-variant">notifications</span>
-            <span v-if="isCredentialExpired" class="absolute right-2 top-2 h-2 w-2 rounded-full bg-error"></span>
-          </button>
-
           <router-link to="/admin/settings" class="rounded-full p-2 transition-colors hover:bg-surface-container-high">
             <span class="material-symbols-outlined text-on-surface-variant">settings</span>
           </router-link>
+
+          <div class="hidden items-center gap-2 rounded-full border border-outline-variant/20 bg-surface-container-low px-3 py-1.5 md:flex">
+            <span class="material-symbols-outlined text-base text-on-surface-variant">groups</span>
+            <select
+              class="bg-transparent text-xs font-semibold text-on-surface outline-none"
+              :value="workspaceId"
+              @change="handleWorkspaceChange"
+            >
+              <option v-for="item in workspaceOptions" :key="item.id" :value="item.id">
+                {{ item.name }}
+              </option>
+            </select>
+          </div>
 
           <div class="mx-2 h-8 w-px bg-outline-variant/20"></div>
           <div class="flex items-center gap-3">
@@ -72,8 +71,14 @@
                 class="h-full w-full object-cover"
               >
             </div>
-            <span class="text-sm font-bold text-on-surface">张经理</span>
+            <span class="text-sm font-bold text-on-surface">{{ displayName }}</span>
           </div>
+          <button
+            class="rounded-full border border-outline-variant/25 px-3 py-1.5 text-xs font-semibold text-on-surface-variant transition hover:bg-surface-container-high"
+            @click="handleLogout"
+          >
+            Logout
+          </button>
         </div>
       </header>
 
@@ -90,13 +95,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { fetchBossCredential, type CredentialStatus } from '../api';
+import { useAuthStore } from '../stores/auth';
 
 const credential = ref<CredentialStatus | null>(null);
 const credentialFetchFailed = ref(false);
 let refreshTimer: number | null = null;
+const auth = useAuthStore();
+const router = useRouter();
 
 const isCredentialExpired = computed(() => credential.value?.status === 'expired');
+const displayName = computed(() => auth.displayName || auth.email || 'User');
+const workspaceId = computed(() => auth.currentWorkspaceId || '');
+const workspaceOptions = computed(() => auth.workspaces || []);
 
 const credentialText = computed(() => {
   if (credentialFetchFailed.value) {
@@ -171,6 +183,25 @@ onUnmounted(() => {
     window.clearInterval(refreshTimer);
   }
 });
+
+async function handleWorkspaceChange(event: Event): Promise<void> {
+  const target = event.target as HTMLSelectElement | null;
+  const nextWorkspaceId = String(target?.value || '').trim();
+  if (!nextWorkspaceId || nextWorkspaceId === auth.currentWorkspaceId) {
+    return;
+  }
+  try {
+    await auth.switchWorkspace(nextWorkspaceId);
+    await loadCredentialStatus();
+  } catch (err) {
+    console.error('Failed to switch workspace', err);
+  }
+}
+
+async function handleLogout(): Promise<void> {
+  await auth.logoutCurrentUser();
+  await router.replace('/login');
+}
 
 const menuItems = [
   { label: '控制台概览', path: '/admin', icon: 'dashboard' },

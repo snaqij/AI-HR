@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..core.exceptions import InvalidStateError, ResourceNotFoundError
 from ..db.models import Candidate, CandidateJobEvaluation, CandidateResumeAttachment, Job
+from .workspace_scope import get_workspace_id
 
 
 class CandidateJobEvaluationRepository:
@@ -20,7 +21,11 @@ class CandidateJobEvaluationRepository:
         self._session = session
 
     def get(self, evaluation_id: str) -> CandidateJobEvaluation:
-        entity = self._session.get(CandidateJobEvaluation, evaluation_id)
+        stmt = select(CandidateJobEvaluation).where(CandidateJobEvaluation.id == evaluation_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
+        entity = self._session.execute(stmt).scalar_one_or_none()
         if entity is None:
             raise ResourceNotFoundError(f"Candidate job evaluation '{evaluation_id}' was not found")
         return entity
@@ -31,6 +36,9 @@ class CandidateJobEvaluationRepository:
             CandidateJobEvaluation.job_id == job_id,
             CandidateJobEvaluation.evaluation_version == evaluation_version,
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def list_by_job(
@@ -42,6 +50,9 @@ class CandidateJobEvaluationRepository:
         candidate_ids: list[str] | None = None,
     ) -> list[CandidateJobEvaluation]:
         stmt = select(CandidateJobEvaluation).where(CandidateJobEvaluation.job_id == job_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
         if candidate_ids:
             stmt = stmt.where(CandidateJobEvaluation.candidate_id.in_(candidate_ids))
         stmt = stmt.order_by(CandidateJobEvaluation.final_score.desc(), CandidateJobEvaluation.updated_at.desc())
@@ -58,6 +69,9 @@ class CandidateJobEvaluationRepository:
             .order_by(CandidateJobEvaluation.evaluated_at.desc(), CandidateJobEvaluation.updated_at.desc())
             .limit(1)
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def update(
@@ -123,7 +137,9 @@ class CandidateJobEvaluationRepository:
                 f"Evaluation already exists for candidate '{candidate_id}', job '{job_id}', version '{evaluation_version}'"
             )
         now = datetime.now(UTC).replace(tzinfo=None)
+        workspace_id = get_workspace_id(self._session)
         entity = CandidateJobEvaluation(
+            workspace_id=workspace_id,
             candidate_id=candidate_id,
             job_id=job_id,
             resume_attachment_id=resume_attachment_id,
@@ -164,11 +180,19 @@ class CandidateJobEvaluationRepository:
         return entity
 
     def _assert_candidate_exists(self, candidate_id: str) -> None:
-        if self._session.get(Candidate, candidate_id) is None:
+        stmt = select(Candidate).where(Candidate.id == candidate_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Candidate.workspace_id == workspace_id)
+        if self._session.execute(stmt).scalar_one_or_none() is None:
             raise ResourceNotFoundError(f"Candidate '{candidate_id}' was not found")
 
     def _assert_job_exists(self, job_id: str) -> None:
-        if self._session.get(Job, job_id) is None:
+        stmt = select(Job).where(Job.id == job_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Job.workspace_id == workspace_id)
+        if self._session.execute(stmt).scalar_one_or_none() is None:
             raise ResourceNotFoundError(f"Job '{job_id}' was not found")
 
     def _assert_resume_attachment_exists(self, resume_attachment_id: str | None) -> None:

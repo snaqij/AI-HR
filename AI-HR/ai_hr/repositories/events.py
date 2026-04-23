@@ -1,4 +1,4 @@
-﻿"""事件仓储实现。"""
+"""事件仓储实现。"""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ class EventRepository:
         if filters:
             stmt = stmt.where(and_(*filters))
 
-        # 最小实现：总数从结果长度获得，后续可替换为 count 查询。
+        # Minimal implementation: derive total from result length; can be replaced by COUNT query later.
         items = list(
             self._session.execute(stmt.order_by(Event.occurred_at.desc()).limit(max(1, min(limit, 200)))).scalars().all()
         )

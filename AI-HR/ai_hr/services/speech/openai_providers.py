@@ -36,7 +36,7 @@ class OpenAIASRProvider(ASRProvider):
         voice_format: str | None = None,
     ) -> ASRStreamResult:
         if not audio_base64:
-            # 兼容无音频输入场景，回退 hint。
+            # Compatible with no-audio-input scenarios; fallback to hint.
             transcript = text_hint.strip() or f"ASR_TRANSCRIPT_SEQ_{seq}"
             return ASRStreamResult(transcript=transcript, confidence=confidence, latency_ms=latency_ms, provider=self.provider_name)
 

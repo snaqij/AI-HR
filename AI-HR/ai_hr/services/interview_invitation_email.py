@@ -1,4 +1,4 @@
-﻿"""Interview invitation email delivery services."""
+"""Interview invitation email delivery services."""
 
 from __future__ import annotations
 
@@ -83,20 +83,14 @@ class InterviewInvitationEmailService:
         if not candidate_email:
             raise InvalidStateError(f"Candidate '{candidate.id}' has no email address for invitation delivery")
 
-        # 1) 幂等性检查：避免重复发送邀请邮件
+        # 1) Idempotency check: avoid sending duplicate invitation emails
         existing_delivery = self._email_delivery_repository.list_by_job(
             job_id=job.id,
             candidate_id=candidate.id,
             limit=1
         )
         if existing_delivery and any(d.status in {"sent", "delivered"} for d in existing_delivery):
-            # 该候选人在该岗位下已成功发送过邀请，直接跳过
-            return {
-                "candidate_id": candidate.id,
-                "job_id": job.id,
-                "status": "skipped",
-                "reason": "already_sent",
-            }
+            raise InvalidStateError("该候选人已发送过面试邀请，请勿重复发送")
 
         task_log = self._automation_log_repository.create(
             task_type="candidate_invitation_email_send",
@@ -267,6 +261,8 @@ class InterviewInvitationEmailService:
             items=[
                 InterviewInvitationHistoryItem(
                     id=delivery.id,
+                    workspace_id=delivery.workspace_id,
+                    created_by_user_id=delivery.created_by_user_id,
                     candidate_id=candidate.id,
                     candidate_name=candidate.name,
                     candidate_email=candidate.email,
@@ -292,6 +288,8 @@ class InterviewInvitationEmailService:
         job = self._job_repository.get(delivery.job_id)
         detail = InterviewInvitationRecordDetailResult(
             delivery_id=delivery.id,
+            workspace_id=delivery.workspace_id,
+            created_by_user_id=delivery.created_by_user_id,
             candidate_id=candidate.id,
             candidate_name=candidate.name,
             candidate_email=candidate.email,
@@ -450,6 +448,13 @@ class InterviewInvitationEmailService:
                     opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
                     opening_indexes.add(idx)
                     break
+
+        # Ensure opening sections are always visible in UI even when question pack
+        # does not explicitly include S1/S2 or opening-style prompts.
+        if not any(seg.title == "自我介绍" for seg in opening):
+            opening.append(InterviewOpeningSegmentItem(title="自我介绍", candidate_answer=None, answer_turn_no=None))
+        if not any(seg.title == "项目介绍" for seg in opening):
+            opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
 
         opening.sort(key=lambda seg: 0 if seg.title == "自我介绍" else 1)
         remaining = [item for idx, item in enumerate(questions) if idx not in opening_indexes]
@@ -611,6 +616,8 @@ class InterviewInvitationEmailService:
     def _to_delivery_response(self, entity) -> CandidateEmailDeliveryResponse:
         return CandidateEmailDeliveryResponse(
             id=entity.id,
+            workspace_id=entity.workspace_id,
+            created_by_user_id=entity.created_by_user_id,
             candidate_id=entity.candidate_id,
             job_id=entity.job_id,
             evaluation_id=entity.evaluation_id,

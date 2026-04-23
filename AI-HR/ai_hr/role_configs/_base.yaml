@@ -1,0 +1,100 @@
+# 基础岗位配置
+# 所有岗位配置都应该继承此基础配置
+
+version: "1.0"
+
+role:
+  id: "_base"
+  family: "general"
+  display_name:
+    zh: "通用岗位"
+    en: "General Role"
+
+# 通用能力（所有岗位共有）
+universal_competencies:
+  ownership:
+    weight: 0.20
+    description: "主人翁意识"
+    evidence_types:
+      - "initiative"
+      - "responsibility"
+      - "problem_solving"
+  
+  communication:
+    weight: 0.15
+    description: "沟通协作能力"
+    evidence_types:
+      - "clear_expression"
+      - "active_listening"
+      - "cross_team_collaboration"
+  
+  learning_agility:
+    weight: 0.15
+    description: "学习敏捷性"
+    evidence_types:
+      - "quick_learning"
+      - "knowledge_transfer"
+      - "continuous_improvement"
+  
+  result_orientation:
+    weight: 0.25
+    description: "结果导向"
+    evidence_types:
+      - "goal_achievement"
+      - "impact_measurement"
+      - "deadline_management"
+  
+  adaptability:
+    weight: 0.25
+    description: "适应能力"
+    evidence_types:
+      - "change_management"
+      - "flexibility"
+      - "resilience"
+
+# 默认阶段权重
+# 注意：S1-S8是完整的面试流程，这里只配置主要阶段的权重
+stage_weights:
+  S1: 0.10  # 开场破冰
+  S2: 0.15  # 简历验证
+  S3: 0.35  # 深度追问
+  S4: 0.30  # 能力评估
+  S5: 0.10  # 收尾总结
+  # S6: 综合能力补充（按需触发）
+  # S7: 公司介绍与反问（固定流程）
+  # S8: 收尾（固定流程）
+
+# 题目生成策略
+question_generation:
+  distribution:
+    from_resume: 0.60
+    from_jd: 0.30
+    from_template: 0.10
+  
+  anchor_project:
+    required: true
+    min_duration_months: 3
+
+# 追问策略
+followup_strategy:
+  max_per_question: 3
+  evidence_threshold: 0.7
+  priority:
+    - "real_usage"
+    - "technical_detail"
+    - "problem_solving"
+    - "impact"
+
+# Prompt增强
+prompt_enhancements:
+  role_context: |
+    这是一场通用岗位的面试。请根据候选人的背景和经历，
+    评估其综合能力和潜力。
+  
+  question_focus: |
+    题目应该围绕候选人的实际项目经历，
+    关注其在项目中的角色、贡献和影响。
+  
+  followup_focus: |
+    追问应该深入了解候选人的思考过程、
+    解决问题的方法和实际成果。

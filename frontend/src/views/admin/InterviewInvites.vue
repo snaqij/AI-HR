@@ -94,24 +94,24 @@
       class="fixed inset-0 z-[70] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4"
       @click.self="closeInterviewRecord"
     >
-      <div class="w-full max-w-6xl max-h-[90vh] overflow-hidden bg-surface-container-lowest rounded-3xl border border-outline-variant/10 shadow-2xl">
-        <div class="px-8 py-5 border-b border-outline-variant/10 flex items-center justify-between bg-surface-container-low/40">
+      <div class="w-full max-w-6xl max-h-[90vh] overflow-hidden bg-surface-container-lowest rounded-3xl border border-outline-variant/20 shadow-2xl">
+        <div class="px-6 lg:px-8 py-5 border-b border-outline-variant/10 flex items-start justify-between bg-gradient-to-r from-surface-container-low/80 to-surface-container-high/50">
           <div>
             <h3 class="text-xl font-black text-on-surface">面试记录与决策摘要</h3>
-            <p class="text-xs font-bold text-on-surface-variant mt-1">
+            <p class="text-sm font-bold text-on-surface-variant mt-1">
               {{ selectedInvite?.candidate_name || "-" }} · {{ selectedInvite?.job_title || "-" }}
             </p>
           </div>
           <div class="flex items-center gap-2">
             <button
               v-if="selectedInvite"
-              class="h-10 px-4 rounded-xl border border-outline-variant/20 bg-surface-container-low text-xs font-black text-on-surface-variant uppercase tracking-widest"
+              class="h-11 px-5 rounded-xl border border-outline-variant/20 bg-surface-container-lowest hover:bg-surface-container-low text-sm font-black text-on-surface-variant"
               @click="$router.push(`/admin/candidate-detail?jobId=${selectedInvite.job_id}&candidateId=${selectedInvite.candidate_id}`)"
             >
               打开候选人详情
             </button>
             <button
-              class="w-10 h-10 rounded-xl hover:bg-surface-container-high text-on-surface-variant flex items-center justify-center"
+              class="w-11 h-11 rounded-xl hover:bg-surface-container-high text-on-surface-variant flex items-center justify-center"
               @click="closeInterviewRecord"
               title="关闭"
             >
@@ -120,7 +120,7 @@
           </div>
         </div>
 
-        <div class="p-8 overflow-y-auto max-h-[calc(90vh-84px)]">
+        <div class="p-8 overflow-y-auto max-h-[calc(90vh-84px)] bg-surface">
           <div v-if="recordLoading" class="py-20 text-center">
             <div class="inline-block w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
             <p class="text-xs font-bold text-on-surface-variant mt-4 uppercase tracking-widest">正在加载面试记录...</p>
@@ -137,37 +137,37 @@
           </div>
 
           <template v-else>
-            <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
-              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
+            <div class="grid grid-cols-2 xl:grid-cols-4 gap-3 lg:gap-4 mb-6">
+              <div class="rounded-2xl border border-outline-variant/15 p-4 bg-surface-container-lowest shadow-sm">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">邀请状态</p>
-                <p class="text-sm font-bold mt-2 text-on-surface">{{ getStatusText(recordDetail?.delivery_status || "") }}</p>
+                <p class="text-lg font-black mt-2 text-on-surface">{{ getStatusText(recordDetail?.delivery_status || "") }}</p>
               </div>
-              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
+              <div class="rounded-2xl border border-outline-variant/15 p-4 bg-surface-container-lowest shadow-sm">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">会话 ID</p>
                 <p class="text-sm font-bold mt-2 text-on-surface break-all">{{ recordDetail?.session_id || "尚未开始" }}</p>
               </div>
-              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
+              <div class="rounded-2xl border border-outline-variant/15 p-4 bg-surface-container-lowest shadow-sm">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">已作答题数</p>
-                <p class="text-sm font-bold mt-2 text-on-surface">{{ answeredCount }} / {{ totalQuestionCount }}</p>
+                <p class="text-lg font-black mt-2 text-on-surface">{{ answeredCount }} / {{ totalQuestionCount }}</p>
               </div>
-              <div class="rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40 lg:col-span-1">
+              <div class="rounded-2xl border border-outline-variant/15 p-4 bg-surface-container-lowest shadow-sm">
                 <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant">平均维度分</p>
-                <p class="text-sm font-bold mt-2 text-on-surface">{{ averageDimensionScore }}</p>
+                <p class="text-lg font-black mt-2 text-on-surface">{{ averageDimensionScore }}</p>
               </div>
             </div>
 
-            <div v-if="recordDetail?.record_message" class="mb-6 rounded-2xl border border-outline-variant/10 p-4 bg-surface-container-low/40">
+            <div v-if="recordDetail?.record_message" class="mb-6 rounded-2xl border border-amber-200/60 p-4 bg-amber-50/70">
               <p class="text-sm font-bold text-on-surface-variant">{{ recordDetail.record_message }}</p>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              <section class="lg:col-span-7">
+            <div class="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_380px] gap-6">
+              <section class="min-w-0">
                 <div class="flex items-center justify-between mb-4">
-                  <h4 class="text-base font-black text-on-surface">问答时间线</h4>
-                  <span class="text-[11px] font-bold text-on-surface-variant">共 {{ totalQuestionCount }} 题（含开场）</span>
+                  <h4 class="text-xl font-black tracking-tight text-on-surface">问答时间线</h4>
+                  <span class="px-3 py-1 rounded-full bg-surface-container-low text-xs font-black text-on-surface-variant">共 {{ totalQuestionCount }} 题（含开场）</span>
                 </div>
 
-                <div v-if="!(recordDetail?.questions.length || recordDetail?.opening_segments?.length)" class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40 text-sm font-bold text-on-surface-variant">
+                <div v-if="!(recordDetail?.questions.length || recordDetail?.opening_segments?.length)" class="rounded-2xl border border-outline-variant/15 p-6 bg-surface-container-lowest shadow-sm text-sm font-bold text-on-surface-variant">
                   暂无作答记录
                 </div>
 
@@ -175,10 +175,10 @@
                   <article
                     v-for="(item, index) in (recordDetail?.opening_segments || [])"
                     :key="`opening-${index}`"
-                    class="rounded-2xl border border-outline-variant/10 p-5 bg-amber-50/50"
+                    class="rounded-2xl border border-outline-variant/15 p-5 bg-surface-container-lowest shadow-sm"
                   >
                     <div class="flex items-center justify-between mb-2">
-                      <p class="text-xs font-black tracking-widest text-amber-700">{{ item.title }}</p>
+                      <p class="text-base font-black tracking-tight text-primary">{{ item.title }}</p>
                       <span class="text-[11px] font-bold text-on-surface-variant">
                         {{ item.answer_turn_no ? `轮次 #${item.answer_turn_no}` : "未记录轮次" }}
                       </span>
@@ -192,15 +192,15 @@
                   <article
                     v-for="(item, index) in recordDetail.questions"
                     :key="`${item.question_id}-${index}`"
-                    class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40"
+                    class="rounded-2xl border border-outline-variant/15 p-5 bg-surface-container-lowest shadow-sm"
                   >
                     <div class="flex items-center justify-between mb-2">
-                      <p class="text-xs font-black tracking-widest uppercase text-primary">题目 {{ index + 1 }}</p>
+                      <p class="text-base font-black tracking-tight text-primary">题目 {{ index + 1 }}</p>
                       <span class="text-[11px] font-bold text-on-surface-variant">
                         {{ item.answer_turn_no ? `轮次 #${item.answer_turn_no}` : "未记录轮次" }}
                       </span>
                     </div>
-                    <p class="text-sm font-bold text-on-surface leading-relaxed">{{ item.question }}</p>
+                    <p class="text-sm font-semibold text-on-surface leading-relaxed">{{ item.question }}</p>
                     <div class="mt-4 pt-4 border-t border-outline-variant/10">
                       <p class="text-[11px] font-black uppercase tracking-widest text-on-surface-variant mb-2">候选人回答</p>
                       <p class="text-sm font-medium text-on-surface whitespace-pre-wrap break-words">{{ item.candidate_answer || "候选人尚未作答" }}</p>
@@ -209,10 +209,10 @@
                 </div>
               </section>
 
-              <aside class="lg:col-span-5 space-y-4">
-                <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
+              <aside class="space-y-4 xl:sticky xl:top-0 h-fit">
+                <div class="rounded-2xl border border-outline-variant/15 p-5 bg-surface-container-lowest shadow-sm">
                   <div class="flex items-center justify-between mb-3">
-                    <h4 class="text-base font-black text-on-surface">AI 结论</h4>
+                    <h4 class="text-xl font-black tracking-tight text-on-surface">AI 结论</h4>
                     <span class="px-3 py-1 rounded-full text-[10px] font-black tracking-widest uppercase border" :class="recommendationClass">
                       {{ formatRecommendation(recordDetail?.analysis.recommendation) }}
                     </span>
@@ -222,8 +222,8 @@
                   </p>
                 </div>
 
-                <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
-                  <h4 class="text-base font-black text-on-surface mb-3">维度得分</h4>
+                <div class="rounded-2xl border border-outline-variant/15 p-5 bg-surface-container-lowest shadow-sm">
+                  <h4 class="text-xl font-black tracking-tight text-on-surface mb-3">维度得分</h4>
                   <div v-if="dimensionScoreEntries.length" class="space-y-3">
                     <div v-for="item in dimensionScoreEntries" :key="item.key">
                       <div class="flex items-center justify-between mb-1">
@@ -238,8 +238,8 @@
                   <p v-else class="text-sm font-medium text-on-surface-variant">暂无维度评分</p>
                 </div>
 
-                <div class="rounded-2xl border border-outline-variant/10 p-5 bg-surface-container-low/40">
-                  <h4 class="text-base font-black text-on-surface mb-3">风险标签</h4>
+                <div class="rounded-2xl border border-outline-variant/15 p-5 bg-surface-container-lowest shadow-sm">
+                  <h4 class="text-xl font-black tracking-tight text-on-surface mb-3">风险标签</h4>
                   <div v-if="recordDetail?.analysis.risk_tags?.length" class="flex flex-wrap gap-2">
                     <span
                       v-for="tag in recordDetail.analysis.risk_tags"

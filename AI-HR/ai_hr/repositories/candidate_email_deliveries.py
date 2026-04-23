@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..core.exceptions import ResourceNotFoundError
 from ..db.models import AIInterviewInvitation, Candidate, CandidateEmailDelivery, CandidateJobEvaluation, Job
+from .workspace_scope import get_user_id, get_workspace_id
 
 
 class CandidateEmailDeliveryRepository:
@@ -19,7 +20,20 @@ class CandidateEmailDeliveryRepository:
         self._session = session
 
     def get(self, delivery_id: str) -> CandidateEmailDelivery:
-        entity = self._session.get(CandidateEmailDelivery, delivery_id)
+        stmt = (
+            select(CandidateEmailDelivery)
+            .join(Job, Job.id == CandidateEmailDelivery.job_id)
+            .where(CandidateEmailDelivery.id == delivery_id)
+        )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(
+                or_(
+                    CandidateEmailDelivery.workspace_id == workspace_id,
+                    CandidateEmailDelivery.workspace_id.is_(None) & (Job.workspace_id == workspace_id),
+                )
+            )
+        entity = self._session.execute(stmt).scalar_one_or_none()
         if entity is None:
             raise ResourceNotFoundError(f"Candidate email delivery '{delivery_id}' was not found")
         return entity
@@ -28,9 +42,11 @@ class CandidateEmailDeliveryRepository:
         stmt = (
             select(CandidateEmailDelivery)
             .where(CandidateEmailDelivery.status.in_(("pending", "failed")))
-            .order_by(CandidateEmailDelivery.updated_at.asc())
-            .limit(max(1, limit))
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateEmailDelivery.workspace_id == workspace_id)
+        stmt = stmt.order_by(CandidateEmailDelivery.updated_at.asc()).limit(max(1, limit))
         return list(self._session.execute(stmt).scalars().all())
 
     def list_by_job(self, *, job_id: str, candidate_id: str | None = None, limit: int = 100) -> list[CandidateEmailDelivery]:
@@ -52,9 +68,15 @@ class CandidateEmailDeliveryRepository:
             .join(Candidate, Candidate.id == CandidateEmailDelivery.candidate_id)
             .join(Job, Job.id == CandidateEmailDelivery.job_id)
             .where(CandidateEmailDelivery.scene == "interview_invitation")
-            .order_by(CandidateEmailDelivery.created_at.desc())
-            .limit(max(1, limit))
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(
+                or_(
+                    CandidateEmailDelivery.workspace_id == workspace_id,
+                    CandidateEmailDelivery.workspace_id.is_(None) & (Job.workspace_id == workspace_id),
+                )
+            )
         keyword_query = (keyword or "").strip().lower()
         if keyword_query:
             pattern = f"%{keyword_query}%"
@@ -66,6 +88,7 @@ class CandidateEmailDeliveryRepository:
         status_query = (status or "").strip().lower()
         if status_query and status_query != "all":
             stmt = stmt.where(CandidateEmailDelivery.status == status_query)
+        stmt = stmt.order_by(CandidateEmailDelivery.created_at.desc()).limit(max(1, limit))
         return list(self._session.execute(stmt).all())
 
     def create(
@@ -93,6 +116,8 @@ class CandidateEmailDeliveryRepository:
             invitation_id=invitation_id,
         )
         entity = CandidateEmailDelivery(
+            workspace_id=get_workspace_id(self._session),
+            created_by_user_id=get_user_id(self._session),
             candidate_id=candidate_id,
             job_id=job_id,
             evaluation_id=evaluation_id,

@@ -1,9 +1,42 @@
 from __future__ import annotations
 
+import random
+
 from .ai_interviews_shared import *
 
 
 class AIInterviewReportFollowupMixin:
+    _FOLLOWUP_ACK_PREFIXES_ZH = (
+        "好的，我了解了。",
+        "明白，你的回答我理解了。",
+        "嗯，我理解你的思路了。",
+    )
+    _FOLLOWUP_ACK_PREFIXES_EN = (
+        "Got it, thanks for the context. ",
+        "Understood, that is clear. ",
+        "I see what you mean. ",
+        "Thanks, that helps. ",
+    )
+
+    @classmethod
+    def _looks_like_ack_prefixed(cls, text: str, *, language: str) -> bool:
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return False
+        if language == "en-US":
+            return normalized.startswith(("got it", "understood", "i see", "thanks"))
+        return normalized.startswith(("好的", "明白", "嗯", "了解"))
+
+    @classmethod
+    def _attach_followup_ack_prefix(cls, text: str, *, language: str) -> str:
+        normalized = str(text or "").strip()
+        if not normalized:
+            return ""
+        if cls._looks_like_ack_prefixed(normalized, language=language):
+            return normalized
+        prefix_pool = cls._FOLLOWUP_ACK_PREFIXES_EN if language == "en-US" else cls._FOLLOWUP_ACK_PREFIXES_ZH
+        return f"{random.choice(prefix_pool)}{normalized}"
+
     def get_report(
         self,
         session_id: str,
@@ -385,12 +418,16 @@ class AIInterviewReportFollowupMixin:
             return None
         if confidence is not None and confidence < 0.60:
             if language == "en-US":
-                return "Please answer with one concrete case, including context, actions, and measurable result."
-            return "请用一个具体案例补充你的回答，包含背景、行动与结果。"
+                prompt = "Please answer with one concrete case, including context, actions, and measurable result."
+            else:
+                prompt = "请用一个具体案例补充你的回答，包含背景、行动与结果。"
+            return self._attach_followup_ack_prefix(prompt, language=language)
         if len((transcript or "").strip()) < 18:
             if language == "en-US":
-                return f"We are in {interview_stage or InterviewStageGroup.CORE} stage, please add more detail and measurable outcomes."
-            return f"当前处于 {interview_stage or InterviewStageGroup.CORE} 阶段，请补充更多细节和量化结果。"
+                prompt = f"We are in {interview_stage or InterviewStageGroup.CORE} stage, please add more detail and measurable outcomes."
+            else:
+                prompt = f"当前处于 {interview_stage or InterviewStageGroup.CORE} 阶段，请补充更多细节和量化结果。"
+            return self._attach_followup_ack_prefix(prompt, language=language)
         return None
 
     def _build_run_id(self, *, session_id: str, runtime_mode: str, turns) -> str:
@@ -451,7 +488,7 @@ class AIInterviewReportFollowupMixin:
 
         logger.info(f"LLM Follow-up Streaming Prompt: {prompt[:200]}...")
         
-        # 使用 split_sentences 包装 LLM 流
+        # Wrap LLM stream with split_sentences
         llm_first_token_state = {"recorded": False}
 
         def _on_text_delta(delta: str) -> None:
@@ -477,10 +514,14 @@ class AIInterviewReportFollowupMixin:
         )
 
         from .orchestrator.streaming_utils import split_sentences
+        is_first_sentence = True
         for sentence in split_sentences(text_stream):
             if abort_event and abort_event.is_set():
                 logger.info(f"Speculative LLM task aborted for session={session_id}")
                 return
+            if is_first_sentence:
+                sentence = self._attach_followup_ack_prefix(sentence, language=language)
+                is_first_sentence = False
             if emit_delta:
                 DEFAULT_INTERVIEW_EVENT_BUS.publish(
                     session_id=session_id,

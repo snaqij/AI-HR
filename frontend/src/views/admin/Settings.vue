@@ -56,7 +56,7 @@ onMounted(loadData);
         <div class="bg-surface-container-lowest rounded-3xl p-8 border border-outline-variant/10 shadow-sm">
           <div class="mb-8">
              <h2 class="text-xl font-black text-on-surface mb-2">招聘平台凭据</h2>
-             <p class="text-sm text-on-surface-variant">在此更新直聘等渠道的登录凭据。Cookie 将经过 AES-256 加密后安全存储。</p>
+             <p class="text-sm text-on-surface-variant">在此更新当前登录用户自己的直聘渠道登录凭据。Cookie 将经过 AES-256 加密后安全存储。</p>
           </div>
 
           <div v-if="credential" class="mb-6 flex items-center gap-4 p-4 bg-surface-container-low rounded-2xl border border-outline-variant/5">
@@ -121,7 +121,7 @@ onMounted(loadData);
         <div class="bg-primary/5 rounded-3xl p-6 border border-primary/10">
           <h4 class="text-primary font-black text-xs uppercase tracking-widest mb-3">安全提示</h4>
           <p class="text-xs text-on-surface-variant leading-relaxed">
-            为了确保系统能够正常进行“自动伯乐”同步，请确保上传的 Cookie 是对应账号的最新状态。系统不会存储原始明文，所有数据均经过银行级加密算法处理。
+            当前版本按平台用户隔离保存 BOSS Cookie。请确保你上传的是自己账号对应的最新 Cookie，系统不会再复用其他登录用户的直聘登录态。
           </p>
         </div>
       </div>

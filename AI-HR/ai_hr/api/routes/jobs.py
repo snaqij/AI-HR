@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ...core.auth_dependencies import require_workspace_context
+from ...core.exceptions import InvalidStateError, ResourceNotFoundError
 from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.ai_resume import (
@@ -62,7 +64,7 @@ from ...services.interview_invitation_email import get_interview_invitation_emai
 from ...services.job_sync import get_job_sync_service
 from ...services.jobs import get_job_service
 
-router = APIRouter(prefix="/jobs", tags=["jobs"])
+router = APIRouter(prefix="/jobs", tags=["jobs"], dependencies=[Depends(require_workspace_context)])
 
 
 @router.post("", response_model=Envelope[JobResponse], status_code=status.HTTP_201_CREATED)
@@ -513,13 +515,16 @@ def send_candidate_invitation_email(
 ) -> Envelope[InterviewInvitationEmailSendResult]:
     """Manually send an interview invitation email to a candidate."""
     service = get_interview_invitation_email_service(session)
-    result = service.send_manual_invitation(
-        job_id=job_id,
-        candidate_id=candidate_id,
-        evaluation_id=payload.evaluation_id,
-        template_code=payload.template_code,
-        note=payload.note,
-    )
+    try:
+        result = service.send_manual_invitation(
+            job_id=job_id,
+            candidate_id=candidate_id,
+            evaluation_id=payload.evaluation_id,
+            template_code=payload.template_code,
+            note=payload.note,
+        )
+    except (InvalidStateError, ResourceNotFoundError) as exc:
+        return Envelope.failure("invite_email_failed", str(exc))
     return Envelope.success(InterviewInvitationEmailSendResult(**result))
 
 

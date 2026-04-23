@@ -55,7 +55,7 @@ class JobCandidate(TimestampMixin, Base):
         uselist=False,
     )
 
-    # 性能优化：虚拟关联，用于列表页快速获取评估结果和最近投递状态
+    # Performance optimization: virtual relationship for fast list-page access to evaluation and latest delivery status
     evaluation: Mapped["CandidateJobEvaluation | None"] = relationship(
         "CandidateJobEvaluation",
         primaryjoin="and_(JobCandidate.candidate_id == foreign(CandidateJobEvaluation.candidate_id), JobCandidate.job_id == foreign(CandidateJobEvaluation.job_id))",

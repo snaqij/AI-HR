@@ -17,11 +17,13 @@ class AIInterviewSession(TimestampMixin, Base):
 
     __tablename__ = "ai_interview_sessions"
     __table_args__ = (
+        Index("ix_ai_interview_sessions_workspace_id", "workspace_id"),
         Index("ix_ai_interview_sessions_job_created", "job_id", "created_at"),
         Index("ix_ai_interview_sessions_candidate_created", "candidate_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     candidate_id: Mapped[str] = mapped_column(String(36), ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False, index=True)
     job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="created")

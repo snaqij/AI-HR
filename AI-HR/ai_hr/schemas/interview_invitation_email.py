@@ -35,6 +35,8 @@ class CandidateEmailDeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    workspace_id: str | None = None
+    created_by_user_id: str | None = None
     candidate_id: str
     job_id: str
     evaluation_id: str | None
@@ -70,6 +72,8 @@ class InterviewInvitationHistoryItem(BaseModel):
     """Global invitation history item with candidate/job display fields."""
 
     id: str
+    workspace_id: str | None = None
+    created_by_user_id: str | None = None
     candidate_id: str
     candidate_name: str
     candidate_email: str | None = None
@@ -119,6 +123,8 @@ class InterviewInvitationRecordDetailResult(BaseModel):
     """Interview record detail for one invitation delivery."""
 
     delivery_id: str
+    workspace_id: str | None = None
+    created_by_user_id: str | None = None
     candidate_id: str
     candidate_name: str
     candidate_email: str | None = None

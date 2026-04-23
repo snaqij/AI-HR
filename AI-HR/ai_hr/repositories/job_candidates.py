@@ -9,7 +9,8 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
 from ..core.exceptions import InvalidStateError
-from ..db.models import Candidate, CandidateEmailDelivery, CandidateJobEvaluation, CandidateJobPipeline, JobCandidate
+from ..db.models import Candidate, CandidateEmailDelivery, CandidateJobEvaluation, CandidateJobPipeline, Job, JobCandidate
+from .workspace_scope import get_workspace_id
 
 
 class JobCandidateRepository:
@@ -37,6 +38,9 @@ class JobCandidateRepository:
             JobCandidate.channel == channel,
             JobCandidate.external_candidate_id == external_candidate_id,
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         entity = self._session.execute(stmt).scalar_one_or_none()
         now = datetime.now(UTC).replace(tzinfo=None)
 
@@ -120,6 +124,9 @@ class JobCandidateRepository:
             .where(JobCandidate.job_id == job_id)
             .order_by(JobCandidate.last_synced_at.desc(), JobCandidate.id.desc())
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
 
         keyword_query = (keyword or "").strip().lower()
         if keyword_query:
@@ -144,7 +151,7 @@ class JobCandidateRepository:
                 stmt = stmt.where(CandidateJobPipeline.resume_download_status == "downloaded")
             elif normalized_resume_status == "requested":
                 stmt = stmt.where(
-                    CandidateJobPipeline.resume_request_status == "requested",
+                    CandidateJobPipeline.resume_request_status.in_(("requested", "visible")),
                     CandidateJobPipeline.resume_download_status != "downloaded",
                 )
             elif normalized_resume_status == "failed":
@@ -236,6 +243,9 @@ class JobCandidateRepository:
             .where(JobCandidate.candidate_id == candidate_id)
             .order_by(JobCandidate.last_synced_at.desc())
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         return list(self._session.execute(stmt).scalars().all())
 
     def get_link(self, job_id: str, candidate_id: str) -> JobCandidate | None:
@@ -243,6 +253,9 @@ class JobCandidateRepository:
             JobCandidate.job_id == job_id,
             JobCandidate.candidate_id == candidate_id,
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def get_link_detail(self, job_id: str, candidate_id: str) -> JobCandidate | None:
@@ -287,6 +300,9 @@ class JobCandidateRepository:
             )
             .where(JobCandidate.job_id == job_id, JobCandidate.candidate_id == candidate_id)
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def update_stage(self, entity: JobCandidate, stage: str) -> JobCandidate:
@@ -299,6 +315,9 @@ class JobCandidateRepository:
         from sqlalchemy import func
 
         stmt = select(JobCandidate.stage, func.count(JobCandidate.id)).group_by(JobCandidate.stage)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         results = self._session.execute(stmt).all()
         return {stage: count for stage, count in results}
 
@@ -306,12 +325,18 @@ class JobCandidateRepository:
         from sqlalchemy import func
 
         stmt = select(func.count(JobCandidate.id))
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar() or 0
 
     def count_by_job(self, job_id: str) -> int:
         from sqlalchemy import func
 
         stmt = select(func.count(JobCandidate.id)).where(JobCandidate.job_id == job_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar() or 0
 
     def get_job_stats(self, job_id: str) -> dict[str, int]:
@@ -319,18 +344,38 @@ class JobCandidateRepository:
         from sqlalchemy import func
         from ..db.models import CandidateJobEvaluation, CandidateEmailDelivery
 
-        # 使用标量子查询合并计数，减少数据库交互次数
+        # Use scalar subqueries to merge counts and reduce DB round-trips
         total_subq = (
             select(func.count(JobCandidate.id))
             .where(JobCandidate.job_id == job_id)
             .scalar_subquery()
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            total_subq = (
+                select(func.count(JobCandidate.id))
+                .join(Job, Job.id == JobCandidate.job_id)
+                .where(
+                    JobCandidate.job_id == job_id,
+                    Job.workspace_id == workspace_id,
+                )
+                .scalar_subquery()
+            )
 
         evaluated_subq = (
             select(func.count(func.distinct(CandidateJobEvaluation.candidate_id)))
             .where(CandidateJobEvaluation.job_id == job_id)
             .scalar_subquery()
         )
+        if workspace_id:
+            evaluated_subq = (
+                select(func.count(func.distinct(CandidateJobEvaluation.candidate_id)))
+                .where(
+                    CandidateJobEvaluation.job_id == job_id,
+                    CandidateJobEvaluation.workspace_id == workspace_id,
+                )
+                .scalar_subquery()
+            )
 
         sent_subq = (
             select(func.count(func.distinct(CandidateEmailDelivery.candidate_id)))
@@ -340,6 +385,17 @@ class JobCandidateRepository:
             )
             .scalar_subquery()
         )
+        if workspace_id:
+            sent_subq = (
+                select(func.count(func.distinct(CandidateEmailDelivery.candidate_id)))
+                .join(Job, Job.id == CandidateEmailDelivery.job_id)
+                .where(
+                    CandidateEmailDelivery.job_id == job_id,
+                    CandidateEmailDelivery.status == "sent",
+                    Job.workspace_id == workspace_id,
+                )
+                .scalar_subquery()
+            )
 
         stmt = select(
             total_subq.label("total"),

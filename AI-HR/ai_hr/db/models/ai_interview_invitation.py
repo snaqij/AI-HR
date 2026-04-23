@@ -29,6 +29,6 @@ class AIInterviewInvitation(TimestampMixin, Base):
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
 
-    # 可存储一些生成时的元数据
+    # Optional metadata captured during generation
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)

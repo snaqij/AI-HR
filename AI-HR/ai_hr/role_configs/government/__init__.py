@@ -1,0 +1,1 @@
+"""Government role configurations."""

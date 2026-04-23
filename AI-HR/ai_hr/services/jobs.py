@@ -259,8 +259,8 @@ class JobService:
                     created_count += page_created
                     updated_count += page_updated
                     
-                    # 增量优化：如果当前页没有抓取到任何新数据或更新数据，且不是重置游标模式，
-                    # 则说明我们已经同步到了历史交界处，可以提前停止以提升性能。
+                    # Incremental optimization: if this page has no new/updated data and cursor reset is not enabled,
+                    # we likely reached the historical boundary and can stop early for better performance.
                     if not payload.reset_cursor and page_created == 0 and page_updated == 0:
                         break
                 pulled_count += len(candidate_items)
@@ -340,7 +340,7 @@ class JobService:
                     "resume_request_status": item.pipeline.resume_request_status if item.pipeline else None,
                     "resume_download_status": item.pipeline.resume_download_status if item.pipeline else None,
                     "last_resume_requested_at": item.pipeline.last_resume_requested_at if item.pipeline else None,
-                    # 性能优化：内嵌查询到的评估和投递数据
+                    # Performance optimization: embed queried evaluation and delivery data
                     "evaluation": item.evaluation,
                     "latest_delivery": item.latest_delivery,
                 }
@@ -455,14 +455,14 @@ class JobService:
 
     def enrich_candidate_metadata(self, limit: int = 5) -> int:
         """后台补全候选人元数据的任务。"""
-        # 1. 寻找待补全的候选人
+        # 1. Find candidates needing metadata backfill
         pending_candidates = self._candidate_repository.list_pending_metadata_enrichment(limit=limit)
         if not pending_candidates:
             return 0
             
         processed_count = 0
         
-        # 2. 构造连接器 (仅针对 BOSS)
+        # 2. Build connector (BOSS only)
         connector = self._build_connector("boss")
         
         import time
@@ -470,26 +470,26 @@ class JobService:
 
         for candidate in pending_candidates:
             try:
-                # 间隔久一点，避免安全检测 (5-10s)
+                # Use longer interval to reduce risk of security checks (5-10s)
                 time.sleep(random.uniform(5.0, 10.0))
                 
-                # 获取画像详情
+                # Fetch profile details
                 detail = connector.fetch_candidate_detail(candidate.raw_profile)
                 if detail:
-                    # 补全元数据
+                    # Backfill metadata
                     candidate.school = candidate.school or detail.get("school")
                     candidate.degree = candidate.degree or detail.get("degree")
                     candidate.work_experience = candidate.work_experience or detail.get("work_experience")
                     candidate.expected_salary = candidate.expected_salary or detail.get("expected_salary")
                     candidate.latest_company = candidate.latest_company or detail.get("latest_company")
                     
-                    # 合并详情原始报文
+                    # Merge raw detail payloads
                     if detail.get("raw_profile"):
                         if not candidate.raw_profile:
                             candidate.raw_profile = {}
                         candidate.raw_profile.update(detail.get("raw_profile"))
                 
-                # 标记已同步
+                # Mark as synced
                 self._candidate_repository.mark_metadata_synced(candidate.id)
                 logger.debug(
                     "job_service.background_enrich.success candidate_id=%s candidate_name=%s",
@@ -504,7 +504,7 @@ class JobService:
                     candidate.name,
                     e,
                 )
-                # 失败了也记录一下，标记同步过，避免在该批次死循环
+                # Record failures too and mark as synced to avoid batch-level infinite retries
                 self._candidate_repository.mark_metadata_synced(candidate.id)
                 
         return processed_count

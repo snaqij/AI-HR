@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from ...core.auth_dependencies import require_workspace_context
 from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.analytics import DashboardAnalyticsResult, HiringCenterOverviewResult
 from ...services.analytics import get_analytics_service
 
-router = APIRouter(prefix="/analytics", tags=["analytics"])
+router = APIRouter(prefix="/analytics", tags=["analytics"], dependencies=[Depends(require_workspace_context)])
 
 @router.get("/dashboard", response_model=Envelope[DashboardAnalyticsResult])
 def get_dashboard_analytics(

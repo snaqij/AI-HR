@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
+from ...core.auth_dependencies import require_workspace_context
 from ...core.responses import Envelope
 from ...db.session import get_db_session
 from ...schemas.interviews import (
@@ -28,7 +29,7 @@ from ...schemas.interview_invitation_email import (
 from ...services.interview_invitation_email import get_interview_invitation_email_service
 from ...services.interviews import get_interview_service
 
-router = APIRouter(prefix="", tags=["interviews"])
+router = APIRouter(prefix="", tags=["interviews"], dependencies=[Depends(require_workspace_context)])
 
 
 @router.post("/interviews/schedule", response_model=Envelope[InterviewScheduleResult], status_code=status.HTTP_201_CREATED)

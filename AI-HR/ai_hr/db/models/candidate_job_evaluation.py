@@ -18,6 +18,7 @@ class CandidateJobEvaluation(TimestampMixin, Base):
     __tablename__ = "candidate_job_evaluations"
     __table_args__ = (
         Index("uk_candidate_job_eval_unique", "candidate_id", "job_id", "evaluation_version", unique=True),
+        Index("idx_candidate_job_eval_workspace_id", "workspace_id"),
         Index("idx_candidate_job_eval_candidate", "candidate_id"),
         Index("idx_candidate_job_eval_job", "job_id"),
         Index("idx_candidate_job_eval_status", "status"),
@@ -26,6 +27,7 @@ class CandidateJobEvaluation(TimestampMixin, Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    workspace_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     candidate_id: Mapped[str] = mapped_column(String(36), nullable=False)
     job_id: Mapped[str] = mapped_column(String(36), nullable=False)
     resume_attachment_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

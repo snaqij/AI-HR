@@ -1,0 +1,126 @@
+# 后端工程师岗位配置
+
+version: "1.0"
+extends: "_base"
+
+role:
+  id: "backend_engineer"
+  family: "engineering"
+  display_name:
+    zh: "后端工程师"
+    en: "Backend Engineer"
+  
+  match_rules:
+    keywords:
+      - "后端"
+      - "backend"
+      - "服务端"
+      - "server"
+      - "api"
+    skills:
+      - "java"
+      - "python"
+      - "go"
+      - "spring"
+      - "django"
+      - "flask"
+      - "mysql"
+      - "redis"
+      - "kafka"
+      - "microservices"
+
+# 岗位特定能力
+role_competencies:
+  technical_depth:
+    weight: 0.30
+    description: "技术深度"
+    evidence_types:
+      - "real_usage"
+      - "technical_detail"
+      - "architecture_design"
+      - "performance_optimization"
+  
+  system_design:
+    weight: 0.25
+    description: "系统设计能力"
+    evidence_types:
+      - "scalability"
+      - "reliability"
+      - "maintainability"
+      - "trade_off_analysis"
+  
+  code_quality:
+    weight: 0.20
+    description: "代码质量"
+    evidence_types:
+      - "clean_code"
+      - "testing"
+      - "code_review"
+      - "refactoring"
+  
+  problem_solving:
+    weight: 0.25
+    description: "问题解决能力"
+    evidence_types:
+      - "debugging"
+      - "root_cause_analysis"
+      - "solution_design"
+      - "incident_handling"
+
+# 阶段权重（覆盖基础配置）
+# 注意：S1-S8是完整的面试流程，这里只配置主要阶段的权重
+# S6-S8会根据面试进展自动触发
+stage_weights:
+  S1: 0.05  # 开场破冰
+  S2: 0.15  # 简历验证
+  S3: 0.40  # 深度追问（技术岗位更重视）
+  S4: 0.35  # 能力评估
+  S5: 0.05  # 收尾总结
+  # S6: 综合能力补充（按需触发）
+  # S7: 公司介绍与反问（固定流程）
+  # S8: 收尾（固定流程）
+
+# 题目生成策略
+question_generation:
+  distribution:
+    from_resume: 0.70  # 后端更关注实际项目经验
+    from_jd: 0.20
+    from_template: 0.10
+  
+  anchor_project:
+    required: true
+    min_duration_months: 6  # 后端项目通常周期较长
+
+# 追问策略
+followup_strategy:
+  max_per_question: 4  # 技术岗位可以追问更深
+  evidence_threshold: 0.75
+  priority:
+    - "technical_detail"
+    - "architecture_design"
+    - "real_usage"
+    - "problem_solving"
+    - "performance_optimization"
+
+# Prompt增强
+prompt_enhancements:
+  role_context: |
+    候选人应聘后端工程师岗位。请重点评估其：
+    1. 技术深度：对后端技术栈的掌握程度
+    2. 系统设计：架构设计和系统优化能力
+    3. 代码质量：编码规范和工程实践
+    4. 问题解决：调试和故障排查能力
+  
+  question_focus: |
+    题目应围绕候选人的后端项目经历，重点关注：
+    - 使用的技术栈和框架
+    - 系统架构和设计决策
+    - 性能优化和问题解决
+    - 代码质量和工程实践
+  
+  followup_focus: |
+    追问应深入技术细节：
+    - 具体的技术实现方案
+    - 架构设计的权衡考虑
+    - 遇到的技术难题和解决方法
+    - 性能指标和优化效果

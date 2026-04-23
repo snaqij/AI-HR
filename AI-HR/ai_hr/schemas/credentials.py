@@ -23,5 +23,6 @@ class CredentialResponse(BaseModel):
     is_active: bool
     last_validated_at: datetime | None = None
     last_failure_at: datetime | None = None
+    failure_count: int = 0
     
     model_config = ConfigDict(from_attributes=True)

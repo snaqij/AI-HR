@@ -1,0 +1,116 @@
+# 全栈工程师岗位配置
+
+version: "1.0"
+extends: "_base"
+
+role:
+  id: "fullstack_engineer"
+  family: "engineering"
+  display_name:
+    zh: "全栈工程师"
+    en: "Fullstack Engineer"
+  
+  match_rules:
+    keywords:
+      - "全栈"
+      - "fullstack"
+      - "full stack"
+      - "前后端"
+    skills:
+      - "javascript"
+      - "typescript"
+      - "react"
+      - "vue"
+      - "node"
+      - "express"
+      - "nest"
+      - "mongodb"
+      - "postgresql"
+
+# 岗位特定能力
+role_competencies:
+  frontend_skills:
+    weight: 0.25
+    description: "前端技能"
+    evidence_types:
+      - "ui_implementation"
+      - "frontend_framework"
+      - "state_management"
+  
+  backend_skills:
+    weight: 0.25
+    description: "后端技能"
+    evidence_types:
+      - "api_design"
+      - "database_design"
+      - "server_architecture"
+  
+  full_stack_integration:
+    weight: 0.30
+    description: "全栈整合能力"
+    evidence_types:
+      - "end_to_end_development"
+      - "api_integration"
+      - "deployment"
+      - "devops"
+  
+  problem_solving:
+    weight: 0.20
+    description: "问题解决能力"
+    evidence_types:
+      - "debugging"
+      - "performance_tuning"
+      - "architecture_design"
+
+# 阶段权重
+stage_weights:
+  S1: 0.05
+  S2: 0.15
+  S3: 0.40
+  S4: 0.35
+  S5: 0.05
+  # S6-S8: 按需触发或固定流程
+
+# 题目生成策略
+question_generation:
+  distribution:
+    from_resume: 0.70
+    from_jd: 0.20
+    from_template: 0.10
+  
+  anchor_project:
+    required: true
+    min_duration_months: 6
+
+# 追问策略
+followup_strategy:
+  max_per_question: 4
+  evidence_threshold: 0.75
+  priority:
+    - "end_to_end_development"
+    - "api_integration"
+    - "architecture_design"
+    - "problem_solving"
+
+# Prompt增强
+prompt_enhancements:
+  role_context: |
+    候选人应聘全栈工程师岗位。请重点评估其：
+    1. 前端技能：UI实现和前端框架使用能力
+    2. 后端技能：API设计和数据库设计能力
+    3. 全栈整合：端到端开发和系统集成能力
+    4. 问题解决：跨栈调试和架构设计能力
+  
+  question_focus: |
+    题目应围绕候选人的全栈项目经历，重点关注：
+    - 前后端技术栈的使用经验
+    - 端到端功能的实现过程
+    - API设计和数据库设计
+    - 系统部署和运维经验
+  
+  followup_focus: |
+    追问应深入全栈技术细节：
+    - 前后端如何协作和集成
+    - 数据流和状态管理方案
+    - 性能优化的全栈视角
+    - 部署和运维的实践经验

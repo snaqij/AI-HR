@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..core.exceptions import ResourceNotFoundError
 from ..db.models import Job, JobPublication
 from ..schemas.jobs import JobCreateRequest, RemoteJobSyncItem
+from .workspace_scope import get_workspace_id
 
 
 class JobRepository:
@@ -21,7 +22,9 @@ class JobRepository:
 
     def create(self, payload: JobCreateRequest) -> Job:
         """创建岗位草稿并返回完整实体。"""
+        workspace_id = get_workspace_id(self._session)
         job = Job(
+            workspace_id=workspace_id,
             title=payload.title,
             department=payload.department,
             city=payload.city,
@@ -36,6 +39,9 @@ class JobRepository:
     def get(self, job_id: str) -> Job:
         """按岗位 ID 查询岗位及发布记录。"""
         stmt = select(Job).options(selectinload(Job.publications)).where(Job.id == job_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Job.workspace_id == workspace_id)
         job = self._session.execute(stmt).scalar_one_or_none()
         if job is None:
             raise ResourceNotFoundError(f"Job '{job_id}' was not found")
@@ -55,7 +61,7 @@ class JobRepository:
         from sqlalchemy import func
         from ..db.models import JobCandidate
 
-        # 子查询统计关联候选人数
+        # Subquery to count related candidates
         count_subq = (
             select(func.count(JobCandidate.id))
             .where(JobCandidate.job_id == Job.id)
@@ -69,11 +75,14 @@ class JobRepository:
             .limit(limit)
             .offset(offset)
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Job.workspace_id == workspace_id)
         results = self._session.execute(stmt).all()
         
         output = []
         for job, count in results:
-            # 动态绑定属性，供 Pydantic JobResponse.model_validate 使用
+            # Dynamically bind attributes for Pydantic JobResponse.model_validate
             job.candidate_count = count or 0
             output.append(job)
         return self._filter_jobs(
@@ -121,6 +130,9 @@ class JobRepository:
             JobPublication.channel == channel,
             JobPublication.external_job_id == external_job_id,
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobPublication.job_id).where(Job.workspace_id == workspace_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def sync_remote_job(self, channel: str, item: RemoteJobSyncItem) -> tuple[Job, JobPublication, bool]:
@@ -131,6 +143,7 @@ class JobRepository:
 
         if publication is None:
             job = Job(
+                workspace_id=get_workspace_id(self._session),
                 title=item.title,
                 department=item.department,
                 city=item.city,
@@ -189,6 +202,9 @@ class JobRepository:
     ) -> JobPublication:
         """更新发布同步结果（状态、返回体、错误信息）。"""
         stmt = select(JobPublication).where(JobPublication.id == publication_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobPublication.job_id).where(Job.workspace_id == workspace_id)
         publication = self._session.execute(stmt).scalar_one_or_none()
         if publication is None:
             raise ResourceNotFoundError(f"Job publication '{publication_id}' was not found")
@@ -207,6 +223,9 @@ class JobRepository:
     def update_publication_cursor(self, publication_id: str, cursor: str | None) -> JobPublication:
         """更新候选人同步游标。"""
         stmt = select(JobPublication).where(JobPublication.id == publication_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobPublication.job_id).where(Job.workspace_id == workspace_id)
         publication = self._session.execute(stmt).scalar_one_or_none()
         if publication is None:
             raise ResourceNotFoundError(f"Job publication '{publication_id}' was not found")
@@ -254,6 +273,9 @@ class JobRepository:
         if not unique_ids:
             return 0
         stmt = delete(Job).where(Job.id.in_(unique_ids))
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Job.workspace_id == workspace_id)
         result = self._session.execute(stmt)
         self._session.commit()
         return int(result.rowcount or 0)

@@ -668,7 +668,10 @@ async function confirmInviteDialog() {
     console.error("Failed to send invitation email", error);
     inviteDialogCandidate.value = item;
     inviteDialogAllowSend.value = false;
-    inviteDialogMessage.value = "发送邀约失败，请稍后重试。";
+    inviteDialogMessage.value =
+      error instanceof Error && error.message.trim()
+        ? error.message
+        : "发送邀约失败，请稍后重试。";
     inviteDialogVisible.value = true;
   } finally {
     sendingCandidateId.value = "";
@@ -761,6 +764,7 @@ function getResumeStatusBadge(item: JobCandidate) {
     const download = item.resume_download_status;
     
     if (download === 'downloaded') return 'bg-green-50 text-green-700 border-green-200 shadow-sm shadow-green-100';
+    if (status === 'visible') return 'bg-amber-50 text-amber-700 border-amber-200';
     if (status === 'requested') return 'bg-primary/5 text-primary border-primary/20 animate-pulse';
     if (status === 'failed') return 'bg-rose-50 text-rose-700 border-rose-200';
     return 'bg-surface-container-high text-on-surface-variant/40 border-outline-variant/10';
@@ -771,6 +775,7 @@ function getResumeStatusText(item: JobCandidate) {
     const download = item.resume_download_status;
     
     if (download === 'downloaded') return '简历已获取';
+    if (status === 'visible') return '简历可获取';
     if (status === 'requested') return '全自动申请中';
     if (status === 'failed') return '申请失败';
     return '待申请';

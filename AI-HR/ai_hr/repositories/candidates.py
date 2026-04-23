@@ -1,31 +1,30 @@
-"""候选人仓储实现。"""
+"""Candidate repository implementation."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import or_
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, load_only
 
-from ..db.models import Candidate, CandidateIdentity
 from ..core.exceptions import ResourceNotFoundError
+from ..db.models import Candidate, CandidateIdentity
 from ..schemas.candidates import CandidateImportItem
+from .workspace_scope import get_workspace_id
 
 
 class CandidateRepository:
-    """封装候选人读写、去重合并与评分回写逻辑。"""
+    """Encapsulates candidate reads/writes, dedup merge and score updates."""
 
     def __init__(self, session: Session):
-        """使用当前数据库会话初始化仓储。"""
         self._session = session
 
     def upsert_many(self, items: list[CandidateImportItem]) -> tuple[list[Candidate], int, int]:
-        """批量 upsert 候选人，返回实体列表与新增/更新计数。"""
         created = 0
         updated = 0
         entities: list[Candidate] = []
+        workspace_id = get_workspace_id(self._session)
 
         for item in items:
             candidate = self._find_by_identity(item.source_channel, item.external_candidate_id)
@@ -34,6 +33,7 @@ class CandidateRepository:
                 dedup_candidate = self._find_master_candidate_for_merge(item)
                 if dedup_candidate is None:
                     candidate = Candidate(
+                        workspace_id=workspace_id,
                         name=item.name,
                         source_channel=item.source_channel,
                         external_candidate_id=item.external_candidate_id,
@@ -63,6 +63,7 @@ class CandidateRepository:
                 self._apply_updates(candidate, item)
                 self._ensure_identity(candidate, item.source_channel, item.external_candidate_id)
                 updated += 1
+
             entities.append(candidate)
 
         self._session.commit()
@@ -71,19 +72,23 @@ class CandidateRepository:
         return entities, created, updated
 
     def get(self, candidate_id: str) -> Candidate:
-        """按主键获取候选人，不存在则抛出异常。"""
         stmt = select(Candidate).where(Candidate.id == candidate_id)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Candidate.workspace_id == workspace_id)
         candidate = self._session.execute(stmt).scalar_one_or_none()
         if candidate is None:
             raise ResourceNotFoundError(f"Candidate '{candidate_id}' was not found")
         return candidate
 
     def list_by_ids(self, candidate_ids: list[str], *, summary_only: bool = False) -> list[Candidate]:
-        """Batch query candidates by ids, optionally loading only summary fields."""
         ids = [item for item in dict.fromkeys(candidate_ids) if item]
         if not ids:
             return []
         stmt = select(Candidate).where(Candidate.id.in_(ids))
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Candidate.workspace_id == workspace_id)
         if summary_only:
             stmt = stmt.options(
                 load_only(
@@ -110,7 +115,6 @@ class CandidateRepository:
         dimensions: dict[str, float],
         explanation: str,
     ) -> Candidate:
-        """更新候选人评分结果并推进阶段状态。"""
         candidate = self.get(candidate_id)
         candidate.score_total = total_score
         candidate.score_dimensions = dimensions
@@ -125,9 +129,6 @@ class CandidateRepository:
         return candidate
 
     def list_pending_metadata_enrichment(self, limit: int = 10) -> list[Candidate]:
-        """拉取需要后台补全元数据的候选人列表。
-        条件：BOSS 渠道且 (学校为空 或 薪资为空) 且 尚未同步过详情。
-        """
         stmt = (
             select(Candidate)
             .where(
@@ -135,22 +136,23 @@ class CandidateRepository:
                 Candidate.metadata_synced_at.is_(None),
                 or_(
                     Candidate.school.is_(None),
-                    Candidate.expected_salary.is_(None)
-                )
+                    Candidate.expected_salary.is_(None),
+                ),
             )
             .order_by(Candidate.created_at.desc())
             .limit(limit)
         )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Candidate.workspace_id == workspace_id)
         return list(self._session.execute(stmt).scalars().all())
 
     def mark_metadata_synced(self, candidate_id: str) -> None:
-        """标记候选人元数据已同步完成。"""
         candidate = self.get(candidate_id)
         candidate.metadata_synced_at = datetime.now(UTC).replace(tzinfo=None)
         self._session.commit()
 
     def update_stage(self, candidate_id: str, stage: str) -> Candidate:
-        """更新候选人当前阶段。"""
         candidate = self.get(candidate_id)
         candidate.current_stage = stage
         self._session.commit()
@@ -165,7 +167,6 @@ class CandidateRepository:
         resume_text: str | None = None,
         raw_profile_patch: dict[str, Any] | None = None,
     ) -> Candidate:
-        """更新候选人简历相关字段。"""
         candidate = self.get(candidate_id)
         if resume_url:
             candidate.resume_url = resume_url
@@ -178,27 +179,46 @@ class CandidateRepository:
         return candidate
 
     def _find_by_identity(self, source_channel: str, external_candidate_id: str) -> Candidate | None:
-        """按渠道身份映射查找候选人。"""
+        workspace_id = get_workspace_id(self._session)
+
+        for pending in self._session.new:
+            if not isinstance(pending, CandidateIdentity):
+                continue
+            if pending.source_channel != source_channel or pending.external_candidate_id != external_candidate_id:
+                continue
+            candidate = self._session.get(Candidate, pending.candidate_id)
+            if candidate is None:
+                continue
+            if workspace_id and candidate.workspace_id != workspace_id:
+                return None
+            return candidate
+
         identity_stmt = select(CandidateIdentity).where(
             CandidateIdentity.source_channel == source_channel,
             CandidateIdentity.external_candidate_id == external_candidate_id,
         )
         identity = self._session.execute(identity_stmt).scalar_one_or_none()
         if identity is not None:
-            return self._session.get(Candidate, identity.candidate_id)
+            candidate = self._session.get(Candidate, identity.candidate_id)
+            if candidate is None:
+                return None
+            if workspace_id and candidate.workspace_id != workspace_id:
+                return None
+            return candidate
 
-        # 向后兼容：identity 表引入前的历史数据兜底。
         legacy_stmt = select(Candidate).where(
             Candidate.source_channel == source_channel,
             Candidate.external_candidate_id == external_candidate_id,
         )
+        if workspace_id:
+            legacy_stmt = legacy_stmt.where(Candidate.workspace_id == workspace_id)
         legacy_candidate = self._session.execute(legacy_stmt).scalar_one_or_none()
         if legacy_candidate is not None:
             self._ensure_identity(legacy_candidate, source_channel, external_candidate_id)
         return legacy_candidate
 
     def _find_master_candidate_for_merge(self, item: CandidateImportItem) -> Candidate | None:
-        """按手机号/邮箱哈希查找可合并主档。"""
+        workspace_id = get_workspace_id(self._session)
         filters = []
         if item.phone_hash:
             filters.append(Candidate.phone_hash == item.phone_hash)
@@ -211,10 +231,20 @@ class CandidateRepository:
             Candidate.source_channel == item.source_channel,
             or_(*filters),
         )
+        if workspace_id:
+            stmt = stmt.where(Candidate.workspace_id == workspace_id)
         return self._session.execute(stmt).scalars().first()
 
     def _ensure_identity(self, candidate: Candidate, source_channel: str, external_candidate_id: str) -> None:
-        """确保候选人与外部身份映射存在且正确。"""
+        for pending in self._session.new:
+            if not isinstance(pending, CandidateIdentity):
+                continue
+            if pending.source_channel != source_channel or pending.external_candidate_id != external_candidate_id:
+                continue
+            if pending.candidate_id != candidate.id:
+                pending.candidate_id = candidate.id
+            return
+
         stmt = select(CandidateIdentity).where(
             CandidateIdentity.source_channel == source_channel,
             CandidateIdentity.external_candidate_id == external_candidate_id,
@@ -227,13 +257,17 @@ class CandidateRepository:
                 external_candidate_id=external_candidate_id,
             )
             self._session.add(identity)
+            self._session.flush()
             return
 
         if identity.candidate_id != candidate.id:
+            workspace_id = get_workspace_id(self._session)
+            existing_candidate = self._session.get(Candidate, identity.candidate_id)
+            if workspace_id and existing_candidate is not None and existing_candidate.workspace_id != workspace_id:
+                return
             identity.candidate_id = candidate.id
 
     def _apply_updates(self, candidate: Candidate, item: CandidateImportItem) -> None:
-        """将导入项变更合并到候选人主档。"""
         candidate.name = item.name
         if item.phone_hash:
             candidate.phone_hash = item.phone_hash
@@ -258,7 +292,6 @@ class CandidateRepository:
         candidate.raw_profile = self._merge_raw_profile(candidate.raw_profile, item.raw_profile)
 
     def _merge_raw_profile(self, existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-        """浅层合并 raw_profile 字段。"""
         merged = dict(existing or {})
         for key, value in (incoming or {}).items():
             merged[key] = value

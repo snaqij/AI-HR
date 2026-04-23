@@ -44,6 +44,9 @@ def override_get_db_session():
 
 
 app.dependency_overrides[get_db_session] = override_get_db_session
+settings = get_settings()
+settings.auth_enabled = False
+settings.ai_interview_auth_required = False
 client = TestClient(app)
 
 
@@ -101,12 +104,60 @@ def test_create_ai_interview_session_success() -> None:
     assert data["candidate_id"] == candidate_id
     assert data["job_id"] == job_id
     assert data["rtc_room_id"].startswith("ai-intv-")
-    assert data["join_url"].startswith("/ai-interview/session/")
+    assert data["join_url"].startswith("/interview/")
     assert "token=" in data["join_url"]
     assert data["rtc"]["room_id"] == data["rtc_room_id"]
     assert data["rtc"]["channel_name"] == data["rtc_room_id"]
     assert data["ten"]["room_id"] == data["rtc_room_id"]
 
+
+
+
+
+def test_create_session_with_explicit_role_should_persist_role_context() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+
+    resp = client.post(
+        "/api/v1/ai/interviews/sessions",
+        json={
+            "candidate_id": candidate_id,
+            "job_id": job_id,
+            "explicit_role_id": "backend_engineer",
+        },
+    )
+    assert resp.status_code == 201
+    payload = resp.json()["data"]["session"]["payload"]
+    assert payload["role_id"] == "backend_engineer"
+    assert payload["role_source"] == "explicit"
+    assert payload["role"]["id"] == "backend_engineer"
+
+
+def test_generate_question_set_should_keep_explicit_role_context() -> None:
+    job_id = _create_job()
+    candidate_id = _create_candidate()
+    create_resp = client.post(
+        "/api/v1/ai/interviews/sessions",
+        json={
+            "candidate_id": candidate_id,
+            "job_id": job_id,
+        },
+    )
+    assert create_resp.status_code == 201
+    session_id = create_resp.json()["data"]["session"]["id"]
+
+    question_resp = client.post(
+        f"/api/v1/ai/interviews/sessions/{session_id}/question-set/generate",
+        json={"question_count": 4, "explicit_role_id": "backend_engineer"},
+    )
+    assert question_resp.status_code == 200
+
+    session_resp = client.get(f"/api/v1/ai/interviews/sessions/{session_id}")
+    assert session_resp.status_code == 200
+    payload = session_resp.json()["data"]["payload"]
+    assert payload["role_id"] == "backend_engineer"
+    assert payload["role_source"] == "explicit"
+    assert payload["role"]["config_version"] == "1.0"
 
 def test_create_ai_interview_session_invalid_candidate() -> None:
     job_id = _create_job()
@@ -295,7 +346,7 @@ def test_generate_question_set_and_version_increment() -> None:
     assert first["version"] == 1
     assert first["question_count"] == 5
     assert len(first["questions"]) == 5
-    assert set(first["questions"][0].keys()) == {"question", "dimension", "expected_signal", "followup_condition"}
+    assert {"question", "dimension", "expected_signal", "followup_condition"}.issubset(first["questions"][0].keys())
 
     second_resp = client.post(
         f"/api/v1/ai/interviews/sessions/{session_id}/question-set/generate",

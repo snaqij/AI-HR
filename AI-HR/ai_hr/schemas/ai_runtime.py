@@ -1,4 +1,4 @@
-﻿"""AI 运行时管理 API 数据模型。"""
+"""AI 运行时管理 API 数据模型。"""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ class RuntimeFeatureFlagRequest(BaseModel):
     """运行时功能开关写入请求。"""
 
     tenant_id: str | None = None
-    # 新增 job_id 以支持租户+岗位灰度命中；为空时保持原有行为。
+    # Added job_id for tenant+job gray rollout matching; keep legacy behavior when empty.
     job_id: str | None = None
     enabled: bool = True
     rollout_percent: int = Field(default=100, ge=0, le=100)

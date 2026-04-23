@@ -333,3 +333,55 @@ def test_sync_job_resume_access_batches_all_candidates_under_job() -> None:
     assert payload["succeeded_count"] == 2
     assert all(item["resume_visible"] is True for item in payload["results"])
     assert all(item["attachment_synced"] is True for item in payload["results"])
+
+
+def test_sync_job_resume_access_respects_daily_quota_and_updates_candidate_status() -> None:
+    create_response = client.post(
+        "/api/v1/jobs",
+        json={
+            "title": "Quota Resume Access Engineer",
+            "department": "Engineering",
+            "city": "Shanghai",
+            "salary_range": "30k-45k",
+            "requirements": "Python, FastAPI, MySQL",
+        },
+    )
+    job_id = create_response.json()["data"]["id"]
+
+    client.patch(
+        f"/api/v1/jobs/{job_id}/settings",
+        json={
+            "auto_request_resume": True,
+            "max_daily_resume_requests": 1,
+        },
+    )
+    client.post(
+        f"/api/v1/jobs/{job_id}/publish",
+        json={"channels": ["boss"]},
+    )
+    client.post(
+        f"/api/v1/jobs/{job_id}/candidates/sync",
+        json={"channels": ["boss"], "max_pages": 2},
+    )
+
+    batch_sync = client.post(
+        f"/api/v1/jobs/{job_id}/resume-access/sync",
+        json={"sync_attachment_when_ready": False},
+    )
+    assert batch_sync.status_code == 200
+    payload = batch_sync.json()["data"]
+    assert payload["total_candidates"] == 2
+    assert payload["succeeded_count"] == 1
+    assert payload["failed_count"] == 0
+    assert payload["results"][0]["status"] == "synced"
+    assert payload["results"][0]["request_sent"] is True
+    assert payload["results"][1]["status"] == "skipped"
+    assert payload["results"][1]["error_message"] == "quota_exceeded"
+
+    candidates_response = client.get(f"/api/v1/jobs/{job_id}/candidates")
+    assert candidates_response.status_code == 200
+    candidates = candidates_response.json()["data"]["candidates"]
+    requested_items = [item for item in candidates if item["resume_request_status"] in {"requested", "visible"}]
+    pending_items = [item for item in candidates if item["resume_request_status"] in {None, "pending"}]
+    assert len(requested_items) == 1
+    assert len(pending_items) == 1

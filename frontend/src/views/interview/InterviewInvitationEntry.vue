@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+
 import { activateInterviewInvitation } from "../../api";
 
 const route = useRoute();
@@ -12,7 +13,7 @@ onMounted(async () => {
   const token = String(route.params.token || "").trim();
   if (!token) {
     loading.value = false;
-    errorText.value = "缺少邀请 token。";
+    errorText.value = "Missing invitation token.";
     return;
   }
 
@@ -22,25 +23,12 @@ onMounted(async () => {
       path: `/interview/${session.id}`,
       query: {
         session_id: session.id,
-        token: session.join_token
-      }
+        token: session.join_token,
+      },
     });
-  } catch (err: any) {
-    let msg = err?.message || "激活邀请失败，请稍后重试。";
-    // 尝试从 API 报错中提取纯文字信息，移除 HTTP 状态码和 JSON 结构
-    if (msg.includes('{')) {
-      try {
-        const jsonStr = msg.substring(msg.indexOf('{'));
-        const errData = JSON.parse(jsonStr);
-        if (errData?.error?.message) {
-          msg = errData.error.message;
-        }
-      } catch (e) {
-        // ignore
-      }
-    }
-    // 移除括号及其中的英文提示（如: (Single-use link already consumed)）
-    errorText.value = msg.replace(/\s*\(.*\)\s*/, "").trim();
+  } catch (err) {
+    const message = String((err as { message?: string } | null)?.message || "").trim();
+    errorText.value = message || "Failed to activate invitation link.";
     loading.value = false;
   }
 });
@@ -50,11 +38,11 @@ onMounted(async () => {
   <div class="min-h-screen bg-slate-50 flex items-center justify-center px-6">
     <div class="w-full max-w-lg bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
       <div v-if="loading" class="space-y-3">
-        <h1 class="text-lg font-semibold text-slate-900">正在进入面试房间</h1>
-        <p class="text-sm text-slate-600">正在激活邀请链接并创建会话，请稍候...</p>
+        <h1 class="text-lg font-semibold text-slate-900">Preparing your interview room</h1>
+        <p class="text-sm text-slate-600">We are activating the invitation link. Please wait...</p>
       </div>
       <div v-else class="space-y-3">
-        <h1 class="text-lg font-semibold text-red-600">进入失败</h1>
+        <h1 class="text-lg font-semibold text-red-600">Unable to enter interview</h1>
         <p class="text-sm text-slate-700 break-all">{{ errorText }}</p>
       </div>
     </div>
