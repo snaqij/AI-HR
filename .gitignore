@@ -26,7 +26,7 @@ temp/
 *.p12
 *.pfx
 *.secrets
-*.secret
+
 
 # ---- Python ----
 __pycache__/
@@ -47,8 +47,8 @@ htmlcov/
 .nox/
 .venv/
 venv/
-ENV/
-env/
+
+
 build/
 dist/
 *.egg-info/
@@ -81,3 +81,4 @@ infra/sql/*.generated.sql
 
 # ---- Third-party SDK / heavy artifacts ----
 **/agora_rtc_sdk/
+
