@@ -1,4 +1,4 @@
-# AI-HR: 智能招聘自动化平台 (AI-Driven Recruitment Platform)
+ AI-HR: 智能招聘自动化平台 (AI-Driven Recruitment Platform)
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
@@ -154,7 +154,7 @@ npm install
 后端负责 API 提供、业务逻辑与任务调度。
 ```bash
 cd AI-HR
-# 确保已配置 .env.system 或 .env.secrets
+# 确保已配置 infra/env/.env.system 或 infra/env/.env.secrets
 uv run python -m ai_hr.main
 ```
 *   API 文档地址: `http://localhost:8000/docs`
@@ -165,7 +165,7 @@ uv run python -m ai_hr.main
 
 ```bash
 # 1. 打开 WSL 终端并进入 Agent 目录
-cd AI-HR/ten_agent
+cd runtime/ten_agent
 
 # 2. 部署与安装 (tman 方式)
 # 这会解析 manifest.json 并安装所有插件依赖
@@ -200,7 +200,7 @@ npm run dev
 
 ## ⚙️ 详细配置项说明
 
-项目采用环境变量驱动配置。你可以创建 `.env.system` 和 `.env.secrets` 文件。所有配置项前缀均为 `AI_HR_`。
+项目采用环境变量驱动配置。你可以创建 `infra/env/.env.system` 和 `infra/env/.env.secrets` 文件。所有配置项前缀均为 `AI_HR_`。
 
 ### 核心基础配置
 | 变量名 | 默认值 | 说明 |
@@ -237,7 +237,7 @@ npm run dev
 
 ## ⚠️ 注意事项
 
-- **凭据安全**: 请勿将 `.env.secrets` 提交至版本控制系统。
+- **凭据安全**: 请勿将 `infra/env/.env.secrets` 提交至版本控制系统。
 - **Provider 熔断**: 当第三方 AI 接口连续失败达到阈值时，系统会触发熔断保护，可通过 `AI_HR_PROVIDER_CIRCUIT_BREAKER_FAIL_THRESHOLD` 调整。
 
 ---

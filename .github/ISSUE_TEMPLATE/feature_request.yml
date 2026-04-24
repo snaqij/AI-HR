@@ -1,0 +1,42 @@
+name: Feature Request
+description: Propose an enhancement
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the proposal. Please describe the user value and expected impact.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      placeholder: One-sentence description of the feature
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem are we solving?
+      placeholder: Current limitation or pain point
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      placeholder: Describe the proposed design/behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      placeholder: List alternatives and tradeoffs
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and Risks
+      placeholder: Backward compatibility, migration, performance, security impact

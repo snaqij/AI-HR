@@ -8,6 +8,7 @@ Desktop.ini
 *.swo
 *~
 
+.kiro
 # ---- Logs / Runtime ----
 *.log
 *.pid
@@ -19,11 +20,6 @@ tmp/
 temp/
 
 # ---- Environment / Secrets ----
-.env
-.env.*
-!.env.example
-!frontend/.env.example
-!AI-HR/.env.example
 *.pem
 *.key
 *.crt
@@ -61,10 +57,10 @@ pip-wheel-metadata/
 
 # ---- Node / Frontend ----
 node_modules/
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-frontend/.cache/
+apps/frontend/node_modules/
+apps/frontend/dist/
+apps/frontend/.vite/
+apps/frontend/.cache/
 *.tsbuildinfo
 
 # ---- Database / Binary Artifacts ----
@@ -74,14 +70,14 @@ frontend/.cache/
 *.dat
 
 # ---- AI-HR generated/runtime ----
-AI-HR/ten_agent/.ten_sessions/
-AI-HR/ten_agent/ten_packages/system/
-AI-HR/ten_agent/agora_cache.db
-AI-HR/ten_agent/crash_context_v1/
-AI-HR/ten_agent/.cache/
-AI-HR/ten_agent/logs/
-AI-HR/ten_agent/tmp/
-AI-HR/sql/*.generated.sql
+runtime/ten_agent/.ten_sessions/
+runtime/ten_agent/ten_packages/system/
+runtime/ten_agent/agora_cache.db
+runtime/ten_agent/crash_context_v1/
+runtime/ten_agent/.cache/
+runtime/ten_agent/logs/
+runtime/ten_agent/tmp/
+infra/sql/*.generated.sql
 
 # ---- Third-party SDK / heavy artifacts ----
 **/agora_rtc_sdk/

@@ -1,0 +1,155 @@
+# Civil Servant role configuration
+
+version: "1.0"
+extends: "_base"
+
+role:
+  id: "civil_servant"
+  family: "government"
+  display_name:
+    zh: "公务员"
+    en: "Civil Servant"
+  
+  match_rules:
+    keywords:
+      - "公务员"
+      - "civil servant"
+      - "government"
+      - "行政"
+      - "政府"
+      - "机关"
+      - "事业单位"
+    skills:
+      - "公文写作"
+      - "政策理解"
+      - "组织协调"
+      - "应急处理"
+      - "群众工作"
+      - "调研分析"
+
+# Role-specific competencies
+role_competencies:
+  political_literacy:
+    weight: 0.25
+    description: "政治素养"
+    evidence_types:
+      - "political_theory"
+      - "policy_understanding"
+      - "party_awareness"
+      - "value_orientation"
+  
+  comprehensive_analysis:
+    weight: 0.25
+    description: "综合分析能力"
+    evidence_types:
+      - "problem_analysis"
+      - "logical_thinking"
+      - "policy_interpretation"
+      - "situation_judgment"
+  
+  organization_coordination:
+    weight: 0.25
+    description: "组织协调能力"
+    evidence_types:
+      - "activity_planning"
+      - "resource_coordination"
+      - "team_collaboration"
+      - "stakeholder_management"
+  
+  adaptability:
+    weight: 0.15
+    description: "应变能力"
+    evidence_types:
+      - "emergency_response"
+      - "conflict_resolution"
+      - "pressure_handling"
+      - "flexible_thinking"
+  
+  service_awareness:
+    weight: 0.10
+    description: "服务意识"
+    evidence_types:
+      - "people_oriented"
+      - "service_quality"
+      - "communication_skills"
+      - "empathy"
+
+# Stage weights
+stage_weights:
+  S1: 0.05
+  S2: 0.25
+  S3: 0.30
+  S4: 0.35
+  S5: 0.05
+  # S6-S8: Triggered as needed or fixed process
+
+# Question generation strategy
+question_generation:
+  distribution:
+    from_resume: 0.50
+    from_jd: 0.40
+    from_template: 0.10
+  
+  anchor_project:
+    required: true
+    min_duration_months: 2
+
+# Follow-up strategy
+followup_strategy:
+  max_per_question: 3
+  evidence_threshold: 0.70
+  priority:
+    - "political_literacy"
+    - "comprehensive_analysis"
+    - "organization_coordination"
+    - "adaptability"
+
+# Prompt enhancements
+prompt_enhancements:
+  role_context: |
+    候选人应聘公务员岗位。请重点评估其：
+    1. 政治素养：政治理论水平和政策理解能力
+    2. 综合分析：问题分析和逻辑思维能力
+    3. 组织协调：活动策划和资源协调能力
+    4. 应变能力：应急处理和冲突解决能力
+    5. 服务意识：群众工作和服务质量意识
+  
+  question_focus: |
+    题目应围绕候选人的工作经历和实践案例，重点关注：
+    - 政治理论学习和政策理解
+    - 复杂问题的分析和解决
+    - 组织活动和协调资源的经验
+    - 应对突发事件和处理矛盾的能力
+    - 服务群众和沟通协调的案例
+    - 公文写作和调研分析能力
+  
+  followup_focus: |
+    追问应深入考察实际工作能力：
+    - 如何理解和执行政策
+    - 如何分析和解决复杂问题
+    - 如何组织协调各方资源
+    - 如何应对突发情况和压力
+    - 如何做好群众工作和服务
+    - 如何进行调研和撰写报告
+
+# Civil servant-specific assessment criteria
+assessment_criteria:
+  political_stance:
+    description: "政治立场坚定，拥护党的领导"
+    weight: 0.20
+  
+  professional_ethics:
+    description: "职业道德良好，廉洁自律"
+    weight: 0.15
+  
+  work_ability:
+    description: "工作能力突出，执行力强"
+    weight: 0.30
+  
+  learning_ability:
+    description: "学习能力强，适应性好"
+    weight: 0.20
+  
+  communication_skills:
+    description: "沟通协调能力强，团队合作意识好"
+    weight: 0.15
