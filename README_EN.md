@@ -116,7 +116,7 @@ uv run python -m ai_hr.main
 > **Must run in WSL or Linux environment**.
 
 ```bash
-cd /path/to/AI-HR/ten_agent
+cd AI-HR/ten_agent
 tman install
 tman run start
 
