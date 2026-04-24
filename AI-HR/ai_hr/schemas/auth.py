@@ -49,6 +49,23 @@ class WorkspaceSummary(BaseModel):
     status: str
 
 
+class WorkspaceDetail(BaseModel):
+    """Detailed workspace profile used by settings pages."""
+
+    id: str
+    workspace_code: str
+    name: str
+    role: str
+    status: str
+    plan_code: str
+    owner_user_id: str
+    owner_display_name: str | None = None
+    owner_email: str | None = None
+    member_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
 class AuthSessionPayload(BaseModel):
     """Issued access token payload."""
 
@@ -107,8 +124,57 @@ class WorkspaceCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
 
 
+class WorkspaceUpdateRequest(BaseModel):
+    """Update workspace metadata."""
+
+    name: str = Field(min_length=1, max_length=128)
+
+
 class WorkspaceCreateResponse(BaseModel):
     """Workspace creation response."""
 
     workspace: WorkspaceSummary
     created_at: datetime
+
+
+class WorkspaceMemberSummary(BaseModel):
+    """Workspace member summary for team management."""
+
+    id: str
+    user_id: str
+    display_name: str
+    email: str
+    avatar_url: str | None = None
+    role: str
+    status: str
+    is_current_user: bool = False
+    joined_at: datetime | None = None
+    last_active_at: datetime | None = None
+
+
+class WorkspaceMemberListResponse(BaseModel):
+    """Workspace member list response."""
+
+    workspace_id: str
+    total: int
+    items: list[WorkspaceMemberSummary]
+
+
+class WorkspaceMemberInviteRequest(BaseModel):
+    """Add an existing platform user into the current workspace."""
+
+    email: str = Field(min_length=5, max_length=320)
+    role: str = Field(default="recruiter", min_length=3, max_length=32)
+
+
+class WorkspaceMemberUpdateRequest(BaseModel):
+    """Update an existing workspace member."""
+
+    role: str = Field(min_length=3, max_length=32)
+
+
+class WorkspaceMemberRemoveResponse(BaseModel):
+    """Workspace member remove response."""
+
+    member_id: str
+    removed: bool = True

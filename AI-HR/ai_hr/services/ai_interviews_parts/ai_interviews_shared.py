@@ -120,9 +120,7 @@ from ..ten_runtime import TENRuntimeManager
 from ..enterprise_assessment import EnterpriseAssessmentService, get_enterprise_assessment_service
 
 # NOTE: cleaned mojibake comment.
-# NOTE: cleaned mojibake comment.
-# NOTE: cleaned mojibake comment.
-# NOTE: cleaned mojibake comment.
+
 _PROVIDER_SINGLETON_LOCK = threading.Lock()
 _ASR_PROVIDER_SINGLETON: "ASRProvider | None" = None
 _TTS_PROVIDER_SINGLETON: "TTSProvider | None" = None

@@ -29,6 +29,9 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "ruff>=0.11.0",
 ]
+boss-live = [
+    "playwright>=1.51.0",
+]
 
 [project.scripts]
 ai-hr-api = "ai_hr.main:run"

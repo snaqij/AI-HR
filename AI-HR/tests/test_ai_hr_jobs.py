@@ -5,10 +5,9 @@ import os
 os.environ["AI_HR_BOSS_MODE"] = "mock"
 os.environ["AI_HR_ENV_FILE"] = ""
 
-from fastapi.testclient import TestClient
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy import select
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 

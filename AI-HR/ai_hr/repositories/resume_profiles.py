@@ -1,27 +1,24 @@
-"""简历画像仓储实现。"""
+"""Resume profile repository."""
 
 from __future__ import annotations
-
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
-
 from ..db.models import CandidateResumeProfile, CandidateResumeRisk
 
 
 class ResumeProfileRepository:
-    """封装简历解析结果与风险标签的持久化读写。"""
+    """Handles persistence for resume parse results and risk tags."""
 
     def __init__(self, session: Session):
-        """使用当前数据库会话初始化仓储。"""
         self._session = session
 
     def get_profile(self, candidate_id: str) -> CandidateResumeProfile | None:
-        """按候选人 ID 获取简历画像。"""
+        """Return the resume profile for a candidate, or None if not found."""
         stmt = select(CandidateResumeProfile).where(CandidateResumeProfile.candidate_id == candidate_id)
         return self._session.execute(stmt).scalar_one_or_none()
 
     def list_risks(self, candidate_id: str) -> list[CandidateResumeRisk]:
-        """按候选人 ID 列出风险标签。"""
+        """Return all risk tags for a candidate."""
         stmt = select(CandidateResumeRisk).where(CandidateResumeRisk.candidate_id == candidate_id)
         return list(self._session.execute(stmt).scalars().all())
 
@@ -36,7 +33,7 @@ class ResumeProfileRepository:
         parser_version: str,
         confidence: float,
     ) -> CandidateResumeProfile:
-        """新增或更新简历画像。"""
+        """Insert or update a resume profile."""
         profile = self.get_profile(candidate_id)
         if profile is None:
             profile = CandidateResumeProfile(
@@ -60,7 +57,7 @@ class ResumeProfileRepository:
         return profile
 
     def replace_risks(self, *, candidate_id: str, risks: list[dict[str, str]]) -> list[CandidateResumeRisk]:
-        """替换候选人的风险标签集合。"""
+        """Replace all risk tags for a candidate."""
         self._session.execute(delete(CandidateResumeRisk).where(CandidateResumeRisk.candidate_id == candidate_id))
         entities: list[CandidateResumeRisk] = []
         for item in risks:
@@ -74,4 +71,3 @@ class ResumeProfileRepository:
             entities.append(entity)
         self._session.flush()
         return entities
-

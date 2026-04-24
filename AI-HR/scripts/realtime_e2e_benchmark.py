@@ -77,7 +77,7 @@ def _create_demo_entities(base_url: str) -> tuple[str, str, str, str]:
             "department": "Engineering",
             "city": "Shanghai",
             "salary_range": "35k-50k",
-            "requirements": "Python FastAPI 流式语音",
+            "requirements": "Python FastAPI streaming voice",
         },
     )
     job_id = job["data"]["id"]
@@ -92,7 +92,7 @@ def _create_demo_entities(base_url: str) -> tuple[str, str, str, str]:
                     "name": "Benchmark Candidate",
                     "source_channel": "benchmark",
                     "external_candidate_id": f"bench-{ts}",
-                    "resume_text": "5年后端经验，负责过语音交互链路优化。",
+                    "resume_text": "5 years of backend experience, led voice interaction pipeline optimization.",
                     "raw_profile": {"skills": ["Python", "ASR", "TTS", "LLM"]},
                 }
             ]

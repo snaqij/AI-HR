@@ -1,4 +1,4 @@
-"""岗位同步任务与执行流水 schema。"""
+"""Job sync task and run schemas."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class JobSyncTaskUpsertRequest(BaseModel):
-    """创建或更新定时同步任务。"""
+    """Create or update a scheduled sync task."""
 
     channel: str = Field(default="boss", min_length=1, max_length=64)
     enabled: bool = True
@@ -21,7 +21,7 @@ class JobSyncTaskUpsertRequest(BaseModel):
 
 
 class JobSyncTaskResponse(BaseModel):
-    """定时同步任务响应。"""
+    """Scheduled sync task response."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,7 +43,7 @@ class JobSyncTaskResponse(BaseModel):
 
 
 class JobSyncRunResponse(BaseModel):
-    """同步执行流水响应。"""
+    """Sync run record response."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -67,7 +67,7 @@ class JobSyncRunResponse(BaseModel):
 
 
 class JobSyncTaskExecuteResult(BaseModel):
-    """手动触发定时任务结果。"""
+    """Result of manually triggering a scheduled sync task."""
 
     task: JobSyncTaskResponse
     run: JobSyncRunResponse
@@ -75,14 +75,14 @@ class JobSyncTaskExecuteResult(BaseModel):
 
 
 class JobSyncTaskListResult(BaseModel):
-    """岗位同步任务列表。"""
+    """List of sync tasks for a job."""
 
     job_id: str
     tasks: list[JobSyncTaskResponse]
 
 
 class JobSyncRunListResult(BaseModel):
-    """岗位同步流水列表。"""
+    """List of sync run records for a job."""
 
     job_id: str
     runs: list[JobSyncRunResponse]

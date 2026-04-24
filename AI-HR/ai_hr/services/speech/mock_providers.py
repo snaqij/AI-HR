@@ -1,4 +1,4 @@
-"""Mock 语音 Provider。"""
+"""Mock speech providers."""
 
 from __future__ import annotations
 

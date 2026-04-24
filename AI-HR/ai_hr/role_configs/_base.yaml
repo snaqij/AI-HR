@@ -1,5 +1,5 @@
-# 基础岗位配置
-# 所有岗位配置都应该继承此基础配置
+# Base role configuration
+# All role configurations should inherit from this base config
 
 version: "1.0"
 
@@ -10,7 +10,7 @@ role:
     zh: "通用岗位"
     en: "General Role"
 
-# 通用能力（所有岗位共有）
+# Universal competencies (common to all roles)
 universal_competencies:
   ownership:
     weight: 0.20
@@ -52,19 +52,19 @@ universal_competencies:
       - "flexibility"
       - "resilience"
 
-# 默认阶段权重
-# 注意：S1-S8是完整的面试流程，这里只配置主要阶段的权重
+# Default stage weights
+# Note: S1-S8 is the complete interview process, only main stage weights are configured here
 stage_weights:
-  S1: 0.10  # 开场破冰
-  S2: 0.15  # 简历验证
-  S3: 0.35  # 深度追问
-  S4: 0.30  # 能力评估
-  S5: 0.10  # 收尾总结
-  # S6: 综合能力补充（按需触发）
-  # S7: 公司介绍与反问（固定流程）
-  # S8: 收尾（固定流程）
+  S1: 0.10  # Opening icebreaker
+  S2: 0.15  # Resume verification
+  S3: 0.35  # Deep dive questioning
+  S4: 0.30  # Competency assessment
+  S5: 0.10  # Closing summary
+  # S6: Comprehensive competency supplement (triggered as needed)
+  # S7: Company introduction and Q&A (fixed process)
+  # S8: Closing (fixed process)
 
-# 题目生成策略
+# Question generation strategy
 question_generation:
   distribution:
     from_resume: 0.60
@@ -75,7 +75,7 @@ question_generation:
     required: true
     min_duration_months: 3
 
-# 追问策略
+# Followup strategy
 followup_strategy:
   max_per_question: 3
   evidence_threshold: 0.7
@@ -85,7 +85,7 @@ followup_strategy:
     - "problem_solving"
     - "impact"
 
-# Prompt增强
+# Prompt enhancements
 prompt_enhancements:
   role_context: |
     这是一场通用岗位的面试。请根据候选人的背景和经历，

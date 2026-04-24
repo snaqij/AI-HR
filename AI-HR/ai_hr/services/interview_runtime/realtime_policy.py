@@ -45,49 +45,49 @@ STAGE_REALTIME_POLICIES: dict[str, StageRealtimePolicy] = {
         allow_prefetch=False,
     ),
     "S2": StageRealtimePolicy(
-        soft_pause_ms=1200,           # 1.2s: inter-sentence natural pause threshold (was 800ms)
-        likely_done_ms=2000,          # 4s: likely done after 4s of silence (was 2.5s)
-        hard_done_ms=3000,            # 8s: hard-finalize after 8s silence (was 4.5s)
-        max_force_finalize_ms=4000,  # 18s: must stay below NLS server-side 23s timeout to prevent TaskFailed cascade (was 25s)
-        resume_grace_ms=400,          # 400ms: post-resume guard window (was 600ms) — trimmed to cut initial finalize sleep
-        min_speaking_hold_ms=6000,    # 6s accumulated speech before finalize allowed (was 3.5s)
+        soft_pause_ms=1200,
+        likely_done_ms=2000,
+        hard_done_ms=3000,
+        max_force_finalize_ms=3000,
+        resume_grace_ms=400,
+        min_speaking_hold_ms=6000,
         commit_guard_ms=700,
         allow_prefetch=False,
     ),
-    # S3 - Technical Stack Questions: generous timeouts to handle thinking pauses.
-    # Candidates often pause mid-answer when recalling implementation details.
+
     "S3": StageRealtimePolicy(
         soft_pause_ms=800,
-        likely_done_ms=2000,          # 2s: was 2.5s; technical stack pauses rarely exceed 2s mid-sentence
+        likely_done_ms=2000,
         hard_done_ms=4500,
-        max_force_finalize_ms=4000,
-        resume_grace_ms=350,          # 350ms: was 500ms — trimmed to cut initial finalize sleep
-        min_speaking_hold_ms=2000,    # aligned with new likely_done_ms
+        max_force_finalize_ms=3000,
+        resume_grace_ms=350,
+        min_speaking_hold_ms=2000,
         commit_guard_ms=700,
         allow_prefetch=False,
     ),
-    # S4 - Deep Technical Questions: even more conservative, complex answers take time.
+
     "S4": StageRealtimePolicy(
         soft_pause_ms=1000,
         likely_done_ms=3000,
         hard_done_ms=5000,
-        max_force_finalize_ms=5000,
-        resume_grace_ms=400,          # 400ms: was 600ms — trimmed to cut initial finalize sleep
+        max_force_finalize_ms=4000,
+        resume_grace_ms=400,
         min_speaking_hold_ms=4000,
         commit_guard_ms=900,
         allow_prefetch=False,
     ),
-    # S5 - System Design / Architecture: extended timeouts for high-level thinking.
+
     "S5": StageRealtimePolicy(
         soft_pause_ms=900,
         likely_done_ms=2800,
         hard_done_ms=4800,
-        max_force_finalize_ms=5000,
-        resume_grace_ms=400,          # 400ms: was 550ms — trimmed to cut initial finalize sleep
+        max_force_finalize_ms=4000,
+        resume_grace_ms=400,
         min_speaking_hold_ms=3500,
         commit_guard_ms=800,
         allow_prefetch=False,
     ),
+
     "S6": StageRealtimePolicy(
         soft_pause_ms=840,
         likely_done_ms=1400,
@@ -98,6 +98,7 @@ STAGE_REALTIME_POLICIES: dict[str, StageRealtimePolicy] = {
         commit_guard_ms=850,
         allow_prefetch=False,
     ),
+
     "S7": StageRealtimePolicy(
         soft_pause_ms=700,
         likely_done_ms=1260,
@@ -108,6 +109,7 @@ STAGE_REALTIME_POLICIES: dict[str, StageRealtimePolicy] = {
         commit_guard_ms=700,
         allow_prefetch=False,
     ),
+
     "S8": StageRealtimePolicy(
         soft_pause_ms=420,
         likely_done_ms=700,

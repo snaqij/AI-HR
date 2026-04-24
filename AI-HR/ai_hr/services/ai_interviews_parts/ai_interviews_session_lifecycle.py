@@ -391,8 +391,6 @@ class AIInterviewSessionLifecycleMixin:
 
             # Only mark as finalized if we are processing a candidate's authoritative turn
             if payload.speaker == SpeakerRole.CANDIDATE and (payload.transcript or "").strip():
-                # We only mark it as fully 'done' if we are about to trigger the orchestrator
-                # Note: seq is added to the set after we are SURE this is a meaningful final turn.
                 seq_set.add(payload.seq)
 
         if self._session_repository.is_event_seen(session_id=session_id, event_id=payload.event_id):

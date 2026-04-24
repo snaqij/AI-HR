@@ -25,7 +25,18 @@ from ..core.auth_utils import (
 from ..core.config import get_settings
 from ..core.exceptions import InvalidStateError, ResourceNotFoundError
 from ..db.models import PlatformEmailVerificationCode, PlatformUser, PlatformUserSession, TeamWorkspace, TeamWorkspaceMember
-from ..schemas.auth import LoginRequest, SendRegisterEmailCodeResponse, WorkspaceCreateRequest, WorkspaceSummary
+from ..schemas.auth import (
+    LoginRequest,
+    SendRegisterEmailCodeResponse,
+    WorkspaceCreateRequest,
+    WorkspaceDetail,
+    WorkspaceMemberInviteRequest,
+    WorkspaceMemberListResponse,
+    WorkspaceMemberSummary,
+    WorkspaceMemberUpdateRequest,
+    WorkspaceSummary,
+    WorkspaceUpdateRequest,
+)
 
 
 @dataclass(slots=True)
@@ -280,39 +291,12 @@ class AuthService:
         rows = list(self._session.execute(stmt).all())
         items: list[WorkspaceSummary] = []
         for member, workspace in rows:
-            items.append(
-                WorkspaceSummary(
-                    id=workspace.id,
-                    workspace_code=workspace.workspace_code,
-                    name=workspace.name,
-                    role=member.role,
-                    status=workspace.status,
-                )
-            )
+            items.append(self._build_workspace_summary(member=member, workspace=workspace))
         return items
 
     def ensure_workspace_access(self, *, user_id: str, workspace_id: str) -> WorkspaceSummary:
-        row = self._session.execute(
-            select(TeamWorkspaceMember, TeamWorkspace)
-            .join(TeamWorkspace, TeamWorkspace.id == TeamWorkspaceMember.workspace_id)
-            .where(
-                TeamWorkspaceMember.user_id == user_id,
-                TeamWorkspaceMember.workspace_id == workspace_id,
-                TeamWorkspaceMember.status == "active",
-                TeamWorkspace.status == "active",
-            )
-            .limit(1)
-        ).first()
-        if row is None:
-            raise ResourceNotFoundError("Workspace not found or access denied")
-        member, workspace = row
-        return WorkspaceSummary(
-            id=workspace.id,
-            workspace_code=workspace.workspace_code,
-            name=workspace.name,
-            role=member.role,
-            status=workspace.status,
-        )
+        member, workspace, _ = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        return self._build_workspace_summary(member=member, workspace=workspace)
 
     def create_workspace_for_user(self, *, user_id: str, payload: WorkspaceCreateRequest) -> WorkspaceSummary:
         workspace = self._create_workspace_for_user(user_id=user_id, workspace_name=payload.name)
@@ -328,13 +312,306 @@ class AuthService:
             )
         )
         self._session.commit()
+        return self._build_workspace_summary(
+            member=TeamWorkspaceMember(role="workspace_owner", status="active"),
+            workspace=workspace,
+        )
+
+    def get_workspace_detail(self, *, user_id: str, workspace_id: str) -> WorkspaceDetail:
+        member, workspace, owner = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        return self._build_workspace_detail(member=member, workspace=workspace, owner=owner)
+
+    def update_workspace(
+        self,
+        *,
+        user_id: str,
+        workspace_id: str,
+        payload: WorkspaceUpdateRequest,
+    ) -> WorkspaceDetail:
+        member, workspace, owner = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        self._ensure_workspace_owner(member)
+
+        normalized_name = str(payload.name or "").strip()
+        if not normalized_name:
+            raise InvalidStateError("Workspace name is required")
+
+        workspace.name = normalized_name[:128]
+        self._session.commit()
+        self._session.refresh(workspace)
+        return self._build_workspace_detail(member=member, workspace=workspace, owner=owner)
+
+    def list_workspace_members(self, *, user_id: str, workspace_id: str) -> WorkspaceMemberListResponse:
+        _, workspace, _ = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        members = list(
+            self._session.execute(
+                select(TeamWorkspaceMember).where(
+                    TeamWorkspaceMember.workspace_id == workspace.id,
+                    TeamWorkspaceMember.status == "active",
+                )
+            ).scalars().all()
+        )
+
+        items: list[WorkspaceMemberSummary] = []
+        for member in members:
+            user = self._get_platform_user_by_id(member.user_id)
+            if user is None:
+                continue
+            items.append(self._build_workspace_member_summary(member=member, user=user, current_user_id=user_id))
+        role_order = {"workspace_owner": 0, "admin": 1, "recruiter": 2, "viewer": 3}
+        items.sort(key=lambda item: (role_order.get(item.role, 99), item.display_name.lower(), item.email.lower()))
+        return WorkspaceMemberListResponse(workspace_id=workspace.id, total=len(items), items=items)
+
+    def add_workspace_member(
+        self,
+        *,
+        user_id: str,
+        workspace_id: str,
+        payload: WorkspaceMemberInviteRequest,
+    ) -> WorkspaceMemberSummary:
+        member, workspace, _ = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        self._ensure_workspace_owner(member)
+
+        normalized_email = normalize_email(payload.email)
+        role = self._normalize_workspace_role(payload.role)
+
+        target_user = self._session.execute(
+            select(PlatformUser).where(
+                PlatformUser.email_normalized == normalized_email,
+                PlatformUser.status == "active",
+            )
+        ).scalars().first()
+        if target_user is None:
+            raise InvalidStateError("The invited member must register an account first")
+
+        existing_member = self._session.execute(
+            select(TeamWorkspaceMember).where(
+                TeamWorkspaceMember.workspace_id == workspace.id,
+                TeamWorkspaceMember.user_id == target_user.id,
+            )
+        ).scalars().first()
+        if existing_member is not None:
+            if existing_member.status == "active":
+                raise InvalidStateError("This user is already a member of the workspace")
+            existing_member.status = "active"
+            existing_member.role = role
+            existing_member.invited_by_user_id = user_id
+            existing_member.joined_at = existing_member.joined_at or _now()
+            existing_member.permissions_json = existing_member.permissions_json or {}
+            target_member = existing_member
+        else:
+            target_member = TeamWorkspaceMember(
+                workspace_id=workspace.id,
+                user_id=target_user.id,
+                role=role,
+                status="active",
+                invited_by_user_id=user_id,
+                joined_at=_now(),
+                permissions_json={},
+            )
+            self._session.add(target_member)
+            self._session.flush()
+
+        self._session.commit()
+        self._session.refresh(target_member)
+        return self._build_workspace_member_summary(
+            member=target_member,
+            user=target_user,
+            current_user_id=user_id,
+        )
+
+    def update_workspace_member(
+        self,
+        *,
+        user_id: str,
+        workspace_id: str,
+        member_id: str,
+        payload: WorkspaceMemberUpdateRequest,
+    ) -> WorkspaceMemberSummary:
+        requester, workspace, _ = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        self._ensure_workspace_owner(requester)
+
+        target_member, target_user = self._get_workspace_member_binding(workspace_id=workspace.id, member_id=member_id)
+        if target_member.status != "active":
+            raise InvalidStateError("Only active members can be updated")
+        if target_member.user_id == user_id:
+            raise InvalidStateError("You cannot modify your own workspace role")
+
+        next_role = self._normalize_workspace_role(payload.role)
+        if target_member.role == "workspace_owner" and next_role != "workspace_owner":
+            replacement_owner_id = self._find_replacement_workspace_owner(
+                workspace_id=workspace.id,
+                excluding_user_id=target_member.user_id,
+            )
+            if replacement_owner_id is None:
+                raise InvalidStateError("At least one workspace owner must remain")
+            if workspace.owner_user_id == target_member.user_id:
+                workspace.owner_user_id = replacement_owner_id
+
+        target_member.role = next_role
+        self._session.commit()
+        self._session.refresh(target_member)
+        self._session.refresh(workspace)
+        return self._build_workspace_member_summary(
+            member=target_member,
+            user=target_user,
+            current_user_id=user_id,
+        )
+
+    def remove_workspace_member(self, *, user_id: str, workspace_id: str, member_id: str) -> bool:
+        requester, workspace, _ = self._get_workspace_binding(user_id=user_id, workspace_id=workspace_id)
+        self._ensure_workspace_owner(requester)
+
+        target_member, _ = self._get_workspace_member_binding(workspace_id=workspace.id, member_id=member_id)
+        if target_member.user_id == user_id:
+            raise InvalidStateError("You cannot remove yourself from the workspace")
+        if target_member.status != "active":
+            raise InvalidStateError("This member is already inactive")
+
+        if target_member.role == "workspace_owner":
+            replacement_owner_id = self._find_replacement_workspace_owner(
+                workspace_id=workspace.id,
+                excluding_user_id=target_member.user_id,
+            )
+            if replacement_owner_id is None:
+                raise InvalidStateError("At least one workspace owner must remain")
+            if workspace.owner_user_id == target_member.user_id:
+                workspace.owner_user_id = replacement_owner_id
+
+        target_member.status = "removed"
+        self._session.commit()
+        return True
+
+    def _build_workspace_summary(self, *, member: TeamWorkspaceMember, workspace: TeamWorkspace) -> WorkspaceSummary:
         return WorkspaceSummary(
             id=workspace.id,
             workspace_code=workspace.workspace_code,
             name=workspace.name,
-            role="workspace_owner",
+            role=member.role,
             status=workspace.status,
         )
+
+    def _build_workspace_detail(
+        self,
+        *,
+        member: TeamWorkspaceMember,
+        workspace: TeamWorkspace,
+        owner: PlatformUser | None,
+    ) -> WorkspaceDetail:
+        member_count = len(
+            self._session.execute(
+                select(TeamWorkspaceMember.id).where(
+                    TeamWorkspaceMember.workspace_id == workspace.id,
+                    TeamWorkspaceMember.status == "active",
+                )
+            ).all()
+        )
+        return WorkspaceDetail(
+            id=workspace.id,
+            workspace_code=workspace.workspace_code,
+            name=workspace.name,
+            role=member.role,
+            status=workspace.status,
+            plan_code=workspace.plan_code,
+            owner_user_id=workspace.owner_user_id,
+            owner_display_name=owner.display_name if owner is not None else None,
+            owner_email=owner.email if owner is not None else None,
+            member_count=member_count,
+            created_at=workspace.created_at,
+            updated_at=workspace.updated_at,
+        )
+
+    def _build_workspace_member_summary(
+        self,
+        *,
+        member: TeamWorkspaceMember,
+        user: PlatformUser,
+        current_user_id: str,
+    ) -> WorkspaceMemberSummary:
+        display_name = str(user.display_name or "").strip() or user.email
+        return WorkspaceMemberSummary(
+            id=member.id,
+            user_id=user.id,
+            display_name=display_name,
+            email=user.email,
+            avatar_url=user.avatar_url,
+            role=member.role,
+            status=member.status,
+            is_current_user=user.id == current_user_id,
+            joined_at=member.joined_at or member.created_at,
+            last_active_at=member.last_active_at or user.last_login_at,
+        )
+
+    def _get_workspace_binding(
+        self,
+        *,
+        user_id: str,
+        workspace_id: str,
+    ) -> tuple[TeamWorkspaceMember, TeamWorkspace, PlatformUser | None]:
+        row = self._session.execute(
+            select(TeamWorkspaceMember, TeamWorkspace)
+            .join(TeamWorkspace, TeamWorkspace.id == TeamWorkspaceMember.workspace_id)
+            .where(
+                TeamWorkspaceMember.user_id == user_id,
+                TeamWorkspaceMember.workspace_id == workspace_id,
+                TeamWorkspaceMember.status == "active",
+                TeamWorkspace.status == "active",
+            )
+            .limit(1)
+        ).first()
+        if row is None:
+            raise ResourceNotFoundError("Workspace not found or access denied")
+        member, workspace = row
+        owner = self._get_platform_user_by_id(workspace.owner_user_id)
+        return member, workspace, owner
+
+    def _get_workspace_member_binding(self, *, workspace_id: str, member_id: str) -> tuple[TeamWorkspaceMember, PlatformUser]:
+        member = self._session.execute(
+            select(TeamWorkspaceMember)
+            .where(
+                TeamWorkspaceMember.workspace_id == workspace_id,
+                TeamWorkspaceMember.id == member_id,
+            )
+            .limit(1)
+        ).scalars().first()
+        if member is None:
+            raise ResourceNotFoundError("Workspace member was not found")
+        user = self._get_platform_user_by_id(member.user_id)
+        if user is None:
+            raise ResourceNotFoundError("Platform user was not found")
+        return member, user
+
+    def _get_platform_user_by_id(self, user_id: str | None) -> PlatformUser | None:
+        normalized = str(user_id or "").strip()
+        if not normalized:
+            return None
+        return self._session.get(PlatformUser, normalized)
+
+    def _find_replacement_workspace_owner(self, *, workspace_id: str, excluding_user_id: str) -> str | None:
+        replacement = self._session.execute(
+            select(TeamWorkspaceMember.user_id)
+            .where(
+                TeamWorkspaceMember.workspace_id == workspace_id,
+                TeamWorkspaceMember.user_id != excluding_user_id,
+                TeamWorkspaceMember.role == "workspace_owner",
+                TeamWorkspaceMember.status == "active",
+            )
+            .limit(1)
+        ).first()
+        if replacement is None:
+            return None
+        return str(replacement[0] or "").strip() or None
+
+    @staticmethod
+    def _ensure_workspace_owner(member: TeamWorkspaceMember) -> None:
+        if member.role != "workspace_owner":
+            raise InvalidStateError("Only workspace owners can manage organization settings")
+
+    @staticmethod
+    def _normalize_workspace_role(role: str) -> str:
+        normalized = str(role or "").strip().lower()
+        if normalized not in {"workspace_owner", "admin", "recruiter", "viewer"}:
+            raise InvalidStateError("Unsupported workspace role")
+        return normalized
 
     def _issue_session_tokens(
         self,

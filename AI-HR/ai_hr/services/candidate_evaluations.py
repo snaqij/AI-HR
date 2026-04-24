@@ -1,4 +1,4 @@
-"""Detailed candidate evaluation services."""
+﻿"""Detailed candidate evaluation services."""
 
 from __future__ import annotations
 
@@ -8,9 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-
 from sqlalchemy.orm import Session
-
 from ..core.config import get_settings
 from ..core.exceptions import ConnectorOperationError, InvalidStateError
 from ..domain.constants import PromptTaskKey
@@ -283,6 +281,9 @@ class CandidateEvaluationService:
             dimension_scores={k: float(v) for k, v in dict(merged["dimension_scores"]).items()},
             summary=str(merged["summary"]),
         )
+        if job_link.stage in {"new", "parsed"}:
+            job_link.stage = "screen_pass" if float(merged["final_score"]) >= 70 else "parsed"
+
         self._scoring_repository.upsert_job_score(
             candidate_id=candidate_id,
             job_id=job_id,
@@ -581,9 +582,9 @@ class CandidateEvaluationService:
 
         weaknesses: list[str] = []
         if not matched_skills and required_skills:
-            weaknesses.append("关键岗位技能缺少直接证据支撑")
+            weaknesses.append("关键岗位技能缺少直接证据支持")
         if stability_score < 65:
-            weaknesses.append("职业稳定性存在不确定性，需要面试进一步核验")
+            weaknesses.append("职业稳定性存在不确定性，需要面试进一步核实")
         if project_relevance < 60:
             weaknesses.append("项目经历与目标业务场景相关性不足")
         if internship_score < 55:
@@ -1175,7 +1176,7 @@ class CandidateEvaluationService:
         matched_skills: list[str],
         weaknesses: list[str],
     ) -> str:
-        strengths_text = f"技能重合点集中在 {', '.join(matched_skills[:3])}" if matched_skills else "技能重合证据偏弱"
+        strengths_text = f"技能重合点集中在：{', '.join(matched_skills[:3])}" if matched_skills else "技能重合证据偏弱"
         weakness_text = f"；主要短板：{weaknesses[0]}" if weaknesses else ""
         return (
             f"综合评分 {final_score:.1f}，岗位匹配度 {match_score:.1f}，候选人竞争力 {competitiveness_score:.1f}。"

@@ -1,4 +1,4 @@
-# 公务员岗位配置
+# Civil Servant role configuration
 
 version: "1.0"
 extends: "_base"
@@ -27,7 +27,7 @@ role:
       - "群众工作"
       - "调研分析"
 
-# 岗位特定能力
+# Role-specific competencies
 role_competencies:
   political_literacy:
     weight: 0.25
@@ -74,16 +74,16 @@ role_competencies:
       - "communication_skills"
       - "empathy"
 
-# 阶段权重
+# Stage weights
 stage_weights:
   S1: 0.05
   S2: 0.25
   S3: 0.30
   S4: 0.35
   S5: 0.05
-  # S6-S8: 按需触发或固定流程
+  # S6-S8: Triggered as needed or fixed process
 
-# 题目生成策略
+# Question generation strategy
 question_generation:
   distribution:
     from_resume: 0.50

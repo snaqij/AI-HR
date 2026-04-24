@@ -1,8 +1,9 @@
-"""
-能力映射器单元测试
-"""
+"""Unit tests for CompetencyMapper."""
+
+from __future__ import annotations
 
 import pytest
+
 from ai_hr.services.role_strategy import CompetencyMapper, RoleConfigLoader
 
 

@@ -1,13 +1,14 @@
-"""
-岗位配置验证器
+"""Role config validator.
 
-提供配置文件的JSON Schema验证和业务规则验证功能。
+JSON Schema validation and business-rule validation for role config files.
 """
+
+from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Tuple
 
 try:
     import jsonschema
@@ -22,14 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class RoleConfigValidator:
-    """岗位配置验证器"""
+    """Role configuration validator."""
     
     def __init__(self, schema_path: str = None):
         """
-        初始化验证器
+        Initialize the validator.
         
         Args:
-            schema_path: JSON Schema文件路径，默认使用内置schema
+            schema_path: Path to the JSON Schema file, defaults to the built-in schema
         """
         self.schema = self._load_schema(schema_path)
         self.validator = None
@@ -38,9 +39,9 @@ class RoleConfigValidator:
             self.validator = Draft7Validator(self.schema)
     
     def _load_schema(self, schema_path: str = None) -> Dict:
-        """加载JSON Schema"""
+        """Load the JSON Schema."""
         if schema_path is None:
-            # 使用默认schema路径
+            # Use the default schema path
             current_dir = Path(__file__).parent.parent.parent
             schema_path = current_dir / "role_configs" / "schema.json"
         
@@ -53,26 +54,26 @@ class RoleConfigValidator:
     
     def validate(self, config: Dict, role_id: str = None) -> Tuple[bool, List[str]]:
         """
-        验证配置
+        Validate a config.
         
         Args:
-            config: 配置字典
-            role_id: 岗位ID（用于错误消息）
+            config: Config dict
+            role_id: Role ID (used in error messages)
         
         Returns:
-            (是否有效, 错误列表)
+            (is_valid, list of errors)
         """
         errors = []
         
-        # JSON Schema验证
+        # JSON Schema validation
         schema_errors = self._validate_schema(config)
         errors.extend(schema_errors)
         
-        # 业务规则验证
+        # Business rule validation
         business_errors = self._validate_business_rules(config)
         errors.extend(business_errors)
         
-        # 权重验证
+        # Weight validation
         weight_errors = self._validate_weights(config)
         errors.extend(weight_errors)
         
@@ -84,7 +85,7 @@ class RoleConfigValidator:
                 extra={
                     "role_id": role_id or config.get("role", {}).get("id", "unknown"),
                     "error_count": len(errors),
-                    "errors": errors[:5]  # 只记录前5个错误
+                    "errors": errors[:5]  # Log only the first 5 errors
                 }
             )
         
@@ -92,13 +93,13 @@ class RoleConfigValidator:
     
     def validate_file(self, file_path: str) -> Tuple[bool, List[str]]:
         """
-        验证配置文件
+        Validate a config file.
         
         Args:
-            file_path: 配置文件路径
+            file_path: Path to the config file
         
         Returns:
-            (是否有效, 错误列表)
+            (is_valid, list of errors)
         """
         try:
             import yaml
@@ -112,7 +113,7 @@ class RoleConfigValidator:
             return False, [f"Failed to load file: {str(e)}"]
     
     def _validate_schema(self, config: Dict) -> List[str]:
-        """JSON Schema验证"""
+        """JSON Schema validation."""
         if not JSONSCHEMA_AVAILABLE:
             logger.debug("jsonschema not available, skipping schema validation")
             return []
@@ -128,31 +129,31 @@ class RoleConfigValidator:
         return errors
     
     def _validate_business_rules(self, config: Dict) -> List[str]:
-        """业务规则验证"""
+        """Business rule validation."""
         errors = []
         
-        # 验证role字段
+        # Validate role field
         if "role" not in config:
             errors.append("Missing required field: role")
             return errors
         
         role = config["role"]
         
-        # 验证role_id格式
+        # Validate role_id format
         role_id = role.get("id", "")
         if not role_id:
             errors.append("role.id is required")
         elif not role_id.replace("_", "").isalnum():
             errors.append(f"role.id must contain only letters, numbers and underscores: {role_id}")
         
-        # 验证display_name
+        # Validate display_name
         display_name = role.get("display_name", {})
         if not isinstance(display_name, dict):
             errors.append("role.display_name must be an object")
         elif "zh" not in display_name or "en" not in display_name:
             errors.append("role.display_name must contain both 'zh' and 'en' fields")
         
-        # 验证match_rules（如果存在）
+        # Validate match_rules (if present)
         if "match_rules" in role:
             match_rules = role["match_rules"]
             if "keywords" in match_rules:
@@ -163,21 +164,21 @@ class RoleConfigValidator:
         return errors
 
     def _validate_weights(self, config: Dict) -> List[str]:
-        """验证权重总和"""
+        """Validate weight sums."""
         errors = []
         
-        # 验证通用能力权重总和
+        # Validate universal competency weights sum
         if "universal_competencies" in config:
             total = sum(
                 comp.get("weight", 0)
                 for comp in config["universal_competencies"].values()
             )
-            if abs(total - 1.0) > 0.01:  # 允许0.01的浮点误差
+            if abs(total - 1.0) > 0.01:  # Allow 0.01 floating-point tolerance
                 errors.append(
                     f"universal_competencies weights must sum to 1.0, got {total:.3f}"
                 )
         
-        # 验证岗位能力权重总和
+        # Validate role competency weights sum
         if "role_competencies" in config:
             total = sum(
                 comp.get("weight", 0)
@@ -188,7 +189,7 @@ class RoleConfigValidator:
                     f"role_competencies weights must sum to 1.0, got {total:.3f}"
                 )
         
-        # 验证阶段权重总和
+        # Validate stage weights sum
         if "stage_weights" in config:
             total = sum(config["stage_weights"].values())
             if abs(total - 1.0) > 0.01:
@@ -196,7 +197,7 @@ class RoleConfigValidator:
                     f"stage_weights must sum to 1.0, got {total:.3f}"
                 )
         
-        # 验证题目分布权重总和
+        # Validate question distribution weights sum
         if "question_generation" in config:
             qg = config["question_generation"]
             if "distribution" in qg:
@@ -215,15 +216,15 @@ class RoleConfigValidator:
     
     def raise_if_invalid(self, config: Dict, role_id: str = None, file_path: str = None):
         """
-        验证配置，如果无效则抛出异常
+        Validate a config and raise an exception if invalid.
         
         Args:
-            config: 配置字典
-            role_id: 岗位ID
-            file_path: 文件路径（用于错误消息）
+            config: Config dict
+            role_id: Role ID
+            file_path: File path (used in error messages)
         
         Raises:
-            ConfigValidationError: 配置验证失败
+            ConfigValidationError: Config validation failed
         """
         is_valid, errors = self.validate(config, role_id)
         if not is_valid:

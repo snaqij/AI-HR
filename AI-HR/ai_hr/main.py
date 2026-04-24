@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +23,16 @@ from ai_hr.services.providers.circuit_breaker import ProviderCircuitBreaker
 from ai_hr.services.providers.health import ProviderHealthService
 
 
+def _configure_logging() -> None:
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+
+
 def _resolve_cors_origins(settings: Settings) -> list[str]:
     raw_value = (settings.cors_allow_origins or "").strip()
     origins = [item.strip() for item in raw_value.split(",") if item.strip()]
@@ -33,6 +45,7 @@ def _resolve_cors_origins(settings: Settings) -> list[str]:
 
 
 def create_app() -> FastAPI:
+    _configure_logging()
     settings = get_settings()
     provider_breaker = ProviderCircuitBreaker(
         fail_threshold=settings.provider_circuit_breaker_fail_threshold,
@@ -63,10 +76,16 @@ def create_app() -> FastAPI:
     def on_startup() -> None:
         init_database(settings)
         app.state.job_sync_scheduler.start()
+        # 启动面试持久化工作器
+        from .services.interview_persistence_worker import start_persistence_worker
+        start_persistence_worker()
 
     @app.on_event("shutdown")
     def on_shutdown() -> None:
         app.state.job_sync_scheduler.stop()
+        # 停止面试持久化工作器
+        from .services.interview_persistence_worker import stop_persistence_worker
+        stop_persistence_worker()
 
     @app.get("/health", tags=["system"], response_model=Envelope[dict[str, str]])
     async def healthcheck() -> Envelope[dict[str, str]]:

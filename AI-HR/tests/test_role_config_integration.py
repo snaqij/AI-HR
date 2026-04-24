@@ -1,7 +1,7 @@
 """
-集成测试：岗位配置与面试流程集成
+Integration tests: Role config and interview flow integration
 
-测试岗位配置如何影响面试流程策略。
+Test how role configs affect interview flow policies.
 """
 
 import pytest
@@ -17,70 +17,70 @@ from ai_hr.services.role_strategy import RoleConfigLoader
 
 
 class TestRoleConfigIntegration:
-    """测试岗位配置与面试流程的集成"""
+    """Test integration of role config with interview flow"""
     
     def test_session_role_config_storage(self):
-        """测试会话级别的岗位配置存储和检索"""
+        """Test session-level role config storage and retrieval"""
         session_id = "test_session_123"
         role_config = {
             "role": {"id": "backend_engineer"},
             "followup_strategy": {"max_per_question": 5}
         }
         
-        # 存储配置
+        # Store config
         set_role_config_for_session(session_id, role_config)
         
-        # 检索配置
+        # Retrieve config
         retrieved = get_role_config_for_session(session_id)
         assert retrieved is not None
         assert retrieved["role"]["id"] == "backend_engineer"
         assert retrieved["followup_strategy"]["max_per_question"] == 5
         
-        # 清除配置
+        # Clear config
         clear_role_config_for_session(session_id)
         assert get_role_config_for_session(session_id) is None
     
     def test_stage_policy_without_role_config(self):
-        """测试没有岗位配置时使用默认策略"""
+        """Test using default policy when no role config exists"""
         session_id = "test_session_no_config"
         
-        # 获取S3阶段策略（没有role config）
+        # Get S3 stage policy (without role config)
         policy = get_stage_policy("S3", session_id)
         
-        # 应该返回默认策略
+        # Should return default policy
         assert policy.code == "S3"
         assert policy.max_followups == STAGE_POLICIES["S3"].max_followups
     
     def test_stage_policy_with_role_config_override(self):
-        """测试岗位配置覆盖阶段策略"""
+        """Test role config overriding stage policy"""
         session_id = "test_session_with_config"
         role_config = {
             "role": {"id": "backend_engineer"},
             "followup_strategy": {"max_per_question": 5}
         }
         
-        # 存储配置
+        # Store config
         set_role_config_for_session(session_id, role_config)
         
-        # 获取S3阶段策略（有role config）
+        # Get S3 stage policy (with role config)
         policy = get_stage_policy("S3", session_id)
         
-        # max_followups应该被覆盖为5
+        # max_followups should be overridden to 5
         assert policy.code == "S3"
         assert policy.max_followups == 5
         
-        # 清除配置
+        # Clear config
         clear_role_config_for_session(session_id)
     
     def test_resolve_followup_limit_priority(self):
-        """测试追问限制的优先级顺序"""
+        """Test priority order of followup limits"""
         session_id = "test_session_priority"
         role_config = {
             "followup_strategy": {"max_per_question": 5}
         }
         set_role_config_for_session(session_id, role_config)
         
-        # 1. 题目特定限制（最高优先级）
+        # 1. Question-specific limit (highest priority)
         question = {"max_followups": 2}
         limit = resolve_followup_limit(
             stage_code="S3",
@@ -89,7 +89,7 @@ class TestRoleConfigIntegration:
         )
         assert limit == 2
         
-        # 2. 显式默认值
+        # 2. Explicit default value
         limit = resolve_followup_limit(
             stage_code="S3",
             default=3,
@@ -97,14 +97,14 @@ class TestRoleConfigIntegration:
         )
         assert limit == 3
         
-        # 3. 岗位配置覆盖
+        # 3. Role config override
         limit = resolve_followup_limit(
             stage_code="S3",
             session_id=session_id
         )
         assert limit == 5
         
-        # 4. 阶段策略限制（最低优先级）
+        # 4. Stage policy limit (lowest priority)
         clear_role_config_for_session(session_id)
         limit = resolve_followup_limit(
             stage_code="S3",
@@ -113,28 +113,28 @@ class TestRoleConfigIntegration:
         assert limit == STAGE_POLICIES["S3"].max_followups
     
     def test_load_backend_config_and_apply(self):
-        """测试加载后端工程师配置并应用到会话"""
+        """Test loading backend engineer config and applying to session"""
         loader = RoleConfigLoader()
         
-        # 加载后端工程师配置
+        # Load backend engineer config
         backend_config = loader.load_config("backend_engineer")
         assert backend_config is not None
         assert backend_config["role"]["id"] == "backend_engineer"
         
-        # 应用到会话
+        # Apply to session
         session_id = "test_backend_session"
         set_role_config_for_session(session_id, backend_config)
         
-        # 验证配置生效
+        # Verify config is effective
         policy = get_stage_policy("S3", session_id)
         expected_max = backend_config["followup_strategy"]["max_per_question"]
         assert policy.max_followups == expected_max
         
-        # 清除
+        # Clear
         clear_role_config_for_session(session_id)
     
     def test_multiple_sessions_isolation(self):
-        """测试多个会话的配置隔离"""
+        """Test config isolation between multiple sessions"""
         session1 = "session_1"
         session2 = "session_2"
         
@@ -144,41 +144,41 @@ class TestRoleConfigIntegration:
         set_role_config_for_session(session1, config1)
         set_role_config_for_session(session2, config2)
         
-        # 验证隔离
+        # Verify isolation
         policy1 = get_stage_policy("S3", session1)
         policy2 = get_stage_policy("S3", session2)
         
         assert policy1.max_followups == 3
         assert policy2.max_followups == 5
         
-        # 清除
+        # Clear
         clear_role_config_for_session(session1)
         clear_role_config_for_session(session2)
     
     def test_invalid_role_config_graceful_fallback(self):
-        """测试无效配置时的优雅降级"""
+        """Test graceful fallback when config is invalid"""
         session_id = "test_invalid_config"
         
-        # 设置无效配置（缺少followup_strategy）
+        # Set invalid config (missing followup_strategy)
         invalid_config = {"role": {"id": "unknown"}}
         set_role_config_for_session(session_id, invalid_config)
         
-        # 应该回退到默认策略
+        # Should fallback to default policy
         policy = get_stage_policy("S3", session_id)
         assert policy.max_followups == STAGE_POLICIES["S3"].max_followups
         
         clear_role_config_for_session(session_id)
     
     def test_empty_session_id_handling(self):
-        """测试空session_id的处理"""
-        # 空session_id不应该崩溃
+        """Test handling of empty session_id"""
+        # Empty session_id should not crash
         set_role_config_for_session("", {"test": "config"})
         set_role_config_for_session(None, {"test": "config"})
         
         assert get_role_config_for_session("") is None
         assert get_role_config_for_session(None) is None
         
-        # 获取策略时不提供session_id应该返回默认策略
+        # Getting policy without session_id should return default policy
         policy = get_stage_policy("S3", None)
         assert policy.max_followups == STAGE_POLICIES["S3"].max_followups
 

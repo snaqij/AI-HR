@@ -11,12 +11,20 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from xml.etree import ElementTree as ET
+
 from sqlalchemy.orm import Session
+
 from ..db import models as from_models
 from ..connectors.base import ConnectorCredentials
 from ..connectors.registry import registry
 from ..core.config import get_settings
-from ..core.exceptions import ConnectorOperationError, CredentialsExpiredError, InvalidStateError, ObjectStorageError, ResourceNotFoundError
+from ..core.exceptions import (
+    ConnectorOperationError,
+    CredentialsExpiredError,
+    InvalidStateError,
+    ObjectStorageError,
+    ResourceNotFoundError,
+)
 from ..repositories.ai_observability import AIObservabilityRepository
 from ..repositories.ai_runtime import AIRuntimeRepository
 from ..repositories.candidates import CandidateRepository

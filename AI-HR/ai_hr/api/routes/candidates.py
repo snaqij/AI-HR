@@ -12,6 +12,7 @@ from ...schemas.ai_resume import (
     CandidateResumeProfileResult,
     ResumeAccessSyncRequest,
     ResumeAccessSyncResult,
+    ResumeAttachmentPayload,
     ResumeAttachmentSyncRequest,
     ResumeAttachmentSyncResult,
 )
@@ -26,7 +27,6 @@ from ...services.ai_resume import get_ai_resume_service
 from ...services.candidates import get_candidate_service
 
 router = APIRouter(prefix="/candidates", tags=["candidates"], dependencies=[Depends(require_workspace_context)])
-
 
 @router.post("/import", response_model=Envelope[CandidateImportResult], status_code=status.HTTP_201_CREATED)
 def import_candidates(
@@ -93,3 +93,28 @@ def sync_candidate_resume_access(
     service = get_ai_resume_service(session)
     result = service.sync_resume_access(ResumeAccessSyncRequest(candidate_id=candidate_id))
     return Envelope.success(result)
+
+
+@router.get("/{candidate_id}/resume-attachment", response_model=Envelope[ResumeAttachmentPayload])
+def get_candidate_resume_attachment(
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[ResumeAttachmentPayload]:
+    """获取候选人的简历附件元数据。
+    
+    如果候选人没有简历附件，返回404。
+    前端应该降级显示文本简历或提示用户同步PDF简历。
+    """
+    from ...repositories.resume_attachments import ResumeAttachmentRepository
+    from ...core.exceptions import ResourceNotFoundError
+    
+    repo = ResumeAttachmentRepository(session)
+    attachment = repo.get_latest(candidate_id)
+    if not attachment:
+        raise ResourceNotFoundError(
+            f"Candidate {candidate_id} does not have a resume attachment. "
+            "Please sync the resume attachment first."
+        )
+    
+    service = get_ai_resume_service(session)
+    return Envelope.success(service._to_attachment_payload(attachment))

@@ -16,7 +16,7 @@ except ImportError:
     DEFAULT_INTERVIEW_EVENT_BUS = None
 
 class AliyunNlsTokenManager:
-    """管理阿里云 NLS Token 的单例管理器。"""
+    """Singleton manager for Aliyun NLS tokens."""
     _instance = None
     _lock = threading.Lock()
 
@@ -65,7 +65,7 @@ class AliyunNlsTokenManager:
                 raise
 
 class AliyunNlsASRProvider(ASRProvider):
-    """基于阿里云智能语音 (NLS) 的生产级 ASR 实现。"""
+    """Production-grade ASR implementation backed by Aliyun NLS."""
     provider_name = "aliyun_nls"
 
     def __init__(
@@ -100,7 +100,7 @@ class AliyunNlsASRProvider(ASRProvider):
         self._stat_audio_bytes: int = 0         # Audio bytes sent to NLS
 
     def _log_stats(self, label: str) -> None:
-        """以 INFO 级别输出当前诊断统计快照。"""
+        """Log a diagnostic stats snapshot at INFO level."""
         logger.info(
             "[NLS-STATS] %s | "
             "connect_attempts=%d success=%d failed=%d "
@@ -119,7 +119,7 @@ class AliyunNlsASRProvider(ASRProvider):
         )
 
     def warmup(self, *, session_id: str) -> None:
-        """NLS 热启动（预取 Token 并预建连接）。"""
+        """NLS warmup: pre-fetch token and pre-establish connection."""
         try:
             # Pre-fetch token
             self._token_manager.get_token(self._ak_id, self._ak_secret)
@@ -248,7 +248,7 @@ class AliyunNlsASRProvider(ASRProvider):
             return ASRStreamResult(transcript="", confidence=confidence, latency_ms=latency_ms, provider=f"{self.provider_name}_fault")
 
     def flush(self, *, session_id: str) -> None:
-        """清理已完成的句子积累，防止跨回合串音。"""
+        """Clear accumulated sentence state to prevent cross-turn transcript bleed."""
         with self._lock:
             ctx = self._contexts.get(session_id)
             if ctx:
@@ -552,7 +552,7 @@ class _AliyunNlsCallback:
         self.is_active = False
 
     def flush(self):
-        """清理已完成的句子积累，防止跨回合串音。"""
+        """Clear accumulated sentence state to prevent cross-turn transcript bleed."""
         self.epoch += 1
         self.last_flush_at = time.time()
         self.sentences = []
@@ -567,7 +567,7 @@ class _AliyunNlsCallback:
         return "".join(self.sentences) + self.current_sentence
 
     def _publish_asr_turn(self, is_final: bool = False, fragment: str = ""):
-        """增量推送 ASR 片段到事件总线，避免历史累积造成的 UI 重复。"""
+        """Publish an incremental ASR fragment to the event bus."""
         if not fragment.strip() or not DEFAULT_INTERVIEW_EVENT_BUS:
             return
 
@@ -640,7 +640,7 @@ class AliyunASRProvider(ASRProvider):
         dashscope.api_key = api_key
 
     def warmup(self, *, session_id: str) -> None:
-        """阿里 ASR 热启动（可选）。"""
+        """Optional warmup hook for Aliyun ASR."""
         return None
 
     def transcribe_stream(

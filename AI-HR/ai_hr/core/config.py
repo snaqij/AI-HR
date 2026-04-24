@@ -202,6 +202,7 @@ class Settings(BaseSettings):
     ai_interview_followup_cache_ttl_seconds: int = 180
     ai_interview_prebuild_pack_ttl_seconds: int = 604800
     ai_interview_redis_event_bus_enabled: bool = False
+    ai_interview_persistence_worker_enabled: bool = True
     tencent_secret_id: str | None = None
     tencent_secret_key: str | None = None
     tencent_region: str = "ap-guangzhou"

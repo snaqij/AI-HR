@@ -1,4 +1,4 @@
-"""OpenAI 语音 Provider。"""
+"""OpenAI speech providers."""
 
 from __future__ import annotations
 

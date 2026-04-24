@@ -74,10 +74,12 @@ class InterviewInvitationEmailService:
         pipeline = self._pipeline_repository.get_by_candidate_job(candidate_id=candidate.id, job_id=job.id)
         if pipeline is None:
             raise InvalidStateError(f"Candidate '{candidate.id}' has no pipeline under job '{job.id}'")
-        if evaluation.recommendation not in {"recommend", "strong_recommend"} and float(evaluation.final_score or 0.0) < self._MANUAL_INVITE_MIN_SCORE:
-            raise InvalidStateError(
-                f"Candidate '{candidate.id}' is not eligible for invitation with recommendation '{evaluation.recommendation}' and score '{evaluation.final_score}'"
-            )
+        
+        # 移除分数和推荐度限制，允许手动邀请任何候选人
+        # if evaluation.recommendation not in {"recommend", "strong_recommend"} and float(evaluation.final_score or 0.0) < self._MANUAL_INVITE_MIN_SCORE:
+        #     raise InvalidStateError(
+        #         f"Candidate '{candidate.id}' is not eligible for invitation with recommendation '{evaluation.recommendation}' and score '{evaluation.final_score}'"
+        #     )
 
         candidate_email = self._resolve_candidate_email(candidate.raw_profile or {}, candidate.email)
         if not candidate_email:

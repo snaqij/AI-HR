@@ -70,26 +70,26 @@ EN_STOPWORDS: set[str] = {
 }
 
 ZH_TECH_TERMS: tuple[str, ...] = (
-    "性能",
-    "并发",
-    "架构",
-    "系统设计",
-    "数据库",
-    "缓存",
-    "消息队列",
-    "稳定性",
-    "可用性",
-    "扩展性",
-    "故障",
-    "排查",
-    "监控",
-    "指标",
-    "压测",
-    "容量",
-    "一致性",
-    "事务",
-    "幂等",
-    "降级",
+    "performance",
+    "concurrency",
+    "architecture",
+    "system design",
+    "database",
+    "cache",
+    "message queue",
+    "stability",
+    "availability",
+    "scalability",
+    "failure",
+    "troubleshooting",
+    "monitoring",
+    "metrics",
+    "load testing",
+    "capacity",
+    "consistency",
+    "transaction",
+    "idempotency",
+    "degradation",
 )
 
 
@@ -103,7 +103,7 @@ def percentile(values: list[int], p: float) -> float:
 
 def _normalize_text(text: str) -> str:
     folded = re.sub(r"\s+", " ", (text or "").strip()).lower()
-    return re.sub(r"[^\w\u4e00-\u9fff]+", "", folded)
+    return re.sub(r"[^\w]+", "", folded)
 
 
 def _safe_int(value: Any) -> int | None:

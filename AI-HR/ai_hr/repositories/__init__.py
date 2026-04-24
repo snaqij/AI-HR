@@ -1,1 +1,1 @@
-﻿"""仓储模块集合。"""
+﻿"""Repository module collection."""

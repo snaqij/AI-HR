@@ -170,7 +170,7 @@ class AIInterviewQuestionGenerationMixin:
         skills: list[str],
         question_count: int,
         language: str = "zh-CN",
-        role_config: dict = None,  # 新增参数
+        role_config: dict = None,
     ) -> tuple[list[dict], str]:
         """优先使用 LLM 生成题目，仅在 LLM 异常或题目不足时回退到规则驱动。"""
         llm_questions = []

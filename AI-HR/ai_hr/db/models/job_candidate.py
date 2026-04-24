@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint, and_
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, UniqueConstraint, and_
 from sqlalchemy.orm import Mapped, mapped_column, relationship, foreign
 
 from ..base import Base, TimestampMixin
@@ -18,6 +18,7 @@ class JobCandidate(TimestampMixin, Base):
     __tablename__ = "job_candidates"
     __table_args__ = (
         UniqueConstraint("job_id", "channel", "external_candidate_id", name="uq_job_candidate_source_external"),
+        Index("idx_job_candidate_filter", "job_id", "stage", "last_synced_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

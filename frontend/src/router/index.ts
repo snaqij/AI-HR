@@ -1,12 +1,56 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
+function redirectToAdmin(path: string) {
+  return (to: { query: Record<string, unknown>; hash: string }) => ({
+    path,
+    query: to.query,
+    hash: to.hash,
+  })
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
       path: '/',
       redirect: '/admin'
+    },
+    {
+      path: '/dashboard',
+      redirect: '/admin'
+    },
+    {
+      path: '/jobs',
+      redirect: redirectToAdmin('/admin/jobs')
+    },
+    {
+      path: '/interview-history',
+      redirect: redirectToAdmin('/admin/interview-history')
+    },
+    {
+      path: '/candidates',
+      redirect: redirectToAdmin('/admin/candidates')
+    },
+    {
+      path: '/candidate-detail',
+      redirect: redirectToAdmin('/admin/candidate-detail')
+    },
+    {
+      path: '/hiring',
+      redirect: redirectToAdmin('/admin/hiring')
+    },
+    {
+      path: '/agents',
+      redirect: redirectToAdmin('/admin/agents')
+    },
+    {
+      path: '/reports',
+      redirect: redirectToAdmin('/admin/reports')
+    },
+    {
+      path: '/settings',
+      redirect: redirectToAdmin('/admin/settings')
     },
     {
       path: '/login',
@@ -25,6 +69,10 @@ const router = createRouter({
       component: () => import('../layouts/AdminLayout.vue'),
       meta: { requiresAuth: true },
       children: [
+        {
+          path: 'dashboard',
+          redirect: '/admin'
+        },
         {
           path: '',
           name: 'Dashboard',
@@ -72,8 +120,23 @@ const router = createRouter({
         },
         {
           path: 'settings',
-          name: 'Settings',
+          name: 'SettingsHome',
           component: () => import('../views/admin/Settings.vue')
+        },
+        {
+          path: 'settings/org',
+          name: 'OrganizationSettings',
+          component: () => import('../views/admin/OrganizationSettings.vue')
+        },
+        {
+          path: 'settings/members',
+          name: 'WorkspaceMembers',
+          component: () => import('../views/admin/WorkspaceMembers.vue')
+        },
+        {
+          path: 'settings/credentials',
+          name: 'CredentialSettings',
+          component: () => import('../views/admin/CredentialSettings.vue')
         }
       ]
     },

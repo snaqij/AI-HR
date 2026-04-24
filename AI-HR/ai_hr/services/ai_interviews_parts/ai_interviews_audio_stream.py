@@ -5,7 +5,7 @@ from .ai_interviews_shared import *
 
 class AIInterviewAudioStreamMixin:
     def rtc_ingest_audio(self, payload: AIInterviewRTCASRIngestRequest) -> dict:
-        """RTC-002B/003B: ingest room audio frame then optionally trigger followup + TTS publish."""
+        """RTC: ingest room audio frame then optionally trigger followup + TTS publish."""
         session_entity = self._session_repository.get_by_room_id(payload.room_id)
         if session_entity is None:
             raise InvalidStateError(f"room_id '{payload.room_id}' is not linked to any AI interview session")
@@ -421,9 +421,6 @@ class AIInterviewAudioStreamMixin:
     def _safe_flush_asr(self, session_id: str, seq: int = 1) -> None:
         """Helper to ensure ASR buffer is flushed and final response triggered."""
         try:
-            # We don't have a direct 'flush' in all providers, 
-            # but usually submitting an empty final chunk or closing the stream works.
-            # In our current Aliyun provider, it responds to 'is_final=True'.
             asr_req = AIInterviewASRStreamRequest(
                 seq=max(1, seq), 
                 text_hint="",

@@ -1,4 +1,4 @@
-"""语音 Provider 抽象。"""
+"""Speech provider abstractions."""
 
 from __future__ import annotations
 

@@ -128,7 +128,12 @@ class CandidateRepository:
         self._session.refresh(candidate)
         return candidate
 
-    def list_pending_metadata_enrichment(self, limit: int = 10) -> list[Candidate]:
+    def list_pending_metadata_enrichment(
+        self,
+        limit: int = 10,
+        *,
+        candidate_ids: list[str] | None = None,
+    ) -> list[Candidate]:
         stmt = (
             select(Candidate)
             .where(
@@ -142,6 +147,11 @@ class CandidateRepository:
             .order_by(Candidate.created_at.desc())
             .limit(limit)
         )
+        if candidate_ids:
+            ids = [item for item in dict.fromkeys(candidate_ids) if item]
+            if not ids:
+                return []
+            stmt = stmt.where(Candidate.id.in_(ids))
         workspace_id = get_workspace_id(self._session)
         if workspace_id:
             stmt = stmt.where(Candidate.workspace_id == workspace_id)

@@ -1,1 +1,1 @@
-﻿"""Schema 模块集合。"""
+﻿"""Schema module collection."""

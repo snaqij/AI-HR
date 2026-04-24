@@ -76,6 +76,7 @@ class CandidateSummaryResponse(BaseModel):
     work_experience: str | None
     expected_salary: str | None
     latest_company: str | None
+    raw_profile: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
 

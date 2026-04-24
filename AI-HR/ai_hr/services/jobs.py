@@ -11,6 +11,7 @@ from ..connectors.registry import registry
 from ..core.config import get_settings
 from ..core.exceptions import ConnectorOperationError
 from ..repositories.candidates import CandidateRepository
+from ..repositories.candidate_job_pipeline import CandidateJobPipelineRepository
 from ..repositories.job_candidates import JobCandidateRepository
 from ..repositories.jobs import JobRepository
 from ..schemas.candidates import CandidateImportItem
@@ -24,6 +25,7 @@ from ..schemas.jobs import (
     JobUpdateSettingsRequest,
     RemoteJobSyncItem,
 )
+from .ai_resume import AIResumeService
 from .credentials import get_credential_service, CredentialService
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ class JobService:
         self._repository = repository
         self._candidate_repository = candidate_repository
         self._job_candidate_repository = job_candidate_repository
+        self._candidate_job_pipeline_repository = CandidateJobPipelineRepository(repository._session)
         self._credential_service = credential_service
         self._settings = get_settings()
 
@@ -76,13 +79,18 @@ class JobService:
 
     def update_job_settings(self, job_id: str, payload: JobUpdateSettingsRequest):
         """更新岗位自动化配置。"""
-        return self._repository.update_settings(
+        current = self._repository.get(job_id)
+        was_auto_request_enabled = bool(current.auto_request_resume)
+
+        updated = self._repository.update_settings(
             job_id,
             auto_request_resume=payload.auto_request_resume,
             min_degree=payload.min_degree,
             min_experience_years=payload.min_experience_years,
             max_daily_resume_requests=payload.max_daily_resume_requests,
         )
+
+        return updated
 
     def publish_job(self, job_id: str, payload: JobPublishRequest):
         job = self._repository.get(job_id)
@@ -244,7 +252,7 @@ class JobService:
                     candidates, page_created, page_updated = self._candidate_repository.upsert_many(candidate_items)
                     for candidate, source_item in zip(candidates, candidate_items, strict=False):
                         synced_candidate_ids.append(candidate.id)
-                        self._job_candidate_repository.upsert_link(
+                        link = self._job_candidate_repository.upsert_link(
                             job_id=job.id,
                             publication_id=publication.id,
                             candidate_id=candidate.id,
@@ -255,6 +263,16 @@ class JobService:
                             source_status=source_item.raw_profile.get("status"),
                             applied_at=source_item.applied_at,
                             source_payload=source_item.raw_profile,
+                        )
+                        self._candidate_job_pipeline_repository.ensure(
+                            candidate_id=candidate.id,
+                            job_id=job.id,
+                            source_channel=publication.channel,
+                            external_candidate_id=source_item.external_candidate_id,
+                            payload={
+                                "job_candidate_id": link.id,
+                                "created_from_sync": True,
+                            },
                         )
                     created_count += page_created
                     updated_count += page_updated
@@ -303,16 +321,24 @@ class JobService:
         cursor: str | None = None,
         keyword: str | None = None,
         resume_status: str | None = None,
+        stage: str | None = None,
         segment: str | None = None,
     ):
         self._repository.get(job_id)
-        stats = self._job_candidate_repository.get_job_stats(job_id)
+        stats = self._job_candidate_repository.get_job_stats(
+            job_id,
+            keyword=keyword,
+            resume_status=resume_status,
+            stage=stage,
+            candidate_segment=segment,
+        )
         items, next_cursor, has_more = self._job_candidate_repository.list_by_job(
             job_id,
             limit=limit,
             cursor=cursor,
             keyword=keyword,
             resume_status=resume_status,
+            stage=stage,
             candidate_segment=segment,
         )
         return {
@@ -426,7 +452,7 @@ class JobService:
         if candidate_items:
             candidates, created_count, updated_count = self._candidate_repository.upsert_many(candidate_items)
             for candidate, source_item in zip(candidates, candidate_items, strict=False):
-                self._job_candidate_repository.upsert_link(
+                link = self._job_candidate_repository.upsert_link(
                     job_id=job.id,
                     publication_id=publication.id,
                     candidate_id=candidate.id,
@@ -436,6 +462,16 @@ class JobService:
                     stage=candidate.current_stage,
                     source_status=source_item.raw_profile.get("status"),
                     source_payload=source_item.raw_profile,
+                )
+                self._candidate_job_pipeline_repository.ensure(
+                    candidate_id=candidate.id,
+                    job_id=job.id,
+                    source_channel=payload.channel,
+                    external_candidate_id=source_item.external_candidate_id,
+                    payload={
+                        "job_candidate_id": link.id,
+                        "created_from_resume_ready_sync": True,
+                    },
                 )
 
         return JobResumeReadySyncResult(
@@ -453,10 +489,18 @@ class JobService:
             return registry.create(channel, credentials)
         raise ConnectorOperationError(f"Connector settings for channel '{channel}' are not configured")
 
-    def enrich_candidate_metadata(self, limit: int = 5) -> int:
+    def enrich_candidate_metadata(
+        self,
+        limit: int = 5,
+        *,
+        candidate_ids: list[str] | None = None,
+    ) -> int:
         """后台补全候选人元数据的任务。"""
         # 1. Find candidates needing metadata backfill
-        pending_candidates = self._candidate_repository.list_pending_metadata_enrichment(limit=limit)
+        pending_candidates = self._candidate_repository.list_pending_metadata_enrichment(
+            limit=limit,
+            candidate_ids=candidate_ids,
+        )
         if not pending_candidates:
             return 0
             

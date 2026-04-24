@@ -712,13 +712,9 @@ async def ws_ai_interview_duplex(
                                                     confidence=float(payload.get("confidence") or 0.9),
                                                     payload=payload,
                                                 )
-                                                
-                                                # Perform the actual heavy lifting (LLM call etc)
+
                                                 res = local_service.append_event(session_id, event_req)
-                                                
-                                                # Post-generation check: if user started talking while we were in the LLM,
-                                                # we MUST NOT allow any side effects (though DB already updated).
-                                                # The TTS packets produced in the background will be blocked by Gatekeeper/interrupt_generation.
+
                                                 return res
                                         except Exception as bridge_exc:
                                             if not isinstance(bridge_exc, asyncio.CancelledError):

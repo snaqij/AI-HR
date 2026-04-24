@@ -1,23 +1,24 @@
-"""
-岗位策略服务
+"""Role strategy service.
 
-提供岗位配置加载、验证、缓存和岗位识别功能。
+Provides role config loading, validation, caching, and role identification.
 """
 
+from __future__ import annotations
+
+from .competency_mapper import CompetencyMapper, CompetencyModel, CompetencyWeight
 from .config_cache import ConfigCache
 from .config_loader import RoleConfigLoader
 from .config_validator import RoleConfigValidator
-from .role_profiler import RoleProfiler, RoleMatch, RoleProfileResult
-from .competency_mapper import CompetencyMapper, CompetencyModel, CompetencyWeight
 from .exceptions import (
-    RoleConfigError,
-    ConfigNotFoundError,
-    ConfigLoadError,
-    ConfigValidationError,
+    CacheError,
     ConfigInheritanceError,
-    CacheError
+    ConfigLoadError,
+    ConfigNotFoundError,
+    ConfigValidationError,
+    RoleConfigError,
 )
 from .metrics import ConfigMetrics, get_metrics
+from .role_profiler import RoleMatch, RoleProfileResult, RoleProfiler
 
 __all__ = [
     "ConfigCache",

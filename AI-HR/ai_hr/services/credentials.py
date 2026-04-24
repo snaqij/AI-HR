@@ -9,8 +9,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..connectors.boss import BossConnector
 from ..connectors.base import ConnectorCredentials
-from ..core.exceptions import CredentialsExpiredError, InvalidStateError
+from ..core.exceptions import ConnectorOperationError, CredentialsExpiredError, InvalidStateError
 from ..core.security import decrypt_data, encrypt_data
 from ..repositories.credentials import ChannelCredentialRepository
 from ..repositories.workspace_scope import get_user_id
@@ -163,6 +164,35 @@ class CredentialService:
     def get_current_channel_credential(self, channel: str):
         owner_user_id = self._require_authenticated_user_id()
         return self._repository.get_active_by_channel(channel, owner_user_id=owner_user_id)
+
+    def validate_current_channel_credential(self, channel: str):
+        owner_user_id = self._require_authenticated_user_id()
+        credential = self._repository.get_active_by_channel(channel, owner_user_id=owner_user_id)
+        if credential is None:
+            return None
+
+        if channel != "boss":
+            raise InvalidStateError("Only 'boss' channel validation is supported currently")
+
+        try:
+            connector = BossConnector(self.resolve_boss_credentials())
+            connector.validate_credentials()
+            connector.list_jobs(page=1, page_size=1)
+        except CredentialsExpiredError as exc:
+            self.handle_credential_failure(channel, error_message=str(exc))
+            return self._repository.get_active_by_channel(channel, owner_user_id=owner_user_id)
+        except ConnectorOperationError as exc:
+            logger.warning("BOSS credential validation request failed without expired signal: %s", exc)
+            return credential
+
+        credential.status = "normal"
+        credential.is_active = True
+        credential.last_validated_at = datetime.now(UTC).replace(tzinfo=None)
+        credential.last_failure_at = None
+        credential.failure_count = 0
+        self._session.commit()
+        self._session.refresh(credential)
+        return credential
 
     def _require_authenticated_user_id(self) -> str:
         owner_user_id = get_user_id(self._session)

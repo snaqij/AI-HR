@@ -1,15 +1,16 @@
-"""
-岗位配置缓存
+"""Role config cache.
 
-实现LRU缓存和TTL过期控制，提升配置加载性能。
+LRU cache with TTL expiry for role configuration objects.
 """
+
+from __future__ import annotations
 
 import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from threading import RLock
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
 from .exceptions import CacheError
 
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CacheEntry:
-    """缓存条目"""
+    """Cache entry."""
     key: str
     value: Any
     created_at: float
@@ -27,22 +28,22 @@ class CacheEntry:
 
 
 class ConfigCache:
-    """配置缓存（LRU + TTL）"""
+    """Config cache (LRU + TTL)."""
     
     def __init__(self, max_size: int = 100, ttl_seconds: int = 3600):
         """
-        初始化缓存
+        Initialize the cache.
         
         Args:
-            max_size: 最大缓存条目数
-            ttl_seconds: 缓存过期时间（秒）
+            max_size: Maximum number of cache entries
+            ttl_seconds: Cache expiry time in seconds
         """
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._lock = RLock()
         
-        # 统计信息
+        # Statistics
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -62,13 +63,13 @@ class ConfigCache:
     
     def get(self, key: str) -> Optional[Dict]:
         """
-        获取缓存值
+        Get a cached value.
         
         Args:
-            key: 缓存键
+            key: Cache key
         
         Returns:
-            缓存值，如果不存在或已过期则返回None
+            Cached value, or None if not found or expired
         """
         with self._lock:
             entry = self._cache.get(key)
@@ -81,7 +82,7 @@ class ConfigCache:
                 )
                 return None
             
-            # 检查是否过期
+            # Check if expired
             if self._is_expired(entry):
                 self._stats["expirations"] += 1
                 del self._cache[key]
@@ -94,11 +95,11 @@ class ConfigCache:
                 )
                 return None
             
-            # 更新访问信息
+            # Update access info
             entry.last_accessed = time.time()
             entry.access_count += 1
             
-            # 移到末尾（LRU）
+            # Move to end (LRU)
             self._cache.move_to_end(key)
             
             self._stats["hits"] += 1
@@ -114,16 +115,16 @@ class ConfigCache:
     
     def set(self, key: str, value: Dict):
         """
-        设置缓存值
+        Set a cached value.
         
         Args:
-            key: 缓存键
-            value: 缓存值
+            key: Cache key
+            value: Value to cache
         """
         with self._lock:
             now = time.time()
             
-            # 如果已存在，更新
+            # If already exists, update
             if key in self._cache:
                 entry = self._cache[key]
                 entry.value = value
@@ -131,11 +132,11 @@ class ConfigCache:
                 entry.last_accessed = now
                 self._cache.move_to_end(key)
             else:
-                # 检查是否需要驱逐
+                # Evict if at capacity
                 if len(self._cache) >= self.max_size:
                     self._evict_oldest()
                 
-                # 添加新条目
+                # Add new entry
                 entry = CacheEntry(
                     key=key,
                     value=value,
@@ -156,13 +157,13 @@ class ConfigCache:
     
     def invalidate(self, key: str) -> bool:
         """
-        使缓存失效
+        Invalidate a cache entry.
         
         Args:
-            key: 缓存键
+            key: Cache key
         
         Returns:
-            是否成功删除
+            True if the entry was removed, False otherwise
         """
         with self._lock:
             if key in self._cache:
@@ -176,7 +177,7 @@ class ConfigCache:
             return False
     
     def clear(self):
-        """清空缓存"""
+        """Clear all cache entries."""
         with self._lock:
             count = len(self._cache)
             self._cache.clear()
@@ -187,10 +188,10 @@ class ConfigCache:
     
     def get_stats(self) -> Dict:
         """
-        获取缓存统计信息
+        Get cache statistics.
         
         Returns:
-            统计信息字典
+            Statistics dict
         """
         with self._lock:
             total_requests = self._stats["hits"] + self._stats["misses"]
@@ -209,16 +210,16 @@ class ConfigCache:
             }
     
     def _is_expired(self, entry: CacheEntry) -> bool:
-        """检查缓存条目是否过期"""
+        """Check whether a cache entry has expired."""
         age = time.time() - entry.created_at
         return age > self.ttl_seconds
     
     def _evict_oldest(self):
-        """驱逐最旧的缓存条目（LRU）"""
+        """Evict the oldest cache entry (LRU)."""
         if not self._cache:
             return
         
-        # OrderedDict的第一个元素是最旧的
+        # The first element of OrderedDict is the oldest
         oldest_key = next(iter(self._cache))
         del self._cache[oldest_key]
         self._stats["evictions"] += 1
@@ -230,10 +231,10 @@ class ConfigCache:
     
     def cleanup_expired(self) -> int:
         """
-        清理所有过期的缓存条目
+        Remove all expired cache entries.
         
         Returns:
-            清理的条目数
+            Number of entries removed
         """
         with self._lock:
             expired_keys = [

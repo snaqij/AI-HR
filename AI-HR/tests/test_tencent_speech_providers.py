@@ -101,7 +101,7 @@ def test_tencent_tts_should_prioritize_first_chunk_size() -> None:
         timeout_ms=5000,
         first_chunk_size=10,
     )
-    chunks = provider._split_text_chunks(text="请介绍你最近做过的一次性能优化，给出量化结果。", chunk_size=24)  # noqa: SLF001
+    chunks = provider._split_text_chunks(text="Please describe a recent performance optimization you did and give quantified results.", chunk_size=24)  # noqa: SLF001
     assert len(chunks) >= 2
     assert len(chunks[0]) <= 10
 
@@ -130,9 +130,9 @@ def test_tencent_asr_duplex_should_reuse_and_close_context(monkeypatch) -> None:
             _ = timeout
             self.recv_count += 1
             if self.recv_count == 1:
-                return {"result": {"voice_text_str": "第一段"}}
+                return {"result": {"voice_text_str": "first segment"}}
             if self.recv_count == 2:
-                return {"result": {"voice_text_str": "完整句子"}, "final": 1}
+                return {"result": {"voice_text_str": "complete sentence"}, "final": 1}
             raise TimeoutError()
 
         def close(self):
@@ -167,7 +167,7 @@ def test_tencent_asr_duplex_should_reuse_and_close_context(monkeypatch) -> None:
         is_final=False,
     )
     assert first.provider == "tencent_ws_duplex"
-    assert first.transcript in {"第一段", "完整句子"}
+    assert first.transcript in {"first segment", "complete sentence"}
     assert len(provider._ws_contexts) == 1  # noqa: SLF001
 
     second = provider.transcribe_stream(
@@ -182,7 +182,7 @@ def test_tencent_asr_duplex_should_reuse_and_close_context(monkeypatch) -> None:
         is_final=True,
     )
     assert second.provider == "tencent_ws_duplex"
-    assert second.transcript == "完整句子"
+    assert second.transcript == "complete sentence"
     assert len(provider._ws_contexts) == 0  # noqa: SLF001
     assert fake_ws.closed is True
 
@@ -214,12 +214,12 @@ def test_tencent_asr_duplex_should_keep_single_connection_across_seq(monkeypatch
             _ = timeout
             self.turn_recv_count += 1
             if self.turn_recv_count == 1:
-                text = "第一轮" if self.turn_no <= 1 else "第二轮"
+                text = "turn one" if self.turn_no <= 1 else "turn two"
                 return {"result": {"voice_text_str": text}}
             if self.turn_recv_count == 2:
                 raise TimeoutError()
             if self.turn_recv_count == 3:
-                text = "第一轮" if self.turn_no <= 1 else "第二轮"
+                text = "turn one" if self.turn_no <= 1 else "turn two"
                 return {"result": {"voice_text_str": text}}
             if self.turn_recv_count == 4:
                 return {"final": 1}
@@ -267,8 +267,8 @@ def test_tencent_asr_duplex_should_keep_single_connection_across_seq(monkeypatch
         chunk_total=1,
         is_final=True,
     )
-    assert first.transcript == "第一轮"
-    assert second.transcript == "第二轮"
+    assert first.transcript == "turn one"
+    assert second.transcript == "turn two"
     assert len(provider._ws_contexts) == 1  # noqa: SLF001
     provider._close_ws_context("s-single")  # noqa: SLF001
     assert fake_ws.closed is True
@@ -309,7 +309,7 @@ def test_tencent_asr_duplex_should_reconnect_when_single_ws_closed(monkeypatch) 
             _ = timeout
             self.recv_count += 1
             if self.recv_count == 1:
-                return {"result": {"voice_text_str": "重连成功"}}
+                return {"result": {"voice_text_str": "reconnect success"}}
             raise TimeoutError()
 
         def close(self):
@@ -346,7 +346,7 @@ def test_tencent_asr_duplex_should_reconnect_when_single_ws_closed(monkeypatch) 
         chunk_total=1,
         is_final=True,
     )
-    assert result.transcript == "重连成功"
+    assert result.transcript == "reconnect success"
     assert calls["n"] == 2
 
 

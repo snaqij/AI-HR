@@ -1,23 +1,24 @@
-"""
-岗位配置加载器
+"""Role config loader.
 
-负责加载YAML配置文件、处理配置继承、验证配置有效性，并管理配置缓存。
+Loads YAML config files, handles config inheritance, validates configs,
+and manages the config cache.
 """
+
+from __future__ import annotations
 
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional
 
 import yaml
-
 from .config_cache import ConfigCache
 from .config_validator import RoleConfigValidator
 from .exceptions import (
-    ConfigNotFoundError,
-    ConfigLoadError,
     ConfigInheritanceError,
-    ConfigValidationError
+    ConfigLoadError,
+    ConfigNotFoundError,
+    ConfigValidationError,
 )
 from .metrics import get_metrics
 
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 class RoleConfigLoader:
-    """岗位配置加载器"""
+    """Role configuration loader."""
     
     def __init__(
         self,
@@ -35,16 +36,16 @@ class RoleConfigLoader:
         enable_validation: bool = True
     ):
         """
-        初始化配置加载器
+        Initialize the config loader.
         
         Args:
-            config_dir: 配置文件目录，默认为 ai_hr/role_configs
-            cache: 配置缓存实例，默认创建新实例
-            validator: 配置验证器实例，默认创建新实例
-            enable_validation: 是否启用配置验证
+            config_dir: Config file directory, defaults to ai_hr/role_configs
+            cache: Config cache instance, creates a new one if not provided
+            validator: Config validator instance, creates a new one if not provided
+            enable_validation: Whether to enable config validation
         """
         if config_dir is None:
-            # 默认配置目录
+            # Default config directory
             current_dir = Path(__file__).parent.parent.parent
             config_dir = current_dir / "role_configs"
         
@@ -65,22 +66,22 @@ class RoleConfigLoader:
     
     def load_config(self, role_id: str) -> Optional[Dict]:
         """
-        加载岗位配置
+        Load a role configuration.
         
         Args:
-            role_id: 岗位ID
+            role_id: Role ID
         
         Returns:
-            配置字典，如果不存在则返回None
+            Config dict, or None if not found
         
         Raises:
-            ConfigLoadError: 配置加载失败
-            ConfigValidationError: 配置验证失败
+            ConfigLoadError: Config loading failed
+            ConfigValidationError: Config validation failed
         """
         start_time = time.time()
         
         try:
-            # 检查缓存
+            # Check cache
             cached_config = self.cache.get(role_id)
             if cached_config is not None:
                 duration_ms = (time.time() - start_time) * 1000
@@ -91,7 +92,7 @@ class RoleConfigLoader:
                 )
                 return cached_config
             
-            # 查找配置文件
+            # Find config file
             config_file = self._find_config_file(role_id)
             if config_file is None:
                 duration_ms = (time.time() - start_time) * 1000
@@ -102,19 +103,19 @@ class RoleConfigLoader:
                 )
                 return None
             
-            # 加载配置文件
+            # Load config file
             config = self._load_yaml_file(config_file)
             
-            # 处理继承
+            # Apply inheritance
             if "extends" in config:
                 config = self._apply_inheritance(config, role_id)
             
-            # 验证配置
+            # Validate config
             if self.enable_validation:
                 self.validator.raise_if_invalid(config, role_id, str(config_file))
                 self.metrics.record_validation_success(role_id)
             
-            # 写入缓存
+            # Write to cache
             self.cache.set(role_id, config)
             
             duration_ms = (time.time() - start_time) * 1000
@@ -156,26 +157,26 @@ class RoleConfigLoader:
     
     def load_base_config(self) -> Dict:
         """
-        加载基础配置
+        Load the base configuration.
         
         Returns:
-            基础配置字典
+            Base config dict
         """
         return self.load_config("_base") or {}
 
     def load_all_configs(self) -> Dict[str, Dict]:
         """
-        加载所有配置文件
+        Load all config files.
         
         Returns:
-            {role_id: config} 字典
+            Dict of {role_id: config}
         """
         configs = {}
         
-        # 遍历所有YAML文件
+        # Iterate over all YAML files
         for yaml_file in self.config_dir.rglob("*.yaml"):
             if yaml_file.stem.startswith("_"):
-                continue  # 跳过基础配置
+                continue  # Skip base configs
             
             role_id = self._resolve_role_id_from_file(yaml_file) or yaml_file.stem
             try:
@@ -196,33 +197,33 @@ class RoleConfigLoader:
     
     def reload_config(self, role_id: str) -> Dict:
         """
-        重新加载配置（清除缓存后加载）
+        Reload a config (clears cache then loads).
         
         Args:
-            role_id: 岗位ID
+            role_id: Role ID
         
         Returns:
-            配置字典
+            Config dict
         """
         self.cache.invalidate(role_id)
         return self.load_config(role_id)
     
     def _find_config_file(self, role_id: str) -> Optional[Path]:
         """
-        查找配置文件
+        Find the config file for a role.
         
         Args:
-            role_id: 岗位ID
+            role_id: Role ID
         
         Returns:
-            配置文件路径，如果不存在则返回None
+            Path to the config file, or None if not found
         """
-        # 尝试直接路径
+        # Try direct path
         direct_path = self.config_dir / f"{role_id}.yaml"
         if direct_path.exists():
             return direct_path
         
-        # 尝试在子目录中查找
+        # Try subdirectories
         for subdir in ["tech", "product", "design", "business"]:
             subdir_path = self.config_dir / subdir / f"{role_id}.yaml"
             if subdir_path.exists():
@@ -259,16 +260,16 @@ class RoleConfigLoader:
     
     def _load_yaml_file(self, file_path: Path) -> Dict:
         """
-        加载YAML文件
+        Load a YAML file.
         
         Args:
-            file_path: 文件路径
+            file_path: File path
         
         Returns:
-            配置字典
+            Config dict
         
         Raises:
-            ConfigLoadError: 文件加载失败
+            ConfigLoadError: File loading failed
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -298,24 +299,24 @@ class RoleConfigLoader:
     
     def _apply_inheritance(self, config: Dict, role_id: str) -> Dict:
         """
-        应用配置继承
+        Apply config inheritance.
         
         Args:
-            config: 子配置
-            role_id: 岗位ID
+            config: Child config
+            role_id: Role ID
         
         Returns:
-            合并后的配置
+            Merged config
         
         Raises:
-            ConfigInheritanceError: 继承失败
+            ConfigInheritanceError: Inheritance failed
         """
         parent_id = config.get("extends")
         if not parent_id:
             return config
         
         try:
-            # 加载父配置
+            # Load parent config
             parent_config = self.load_config(parent_id)
             if parent_config is None:
                 raise ConfigInheritanceError(
@@ -324,7 +325,7 @@ class RoleConfigLoader:
                     "Parent configuration not found"
                 )
             
-            # 深度合并配置
+            # Deep-merge configs
             merged_config = self._deep_merge(parent_config, config)
             
             logger.debug(
@@ -348,27 +349,27 @@ class RoleConfigLoader:
     
     def _deep_merge(self, base: Dict, override: Dict) -> Dict:
         """
-        深度合并两个字典
+        Deep-merge two dicts.
         
         Args:
-            base: 基础字典
-            override: 覆盖字典
+            base: Base dict
+            override: Override dict
         
         Returns:
-            合并后的字典
+            Merged dict
         """
         result = base.copy()
         
         for key, value in override.items():
             if key == "extends":
-                # 不继承extends字段
+                # Do not inherit the extends field
                 continue
             
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                # 递归合并字典
+                # Recursively merge dicts
                 result[key] = self._deep_merge(result[key], value)
             else:
-                # 直接覆盖
+                # Direct override
                 result[key] = value
         
         return result

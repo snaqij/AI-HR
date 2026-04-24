@@ -1,2 +1,2 @@
-"""语音服务模块。"""
+"""Speech service module."""
 

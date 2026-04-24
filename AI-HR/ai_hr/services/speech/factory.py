@@ -1,4 +1,4 @@
-"""语音 Provider 工厂。"""
+"""Speech provider factory."""
 
 from __future__ import annotations
 

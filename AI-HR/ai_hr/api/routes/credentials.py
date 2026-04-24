@@ -30,6 +30,19 @@ def get_channel_credential(
     return Envelope.success(CredentialResponse.model_validate(credential))
 
 
+@router.post("/{channel}/validate", response_model=Envelope[CredentialResponse])
+def validate_channel_credential(
+    channel: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[CredentialResponse]:
+    """Actively validate the credential against the upstream platform."""
+    service = get_credential_service(session)
+    credential = service.validate_current_channel_credential(channel)
+    if not credential:
+        raise HTTPException(status_code=404, detail=f"No active credential found for current user on channel '{channel}'")
+    return Envelope.success(CredentialResponse.model_validate(credential))
+
+
 @router.post("/{channel}", response_model=Envelope[dict[str, str]])
 def update_channel_credential(
     channel: str,

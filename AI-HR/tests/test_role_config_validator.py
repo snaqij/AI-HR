@@ -1,8 +1,9 @@
-"""
-岗位配置验证器单元测试
-"""
+"""Unit tests for RoleConfigValidator."""
+
+from __future__ import annotations
 
 import pytest
+
 from ai_hr.services.role_strategy.config_validator import RoleConfigValidator
 from ai_hr.services.role_strategy.exceptions import ConfigValidationError
 
@@ -87,11 +88,11 @@ class TestRoleConfigValidator:
         assert is_valid
     
     def test_raise_if_invalid(self, validator, valid_config):
-        """测试raise_if_invalid方法"""
-        # 有效配置不应抛出异常
+        """Test raise_if_invalid method"""
+        # Valid config should not raise exception
         validator.raise_if_invalid(valid_config, "test_role")
         
-        # 无效配置应抛出异常
+        # Invalid config should raise exception
         del valid_config["role"]["display_name"]
         with pytest.raises(ConfigValidationError) as exc_info:
             validator.raise_if_invalid(valid_config, "test_role")

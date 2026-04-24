@@ -221,6 +221,47 @@ export interface CandidateEvaluationDetailResult {
   pipeline_status: Record<string, unknown>;
 }
 
+export interface ResumeRiskItem {
+  risk_code: string;
+  risk_level: string;
+  detail: string;
+}
+
+export interface ResumeProfilePayload {
+  candidate_id: string;
+  raw_text: string;
+  parse_status: string;
+  parser_version: string;
+  confidence: number;
+  parsed_profile: Record<string, any>;
+  normalized_profile: Record<string, any>;
+  risks: ResumeRiskItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CandidateResumeProfileResult {
+  profile: ResumeProfilePayload;
+}
+
+export interface ResumeAttachmentPayload {
+  candidate_id: string;
+  source_channel: string;
+  external_candidate_id: string;
+  file_name: string;
+  content_type?: string | null;
+  source_url?: string | null;
+  file_size_bytes: number;
+  file_sha256: string;
+  object_storage_provider?: string | null;
+  object_storage_bucket?: string | null;
+  object_storage_key?: string | null;
+  object_storage_url?: string | null;
+  last_synced_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CandidateEvaluationUpdatePayload {
   recommendation?: string;
   summary?: string;
@@ -392,6 +433,7 @@ export interface CredentialStatus {
   account_name: string;
   status: string;
   is_active: boolean;
+  last_validated_at?: string | null;
   last_failure_at?: string | null;
   failure_count: number;
 }
@@ -475,6 +517,58 @@ export interface WorkspaceCreateRequest {
 export interface WorkspaceCreateResponse {
   workspace: AuthWorkspaceSummary;
   created_at: string;
+}
+
+export interface WorkspaceDetail {
+  id: string;
+  workspace_code: string;
+  name: string;
+  role: string;
+  status: string;
+  plan_code: string;
+  owner_user_id: string;
+  owner_display_name?: string | null;
+  owner_email?: string | null;
+  member_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceUpdateRequest {
+  name: string;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  user_id: string;
+  display_name: string;
+  email: string;
+  avatar_url?: string | null;
+  role: string;
+  status: string;
+  is_current_user: boolean;
+  joined_at?: string | null;
+  last_active_at?: string | null;
+}
+
+export interface WorkspaceMemberListResult {
+  workspace_id: string;
+  total: number;
+  items: WorkspaceMember[];
+}
+
+export interface WorkspaceMemberInviteRequest {
+  email: string;
+  role: string;
+}
+
+export interface WorkspaceMemberUpdateRequest {
+  role: string;
+}
+
+export interface WorkspaceMemberRemoveResponse {
+  member_id: string;
+  removed: boolean;
 }
 
 function resolveDefaultApiBaseUrl(): string {
@@ -734,9 +828,67 @@ export async function createWorkspace(payload: WorkspaceCreateRequest): Promise<
   });
 }
 
+export async function getWorkspaceDetail(workspaceId: string): Promise<WorkspaceDetail> {
+  return request<WorkspaceDetail>(`/workspaces/${encodeURIComponent(workspaceId)}`);
+}
+
+export async function updateWorkspace(workspaceId: string, payload: WorkspaceUpdateRequest): Promise<WorkspaceDetail> {
+  return request<WorkspaceDetail>(`/workspaces/${encodeURIComponent(workspaceId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listWorkspaceMembers(workspaceId: string): Promise<WorkspaceMemberListResult> {
+  return request<WorkspaceMemberListResult>(`/workspaces/${encodeURIComponent(workspaceId)}/members`);
+}
+
+export async function inviteWorkspaceMember(
+  workspaceId: string,
+  payload: WorkspaceMemberInviteRequest,
+): Promise<WorkspaceMember> {
+  return request<WorkspaceMember>(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateWorkspaceMember(
+  workspaceId: string,
+  memberId: string,
+  payload: WorkspaceMemberUpdateRequest,
+): Promise<WorkspaceMember> {
+  return request<WorkspaceMember>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function removeWorkspaceMember(
+  workspaceId: string,
+  memberId: string,
+): Promise<WorkspaceMemberRemoveResponse> {
+  return request<WorkspaceMemberRemoveResponse>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(memberId)}`,
+    {
+      method: "DELETE",
+    },
+  );
+}
+
 // Credentials
 export async function fetchBossCredential(): Promise<CredentialStatus> {
   return request<CredentialStatus>("/credentials/boss");
+}
+
+export async function validateBossCredential(): Promise<CredentialStatus> {
+  return request<CredentialStatus>("/credentials/boss/validate", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function updateBossCredential(cookie: string): Promise<any> {
@@ -835,7 +987,7 @@ export async function batchDeleteJobs(jobIds: string[]): Promise<{ deleted_count
 // Candidates
 export async function listJobCandidates(
   jobId: string,
-  payload: { limit?: number; cursor?: string; keyword?: string; resume_status?: string; segment?: "all" | "recommended" | "invited" | "failed" } = {}
+  payload: { limit?: number; cursor?: string; keyword?: string; stage?: string; resume_status?: string; segment?: "all" | "recommended" | "invited" | "failed" } = {}
 ): Promise<JobCandidateListResult> {
   const params = new URLSearchParams();
   if (payload.limit) {
@@ -846,6 +998,9 @@ export async function listJobCandidates(
   }
   if (payload.keyword) {
     params.set("keyword", payload.keyword);
+  }
+  if (payload.stage && payload.stage !== "all") {
+    params.set("stage", payload.stage);
   }
   if (payload.resume_status && payload.resume_status !== "all") {
     params.set("resume_status", payload.resume_status);
@@ -859,6 +1014,21 @@ export async function listJobCandidates(
 
 export async function getJobCandidate(jobId: string, candidateId: string): Promise<JobCandidate> {
   return request<JobCandidate>(`/jobs/${jobId}/candidates/${candidateId}`);
+}
+
+export async function fetchCandidateResumeProfile(candidateId: string): Promise<CandidateResumeProfileResult> {
+  return request<CandidateResumeProfileResult>(`/candidates/${candidateId}/resume-profile`);
+}
+
+export async function fetchCandidateResumeAttachment(candidateId: string): Promise<ResumeAttachmentPayload> {
+  return request<ResumeAttachmentPayload>(`/candidates/${candidateId}/resume-attachment`);
+}
+
+export async function syncCandidateResumeAttachment(candidateId: string): Promise<{ attachment: ResumeAttachmentPayload }> {
+  return request<{ attachment: ResumeAttachmentPayload }>(`/candidates/${candidateId}/resume-attachment/sync`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export async function fetchJobEvaluations(
@@ -930,12 +1100,15 @@ export async function fetchJobEmailDeliveries(
 }
 
 export async function fetchInterviewInvitationHistory(
-  payload: { limit?: number; keyword?: string; status?: string } = {}
+  payload: { limit?: number; keyword?: string; status?: string; stage?: string } = {}
 ): Promise<InterviewInvitationHistoryResult> {
   const params = new URLSearchParams();
   params.set("limit", String(payload.limit ?? 200));
   if (payload.keyword) {
     params.set("keyword", payload.keyword);
+  }
+  if (payload.stage && payload.stage !== "all") {
+    params.set("stage", payload.stage);
   }
   if (payload.status && payload.status !== "all") {
     params.set("status", payload.status);

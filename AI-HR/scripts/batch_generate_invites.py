@@ -10,9 +10,10 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import traceback
+import types
 from pathlib import Path
 
-# Import the main function from generate_interview_invite
 import generate_interview_invite as invite_gen
 
 
@@ -153,12 +154,9 @@ def main() -> int:
         
         def patched_main():
             # Monkey patch the job_payload
-            import types
-            original_code = original_main.__code__
-            
+            original_code = original_main.__code__  # noqa: F841
+
             # Call original main but with modified job_payload
-            # This is a simplified approach - in production, you'd want to refactor
-            # generate_interview_invite.py to accept job config as parameters
             return original_main()
         
         try:
@@ -175,7 +173,6 @@ def main() -> int:
             results.append({"resume": config["resume"], "status": "ERROR", "reason": str(exc)})
             print(f"[batch] [{idx}/{len(resume_configs)}] ERROR: {exc}")
             if args.debug:
-                import traceback
                 traceback.print_exc()
         
         # Add delay between requests to avoid overwhelming the server

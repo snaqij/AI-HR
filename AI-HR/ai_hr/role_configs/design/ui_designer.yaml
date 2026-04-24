@@ -1,4 +1,4 @@
-# UI设计师岗位配置
+# UI Designer role configuration
 
 version: "1.0"
 extends: "_base"
@@ -26,7 +26,7 @@ role:
       - "principle"
       - "after effects"
 
-# 岗位特定能力
+# Role-specific competencies
 role_competencies:
   visual_design:
     weight: 0.35
@@ -65,16 +65,16 @@ role_competencies:
       - "accessibility"
       - "user_feedback"
 
-# 阶段权重
+# Stage weights
 stage_weights:
   S1: 0.05
   S2: 0.20
   S3: 0.35
   S4: 0.35
   S5: 0.05
-  # S6-S8: 按需触发或固定流程
+  # S6-S8: Triggered as needed or fixed process
 
-# 题目生成策略
+# Question generation strategy
 question_generation:
   distribution:
     from_resume: 0.60
@@ -85,7 +85,7 @@ question_generation:
     required: true
     min_duration_months: 2
 
-# 追问策略
+# Followup strategy
 followup_strategy:
   max_per_question: 3
   evidence_threshold: 0.70
@@ -95,7 +95,7 @@ followup_strategy:
     - "design_system"
     - "user_empathy"
 
-# Prompt增强
+# Prompt enhancements
 prompt_enhancements:
   role_context: |
     候选人应聘UI设计师岗位。请重点评估其：

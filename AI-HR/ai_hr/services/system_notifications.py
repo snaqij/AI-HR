@@ -1,14 +1,11 @@
 """System notification service for administrative alerts."""
 
 from __future__ import annotations
-
 import logging
 import smtplib
 from email.message import EmailMessage
 from typing import Any
-
 from sqlalchemy.orm import Session
-
 from ..core.config import get_settings
 
 
@@ -29,15 +26,15 @@ class SystemNotificationService:
              logger.warning("No admin email (email_from_address) configured for alerts")
              return False
 
-        subject = f"【告警】AI-HR 系统凭据过期通知 - {channel.upper()}"
+        subject = f"[ALERT] AI-HR Credential Expired - {channel.upper()}"
         body = (
-            f"您好，管理员：\n\n"
-            f"系统检测到以下渠道的凭据已失效或过期，自动化任务已暂停：\n\n"
-            f"- 渠道：{channel}\n"
-            f"- 账号别名：{account_name}\n"
-            f"- 错误信息：{error_message or '未知原因'}\n\n"
-            f"请尽快登录后台系统更新 Cookie，以恢复自动化招聘功能。\n\n"
-            f"--- AI-HR 自动化招聘系统 ---"
+            f"Hello, Admin:\n\n"
+            f"The system has detected that the credentials for the following channel have expired or become invalid. Automated tasks have been paused:\n\n"
+            f"- Channel: {channel}\n"
+            f"- Account alias: {account_name}\n"
+            f"- Error: {error_message or 'unknown reason'}\n\n"
+            f"Please log in to the admin console and update the credentials to resume automated recruitment.\n\n"
+            f"--- AI-HR Automated Recruitment System ---"
         )
         
         try:

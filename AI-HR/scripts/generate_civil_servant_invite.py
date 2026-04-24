@@ -99,7 +99,7 @@ def main() -> int:
     # Get bearer token
     bearer_token = (args.token or "").strip() or os.environ.get("AI_HR_TOKEN", "").strip()
     if not bearer_token:
-        bearer_token = "v1.eyJ0eXAiOiJhY2Nlc3MiLCJzaWQiOiI0NTgwZWYzNC1mNGI4LTQyZjAtOWRjNS04YmRmODc5NDc1Y2QiLCJ1aWQiOiJjZGI0OTFhOS0wZjJlLTRkZTItOGI5My1kN2YzNjZhMTNiMDMiLCJleHAiOjE3NzY4NjY4MDMsIm4iOiJPV0lFb2owME1yRDloenE4UXIxWkFRIn0.yePq1OPGiJQeTZN-QMC0Lw-vN17gJqG4U13JxWaLgz8"
+        bearer_token = "v1.eyJ0eXAiOiJhY2Nlc3MiLCJzaWQiOiJhNmRjMzliZC03OTA4LTQwZDMtOTY0Ni0wYjFkNWIxNjQ5OTQiLCJ1aWQiOiJjZGI0OTFhOS0wZjJlLTRkZTItOGI5My1kN2YzNjZhMTNiMDMiLCJleHAiOjE3NzY5NTYzNjksIm4iOiJFdi1jb213T0dKN29INVFHWXBSazJnIn0.4fJ59qNho2UeLKDzv-eSfi7KXP3krHAceo7PS7KB-Ac"
     if not bearer_token.startswith("Bearer "):
         bearer_token = f"Bearer {bearer_token}"
 

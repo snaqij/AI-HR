@@ -15,7 +15,6 @@ class AIInterviewAudioDuplexMixin:
         payload: dict,
         audio_bytes: bytes | None = None,
     ) -> dict:
-        """Cleaned docstring."""
         # Use passed arguments which are already extracted/validated in the route
         frame_id = str(payload.get("frame_id") or "")
         if frame_id:
@@ -45,7 +44,7 @@ class AIInterviewAudioDuplexMixin:
                     }
                 
                 seen.add(frame_id)
-                if len(seen) > 1000: # Simple LRU-ish cleanup
+                if len(seen) > 1000:
                     # Clear some space
                     self._duplex_seen_frames[session_id] = set(list(seen)[-500:])
 
@@ -211,20 +210,14 @@ class AIInterviewAudioDuplexMixin:
             text_hash = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:16]
             inflight_key = f"{cache_key}:{text_hash}"
 
-            # Single In-flight Slot: Cancel existing speculative task for this session
             with self._duplex_prefetch_lock:
                 old_event = self._duplex_prefetch_abort_events.get(session_id)
                 if old_event:
                     old_event.set()
                 abort_event = threading.Event()
                 self._duplex_prefetch_abort_events[session_id] = abort_event
-                # The original logic for inflight_key check and add was here.
-                # It's now moved to after the tentative/prefetch decision.
-                # For now, we add it here to ensure it's tracked for cleanup.
                 self._duplex_prefetch_inflight.add(inflight_key)
 
-            # --- Tentative Execution Trigger (Wait for punctuation or length) ---
-            # Lowered threshold and added fallback for long sentences without punctuation
             has_punctuation = any(p in normalized for p in ("。", "，", "；", ".", "?", "!"))
             if not is_final and (
                 (len(normalized) >= 4 and has_punctuation) or 

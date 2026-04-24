@@ -1,92 +1,74 @@
-﻿<template>
-  <div class="mx-auto flex w-full max-w-7xl flex-col gap-6 pb-10">
-    <header class="sticky top-0 z-10 rounded-2xl border border-outline-variant/15 bg-surface-container-lowest/95 px-6 py-4 backdrop-blur">
-      <div class="flex flex-wrap items-start justify-between gap-4">
-        <div class="flex items-center gap-3">
-          <button
-            class="flex h-10 w-10 items-center justify-center rounded-lg border border-outline-variant/30 text-on-surface-variant transition-colors hover:bg-surface-container-low"
-            @click="$router.back()"
-          >
-            <span class="material-symbols-outlined text-lg">arrow_back</span>
-          </button>
-          <div>
-            <h1 class="text-2xl font-bold text-on-surface">候选人详情</h1>
-            <p class="mt-1 text-xs text-on-surface-variant">
-              {{ candidateItem?.candidate.name || "--" }}
-              <span class="mx-1">·</span>
-              {{ job?.title || "未关联岗位" }}
-              <span v-if="candidateItem?.first_synced_at" class="mx-1">·</span>
-              <span v-if="candidateItem?.first_synced_at">首次同步 {{ formatDate(candidateItem?.first_synced_at) }}</span>
-            </p>
-          </div>
-        </div>
+<template>
+  <div class="admin-page">
+    <section class="flex flex-wrap items-center justify-between gap-4">
+      <button class="admin-quiet-btn" @click="$router.back()">
+        <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+        返回列表
+      </button>
 
-        <div class="flex items-center gap-3">
-          <button
-            class="h-10 rounded-lg border border-outline-variant/30 bg-surface-container-low px-4 text-sm font-semibold text-on-surface-variant transition-colors hover:bg-surface-container"
-            :disabled="isLoading"
-            @click="loadData"
-          >
-            刷新
-          </button>
-          <button
-            class="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
-            :disabled="isAnalyzing || !candidateItem"
-            @click="handleAnalyze"
-          >
-            <span v-if="isAnalyzing" class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-            {{ isAnalyzing ? "评估中..." : "重新评估" }}
-          </button>
-        </div>
+      <div class="flex items-center gap-3">
+        <button class="admin-quiet-btn" :disabled="isLoading" @click="loadData">刷新</button>
+        <button class="admin-primary-btn" :disabled="isAnalyzing || !candidateItem" @click="handleAnalyze">
+          <span v-if="isAnalyzing" class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+          {{ isAnalyzing ? "评估中..." : "重新评估" }}
+        </button>
       </div>
-    </header>
+    </section>
 
-    <section v-if="isLoading" class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-12 text-center">
+    <section v-if="isLoading" class="admin-panel px-6 py-12 text-center">
       <div class="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
       <p class="text-sm font-medium text-on-surface-variant">正在加载候选人详情...</p>
     </section>
 
-    <section v-else-if="loadError" class="rounded-2xl border border-error/25 bg-error-container/40 px-6 py-8">
+    <section v-else-if="loadError" class="admin-panel px-6 py-8">
       <p class="text-sm font-semibold text-on-error-container">加载失败：{{ loadError }}</p>
-      <button
-        class="mt-3 h-9 rounded-lg border border-on-error-container/20 bg-white px-4 text-sm font-semibold text-on-error-container"
-        @click="loadData"
-      >
-        重试
-      </button>
+      <button class="admin-primary-btn mt-4" @click="loadData">重试</button>
     </section>
 
     <template v-else-if="candidateItem">
-      <section class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
-        <div class="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p class="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">决策摘要</p>
-            <div class="mt-2 flex flex-wrap items-center gap-3">
-              <span class="text-4xl font-bold text-on-surface">{{ formatScore(evaluation?.final_score) }}</span>
-              <span class="rounded-full px-3 py-1 text-xs font-semibold" :class="getRecommendationBadge(evaluation?.recommendation || 'review')">
-                {{ getRecommendationText(evaluation?.recommendation || "review") }}
-              </span>
-              <span class="rounded-full bg-surface-container-low px-3 py-1 text-xs font-semibold text-on-surface-variant">
-                当前阶段：{{ getStageText(candidateItem.stage) }}
-              </span>
+      <section class="admin-panel px-6 py-5">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div class="flex min-w-0 items-center gap-4">
+            <div class="flex h-14 w-14 items-center justify-center rounded-full bg-[#edf3fb] text-lg font-semibold text-[#62708c]">
+              {{ candidateItem.candidate.name.slice(0, 1) }}
+            </div>
+            <div class="min-w-0">
+              <p class="truncate text-[20px] font-semibold tracking-tight text-on-surface">{{ candidateItem.candidate.name || "--" }}</p>
+              <p class="mt-1 truncate text-[13px] text-on-surface-variant">
+                {{ job?.title || "未关联岗位" }}
+                <span v-if="candidateItem.first_synced_at"> · 首次同步 {{ formatDate(candidateItem.first_synced_at) }}</span>
+              </p>
             </div>
           </div>
-          <div class="min-w-[260px] rounded-xl border border-outline-variant/20 bg-surface px-4 py-3">
-            <p class="text-xs text-on-surface-variant">建议动作</p>
-            <p class="mt-1 text-sm font-semibold text-on-surface">{{ getActionHint(evaluation?.recommendation || "review") }}</p>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="rounded-full bg-[#f5f8fd] px-3 py-1 text-[12px] font-semibold text-on-surface">
+              AI 评分 {{ formatScore(evaluation?.final_score) }}
+            </span>
+            <span class="rounded-full px-3 py-1 text-[12px] font-semibold" :class="getRecommendationBadge(evaluation?.recommendation || 'review')">
+              {{ getRecommendationText(evaluation?.recommendation || "review") }}
+            </span>
+            <span class="rounded-full bg-[#f5f8fd] px-3 py-1 text-[12px] font-semibold text-on-surface-variant">
+              {{ getStageText(candidateItem.stage) }}
+            </span>
           </div>
+        </div>
+
+        <div class="mt-4 rounded-[12px] bg-[#f8fbff] px-4 py-3">
+          <p class="text-[12px] text-on-surface-variant">建议动作</p>
+          <p class="mt-1 text-[13px] font-semibold text-on-surface">{{ getActionHint(evaluation?.recommendation || "review") }}</p>
         </div>
       </section>
 
-      <div class="grid grid-cols-12 gap-6">
-        <main class="col-span-12 space-y-6 lg:col-span-8">
-          <section class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
-            <div class="mb-4 flex flex-wrap items-center gap-2">
+      <div class="grid grid-cols-12 gap-5">
+        <main class="col-span-12 space-y-5 xl:col-span-8">
+          <section class="admin-panel px-6 py-5">
+            <div class="mb-4 flex flex-wrap items-center gap-3">
               <button
                 v-for="tab in tabs"
                 :key="tab.value"
-                class="rounded-lg px-3 py-2 text-xs font-semibold transition-colors"
-                :class="activeTab === tab.value ? 'bg-primary text-white' : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container'"
+                class="rounded-[8px] px-3 py-2 text-[12px] font-semibold transition-colors"
+                :class="activeTab === tab.value ? 'bg-primary text-white' : 'bg-[#f5f8fd] text-on-surface-variant hover:bg-[#eef4ff] hover:text-primary'"
                 @click="activeTab = tab.value"
               >
                 {{ tab.label }}
@@ -95,11 +77,8 @@
 
             <div class="space-y-4">
               <div v-if="activeTab === 'summary'" class="space-y-2">
-                <label class="text-xs font-semibold text-on-surface-variant">人工决策修正</label>
-                <select
-                  v-model="editRecommendation"
-                  class="h-10 w-full rounded-lg border border-outline-variant/30 bg-white px-3 text-sm text-on-surface focus:border-primary focus:outline-none"
-                >
+                <label class="admin-label">人工决策修正</label>
+                <select v-model="editRecommendation" class="admin-select">
                   <option value="strong_recommend">强烈推荐</option>
                   <option value="recommend">推荐</option>
                   <option value="review">待复核</option>
@@ -108,76 +87,99 @@
               </div>
 
               <div>
-                <label class="mb-2 block text-xs font-semibold text-on-surface-variant">{{ activeTabConfig.label }}</label>
+                <label class="mb-2 block admin-label">{{ activeTabConfig.label }}</label>
                 <textarea
                   v-model="activeTabContent"
                   :rows="activeTabConfig.rows"
                   :placeholder="activeTabConfig.placeholder"
-                  class="min-h-[140px] w-full rounded-xl border border-outline-variant/25 bg-white p-4 text-sm leading-6 text-on-surface focus:border-primary focus:outline-none"
+                  class="admin-textarea leading-7"
                 ></textarea>
               </div>
 
-              <div class="flex items-center justify-between border-t border-outline-variant/15 pt-4">
-                <p class="text-xs text-on-surface-variant">修改后将实时更新候选人评估记录</p>
-                <button
-                  class="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-white transition-opacity disabled:opacity-50"
-                  :disabled="isSavingEval || !evaluation"
-                  @click="handleSaveEvaluation"
-                >
+              <div class="flex flex-wrap items-center justify-between gap-3 border-t border-[#eef2f7] pt-4">
+                <p class="text-[12px] text-on-surface-variant">修改后将实时更新候选人评估记录</p>
+                <button class="admin-primary-btn" :disabled="isSavingEval || !evaluation" @click="handleSaveEvaluation">
                   {{ isSavingEval ? "保存中..." : "保存评估" }}
                 </button>
               </div>
             </div>
           </section>
 
-          <section class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
-            <h2 class="text-base font-semibold text-on-surface">基础信息</h2>
+          <section class="admin-panel px-6 py-5">
+            <h2 class="admin-section-title">基础信息</h2>
             <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div v-for="info in profileInfo" :key="info.label" class="rounded-lg border border-outline-variant/15 bg-surface px-4 py-3">
-                <p class="text-xs text-on-surface-variant">{{ info.label }}</p>
-                <p class="mt-1 text-sm font-semibold text-on-surface break-words">{{ info.value || "--" }}</p>
+              <div v-for="info in profileInfo" :key="info.label" class="rounded-[12px] border border-[#eef2f7] bg-[#fafcff] px-4 py-3">
+                <p class="text-[12px] text-on-surface-variant">{{ info.label }}</p>
+                <p class="mt-1 break-words text-[13px] font-semibold text-on-surface">{{ info.value || "--" }}</p>
               </div>
             </div>
           </section>
         </main>
 
-        <aside class="col-span-12 space-y-6 lg:col-span-4">
-          <section class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
-            <h2 class="text-base font-semibold text-on-surface">流程操作</h2>
-            <div class="mt-4 space-y-3">
-              <label class="text-xs text-on-surface-variant">当前阶段</label>
-              <select
-                v-model="editStage"
-                class="h-10 w-full rounded-lg border border-outline-variant/30 bg-white px-3 text-sm text-on-surface focus:border-primary focus:outline-none"
+        <aside class="col-span-12 space-y-5 xl:col-span-4">
+          <section class="admin-panel px-6 py-5">
+            <div class="mb-4 flex items-center justify-between">
+              <h2 class="admin-section-title">简历预览</h2>
+              <a
+                v-if="resumeAttachment"
+                :href="resumeDownloadUrl || '#'"
+                target="_blank"
+                class="text-[12px] text-primary hover:underline"
+                download
               >
+                <span class="material-symbols-outlined text-[16px] align-middle">download</span>
+                下载简历
+              </a>
+            </div>
+            
+            <div v-if="isLoadingAttachment" class="flex items-center justify-center py-12">
+              <div class="h-8 w-8 animate-spin rounded-full border-4 border-primary/20 border-t-primary" />
+            </div>
+            
+            <div v-else-if="!resumeAttachment" class="rounded-[12px] border border-dashed border-[#dbe4f3] px-4 py-12 text-center">
+              <span class="material-symbols-outlined text-[48px] text-on-surface-variant/30">description</span>
+              <p class="mt-2 text-[12px] text-on-surface-variant">暂无简历附件</p>
+            </div>
+            
+            <div v-else class="relative">
+              <iframe
+                v-if="resumeDownloadUrl"
+                :src="resumeDownloadUrl"
+                class="h-[600px] w-full rounded-[8px] border border-[#eef2f7]"
+                title="简历预览"
+              />
+            </div>
+          </section>
+
+          <section class="admin-panel px-6 py-5">
+            <h2 class="admin-section-title">流程操作</h2>
+            <div class="mt-4 space-y-3">
+              <label class="admin-label">当前阶段</label>
+              <select v-model="editStage" class="admin-select">
                 <option v-for="s in stages" :key="s.value" :value="s.value">{{ s.label }}</option>
               </select>
-              <button
-                class="h-10 w-full rounded-lg border border-outline-variant/30 bg-surface-container-low text-sm font-semibold text-on-surface transition-colors hover:bg-surface-container disabled:opacity-50"
-                :disabled="isSavingStage || editStage === candidateItem.stage"
-                @click="handleSaveStage"
-              >
+              <button class="admin-quiet-btn w-full" :disabled="isSavingStage || editStage === candidateItem.stage" @click="handleSaveStage">
                 {{ isSavingStage ? "保存中..." : "保存阶段" }}
               </button>
             </div>
           </section>
 
-          <section class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-5">
-            <h2 class="text-base font-semibold text-on-surface">沟通记录</h2>
-            <div v-if="deliveries.length === 0" class="mt-4 rounded-lg border border-dashed border-outline-variant/35 px-4 py-6 text-center text-xs text-on-surface-variant">
+          <section class="admin-panel px-6 py-5">
+            <h2 class="admin-section-title">沟通记录</h2>
+            <div v-if="deliveries.length === 0" class="mt-4 rounded-[12px] border border-dashed border-[#dbe4f3] px-4 py-6 text-center text-[12px] text-on-surface-variant">
               暂无邮件记录
             </div>
             <div v-else class="mt-4 space-y-3">
               <article
                 v-for="item in deliveries"
                 :key="item.id"
-                class="rounded-lg border border-outline-variant/20 bg-surface px-4 py-3"
+                class="rounded-[12px] border border-[#eef2f7] bg-[#fafcff] px-4 py-3"
               >
                 <div class="flex items-center justify-between gap-2">
-                  <span class="rounded-full bg-surface-container-low px-2 py-1 text-[11px] font-semibold text-on-surface-variant">{{ item.status }}</span>
+                  <span class="admin-badge bg-[#f3f6fb] text-[#708099]">{{ item.status }}</span>
                   <span class="text-[11px] text-on-surface-variant">{{ formatDate(item.created_at) }}</span>
                 </div>
-                <p class="mt-2 line-clamp-2 text-sm font-medium text-on-surface">{{ item.subject || "(无主题)" }}</p>
+                <p class="mt-2 line-clamp-2 text-[13px] font-medium text-on-surface">{{ item.subject || "(无主题)" }}</p>
               </article>
             </div>
           </section>
@@ -185,9 +187,9 @@
       </div>
     </template>
 
-    <section v-else class="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest px-6 py-12 text-center">
+    <section v-else class="admin-panel px-6 py-12 text-center">
       <p class="text-sm text-on-surface-variant">未找到候选人信息</p>
-      <button class="mt-4 h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-white" @click="$router.back()">返回候选人列表</button>
+      <button class="admin-primary-btn mt-4" @click="$router.back()">返回候选人列表</button>
     </section>
   </div>
 </template>
@@ -197,6 +199,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import {
   evaluateJobCandidate,
+  fetchCandidateResumeAttachment,
   fetchJobEmailDeliveries,
   fetchLatestJobCandidateEvaluation,
   getJobCandidate,
@@ -205,6 +208,7 @@ import {
   type CandidateEvaluation,
   type Job,
   type JobCandidate,
+  type ResumeAttachmentPayload,
   updateCandidateStage,
   updateLatestJobCandidateEvaluation,
 } from "../../api";
@@ -218,12 +222,14 @@ const job = ref<Job | null>(null);
 const candidateItem = ref<JobCandidate | null>(null);
 const evaluation = ref<CandidateEvaluation | null>(null);
 const deliveries = ref<CandidateEmailDelivery[]>([]);
+const resumeAttachment = ref<ResumeAttachmentPayload | null>(null);
 
 const isLoading = ref(false);
 const isAnalyzing = ref(false);
 const isEvaluationLoading = ref(false);
 const isSavingEval = ref(false);
 const isSavingStage = ref(false);
+const isLoadingAttachment = ref(false);
 const loadError = ref("");
 
 const activeTab = ref("summary");
@@ -244,10 +250,10 @@ const tabs = [
 
 const stages = [
   { label: "新申请", value: "new" },
-  { label: "已初筛", value: "parsed" },
+  { label: "待初筛", value: "parsed" },
   { label: "初筛通过", value: "screen_pass" },
   { label: "面试中", value: "interview" },
-  { label: "发放 Offer", value: "offer" },
+  { label: "录用", value: "offer" },
   { label: "不合适", value: "rejected" },
 ];
 
@@ -294,6 +300,14 @@ const profileInfo = computed(() => [
   { label: "期望薪资", value: candidateItem.value?.candidate.expected_salary },
   { label: "来源渠道", value: candidateItem.value?.channel },
 ]);
+
+const resumeDownloadUrl = computed(() => {
+  if (!candidateId.value || !resumeAttachment.value) {
+    return null;
+  }
+  // Use MinIO URL directly
+  return resumeAttachment.value.object_storage_url;
+});
 
 function toMultiline(values?: string[]) {
   return (values || []).join("\n");
@@ -360,6 +374,7 @@ async function loadData() {
     }
 
     void loadDeliveries();
+    void loadResumeAttachment();
   } catch (error) {
     const message = error instanceof Error ? error.message : "未知错误";
     loadError.value = message;
@@ -398,6 +413,22 @@ async function loadDeliveries() {
     deliveries.value = result.items || [];
   } catch {
     deliveries.value = [];
+  }
+}
+
+async function loadResumeAttachment() {
+  if (!candidateId.value || isLoadingAttachment.value) {
+    return;
+  }
+
+  isLoadingAttachment.value = true;
+  try {
+    const attachment = await fetchCandidateResumeAttachment(candidateId.value);
+    resumeAttachment.value = attachment;
+  } catch {
+    resumeAttachment.value = null;
+  } finally {
+    isLoadingAttachment.value = false;
   }
 }
 

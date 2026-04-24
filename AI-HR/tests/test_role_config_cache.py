@@ -1,9 +1,11 @@
-"""
-岗位配置缓存单元测试
-"""
+"""Unit tests for ConfigCache."""
+
+from __future__ import annotations
 
 import time
+
 import pytest
+
 from ai_hr.services.role_strategy.config_cache import ConfigCache
 
 

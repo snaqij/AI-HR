@@ -1,16 +1,18 @@
-"""
-岗位配置加载器单元测试
-"""
+"""Unit tests for RoleConfigLoader."""
 
-import pytest
+from __future__ import annotations
+
 import tempfile
 from pathlib import Path
-from ai_hr.services.role_strategy.config_loader import RoleConfigLoader
+
+import pytest
+
 from ai_hr.services.role_strategy.config_cache import ConfigCache
+from ai_hr.services.role_strategy.config_loader import RoleConfigLoader
 from ai_hr.services.role_strategy.exceptions import (
+    ConfigInheritanceError,
     ConfigLoadError,
     ConfigValidationError,
-    ConfigInheritanceError
 )
 
 
@@ -23,7 +25,7 @@ class TestRoleConfigLoader:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir)
             
-            # 创建基础配置
+            # Create base config
             base_config = """
 version: "1.0"
 role:
@@ -42,11 +44,11 @@ universal_competencies:
 """
             (config_dir / "_base.yaml").write_text(base_config, encoding='utf-8')
             
-            # 创建tech子目录
+            # Create tech subdirectory
             tech_dir = config_dir / "tech"
             tech_dir.mkdir()
             
-            # 创建后端工程师配置
+            # Create backend engineer config
             backend_config = """
 version: "1.0"
 extends: "_base"
@@ -74,7 +76,7 @@ role_competencies:
         return RoleConfigLoader(
             config_dir=str(temp_config_dir),
             cache=cache,
-            enable_validation=False  # 简化测试
+            enable_validation=False  # Simplify testing
         )
     
     def test_load_base_config(self, loader):
@@ -90,11 +92,11 @@ role_competencies:
         assert config is not None
         assert config["role"]["id"] == "backend_engineer"
         
-        # 应该继承基础配置的universal_competencies
+        # Should inherit universal_competencies from base config
         assert "universal_competencies" in config
         assert "ownership" in config["universal_competencies"]
         
-        # 应该有自己的role_competencies
+        # Should have its own role_competencies
         assert "role_competencies" in config
         assert "technical_depth" in config["role_competencies"]
     
@@ -104,30 +106,30 @@ role_competencies:
         assert config is None
     
     def test_cache_hit(self, loader):
-        """测试缓存命中"""
-        # 第一次加载
+        """Test cache hit"""
+        # First load
         config1 = loader.load_config("backend_engineer")
         
-        # 第二次加载应该从缓存获取
+        # Second load should hit cache
         config2 = loader.load_config("backend_engineer")
         
         assert config1 == config2
         
-        # 检查缓存统计
+        # Check cache statistics
         stats = loader.cache.get_stats()
         assert stats["hits"] >= 1
     
     def test_reload_config(self, loader):
-        """测试重新加载配置"""
-        # 第一次加载
+        """Test reloading config"""
+        # First load
         config1 = loader.load_config("backend_engineer")
         
-        # 重新加载
+        # Reload
         config2 = loader.reload_config("backend_engineer")
         
         assert config1 == config2
         
-        # 缓存应该被清除
+        # Cache should be cleared
         stats = loader.cache.get_stats()
         assert stats["invalidations"] >= 1
     
@@ -146,24 +148,24 @@ role_competencies:
         result = loader._deep_merge(base, override)
         
         assert result["a"] == 1
-        assert result["b"]["c"] == 20  # 覆盖
-        assert result["b"]["d"] == 3   # 保留
-        assert result["b"]["f"] == 4   # 新增
-        assert result["g"] == 5        # 新增
+        assert result["b"]["c"] == 20  # Override
+        assert result["b"]["d"] == 3   # Keep
+        assert result["b"]["f"] == 4   # New
+        assert result["g"] == 5        # New
     
     def test_find_config_file(self, loader, temp_config_dir):
-        """测试查找配置文件"""
-        # 查找基础配置
+        """Test finding config file"""
+        # Find base config
         file_path = loader._find_config_file("_base")
         assert file_path is not None
         assert file_path.name == "_base.yaml"
         
-        # 查找子目录中的配置
+        # Find config in subdirectory
         file_path = loader._find_config_file("backend_engineer")
         assert file_path is not None
         assert file_path.name == "backend_engineer.yaml"
         
-        # 查找不存在的配置
+        # Find non-existent config
         file_path = loader._find_config_file("nonexistent")
         assert file_path is None
 

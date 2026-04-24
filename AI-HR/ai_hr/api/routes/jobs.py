@@ -1,4 +1,4 @@
-"""岗位管理路由。"""
+"""Job management routes."""
 
 from __future__ import annotations
 
@@ -281,6 +281,7 @@ def list_job_candidates(
     cursor: str | None = None,
     keyword: str | None = None,
     resume_status: str | None = None,
+    stage: str | None = None,
     segment: str | None = None,
     session: Session = Depends(get_db_session),
 ) -> Envelope[JobCandidateListResult]:
@@ -292,6 +293,7 @@ def list_job_candidates(
         cursor=cursor,
         keyword=keyword,
         resume_status=resume_status,
+        stage=stage,
         segment=segment,
     )
     response = JobCandidateListResult(

@@ -571,6 +571,23 @@ async function bootstrap(): Promise<void> {
     } else {
         session.value = await bootstrapDemoSession();
     }
+    
+    // Check session status
+    if (session.value!.status === "completed" || session.value!.status === "failed" || session.value!.status === "cancelled") {
+        errorText.value = "此面试已结束，无法重新加入。请联系管理员获取新的面试邀请。";
+        interviewEnded.value = true;
+        loading.value = false;
+        
+        // Still load history for viewing
+        try {
+            const replay = await loadReplayItems(session.value!.id);
+            hydrateReplay(replay);
+        } catch (err) {
+            console.warn("Failed to load replay items:", err);
+        }
+        return;
+    }
+    
     const rtc = await joinInterviewRTC(session.value!.id, session.value!.candidate_id, RTC_CLIENT_ID);
     await rtcGateway.connect({ appId: rtc.app_id!, channel: rtc.channel_name, token: rtc.join_token, uid: Number(rtc.uid) });
     await ensureTenLaunchCommand(session.value!.id);

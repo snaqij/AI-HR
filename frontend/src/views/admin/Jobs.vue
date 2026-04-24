@@ -1,496 +1,638 @@
 <template>
-  <div class="max-w-7xl mx-auto">
-    <div class="flex justify-between items-center mb-8">
-      <h1 class="text-3xl font-black tracking-tight text-on-surface">{{ zh.pageTitle }}</h1>
-      <div class="flex items-center gap-4">
+  <div class="admin-page">
+    <section class="flex flex-wrap items-center justify-between gap-4">
+      <div class="flex flex-wrap items-center gap-6 border-b border-[#eef2f7]">
         <button
-          @click="handleGlobalSync"
-          :disabled="isGlobalSyncing"
-          class="flex items-center gap-2 px-6 py-2.5 bg-surface-container-low rounded-xl text-[11px] font-black text-primary uppercase tracking-widest hover:bg-primary/10 transition-all disabled:opacity-50"
+          v-for="tab in statusTabs"
+          :key="tab.key"
+          type="button"
+          class="admin-tab"
+          :class="{ 'is-active': activeTab === tab.key }"
+          @click="activeTab = tab.key"
         >
-          <span class="material-symbols-outlined text-sm" :class="{ 'animate-spin': isGlobalSyncing }">cloud_sync</span>
-          {{ zh.syncBossJobs }}
-        </button>
-        <button class="px-6 py-2.5 rounded-xl ai-gradient text-white text-sm font-black shadow-lg hover-lift transition-all">
-          {{ zh.publishNewJob }}
+          <span>{{ tab.label }}</span>
+          <span>{{ tab.count }}</span>
         </button>
       </div>
-    </div>
 
-    <div class="bg-surface-container-lowest p-6 rounded-2xl shadow-sm border border-outline-variant/10 mb-8 flex items-center gap-6">
-      <div class="flex items-center gap-3 border-r border-outline-variant/20 pr-6 shrink-0">
-        <span class="material-symbols-outlined text-primary font-black">smart_button</span>
-        <span class="text-sm font-black text-on-surface">{{ zh.smartFilter }}</span>
+      <div class="flex items-center gap-3">
+        <button
+          v-if="hasSelection"
+          class="admin-quiet-btn text-red-600 hover:bg-red-50"
+          @click="openDeleteConfirm"
+        >
+          <span class="material-symbols-outlined text-[18px]">delete</span>
+          删除选中 ({{ selectedJobIds.size }})
+        </button>
+        <button class="admin-quiet-btn" :disabled="isGlobalSyncing" @click="handleGlobalSync">
+          <span class="material-symbols-outlined text-[18px]" :class="{ 'animate-spin': isGlobalSyncing }">sync</span>
+          {{ isGlobalSyncing ? "同步中..." : "同步职位" }}
+        </button>
+        <button class="admin-primary-btn">
+          <span class="material-symbols-outlined text-[18px]">add</span>
+          新建职位
+        </button>
+      </div>
+    </section>
+
+    <section class="admin-toolbar px-5 py-4">
+      <div class="flex flex-col gap-4 xl:flex-row xl:items-center">
+        <div class="relative min-w-0 flex-1">
+          <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[17px] text-[#a4afc0]">search</span>
+          <input
+            v-model.trim="keyword"
+            type="text"
+            placeholder="搜索职位名称、部门、工作地点"
+            class="admin-input admin-search-input"
+          >
+        </div>
+
+        <div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:min-w-[520px]">
+          <div class="relative">
+            <select v-model="departmentFilter" class="admin-select appearance-none pr-9">
+              <option value="">全部部门</option>
+              <option v-for="department in departmentOptions" :key="department" :value="department">
+                {{ department }}
+              </option>
+            </select>
+            <span class="material-symbols-outlined pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[18px] text-[#a4afc0]">expand_more</span>
+          </div>
+
+          <div class="relative">
+            <select v-model="statusFilter" class="admin-select appearance-none pr-9">
+              <option value="">全部状态</option>
+              <option value="active">招聘中</option>
+              <option value="paused">暂停中</option>
+              <option value="closed">已关闭</option>
+            </select>
+            <span class="material-symbols-outlined pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[18px] text-[#a4afc0]">expand_more</span>
+          </div>
+
+          <button class="admin-quiet-btn w-full justify-between" @click="resetFilters">
+            <span class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-[17px]">filter_alt</span>
+              重置筛选
+            </span>
+            <span class="material-symbols-outlined text-[16px]">refresh</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin-table-shell">
+      <div class="grid grid-cols-[48px_minmax(280px,2.4fr)_140px_1fr_120px_120px_100px_140px_132px] gap-4 px-8 py-4 admin-table-head">
+        <div class="flex items-center justify-center">
+          <input
+            type="checkbox"
+            :checked="isAllSelected"
+            :indeterminate="hasSelection && !isAllSelected"
+            class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary focus:ring-2 focus:ring-primary"
+            @change="toggleSelectAll"
+          >
+        </div>
+        <div class="admin-table-label">职位名称</div>
+        <div class="admin-table-label">职位编号</div>
+        <div class="admin-table-label">部门</div>
+        <div class="admin-table-label">工作地点</div>
+        <div class="admin-table-label">招聘状态</div>
+        <div class="admin-table-label text-center">候选人</div>
+        <div class="admin-table-label">更新时间</div>
+        <div class="admin-table-label text-right">操作</div>
       </div>
 
-      <div class="flex-1 flex gap-4 items-center">
-        <div class="relative min-w-[140px]">
-          <label class="absolute -top-2 left-3 bg-white px-1 text-[9px] font-black text-on-surface-variant uppercase tracking-widest z-10">{{ zh.platform }}</label>
-          <select v-model="platformFilter" class="w-full bg-surface-container-low/50 border border-outline-variant/10 rounded-lg px-3 py-2 text-xs font-bold appearance-none cursor-pointer focus:ring-2 focus:ring-primary/10 outline-none">
-            <option value="">{{ zh.all }}</option>
-            <option v-for="platform in platformOptions" :key="platform" :value="platform">{{ platform }}</option>
-          </select>
-          <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-base text-on-surface-variant">expand_more</span>
-        </div>
+      <div v-if="isLoading" class="admin-empty">
+        <div class="h-10 w-10 animate-spin rounded-full border-4 border-primary/20 border-t-primary"></div>
+        <p class="mt-4 text-sm text-on-surface-variant">正在加载职位数据...</p>
+      </div>
 
-        <div class="relative flex-1">
-          <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-lg">search</span>
-          <input v-model.trim="nameFilter" type="text" :placeholder="zh.searchJobs" class="w-full pl-10 pr-4 py-2 bg-surface-container-low/50 border border-outline-variant/10 rounded-lg text-xs font-medium focus:ring-2 focus:ring-primary/10 outline-none">
+      <div v-else-if="pagedJobs.length === 0" class="admin-empty">
+        <div class="flex h-16 w-16 items-center justify-center rounded-full bg-surface-container-low text-on-surface-variant">
+          <span class="material-symbols-outlined text-[28px]">work_outline</span>
         </div>
+        <p class="mt-4 text-sm font-semibold text-on-surface">暂无职位数据</p>
+        <p class="mt-1 text-sm text-on-surface-variant">当前筛选条件下没有可展示的职位。</p>
+      </div>
 
-        <div class="relative min-w-[120px]">
-          <label class="absolute -top-2 left-3 bg-white px-1 text-[9px] font-black text-on-surface-variant uppercase tracking-widest z-10">{{ zh.type }}</label>
-          <select v-model="typeFilter" class="w-full bg-surface-container-low/50 border border-outline-variant/10 rounded-lg px-3 py-2 text-xs font-bold appearance-none cursor-pointer focus:ring-2 focus:ring-primary/10 outline-none">
-            <option value="">{{ zh.all }}</option>
-            <option value="intern">{{ zh.intern }}</option>
-            <option value="social">{{ zh.social }}</option>
-          </select>
-          <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-base text-on-surface-variant">expand_more</span>
-        </div>
+      <div v-else>
+        <div
+          v-for="job in pagedJobs"
+          :key="job.id"
+          class="admin-table-row grid cursor-pointer grid-cols-[48px_minmax(280px,2.4fr)_140px_1fr_120px_120px_100px_140px_132px] gap-4 border-b border-[#f0f4fa] px-8 py-5 last:border-b-0"
+          @click="openJobCandidates(job.id)"
+        >
+          <div class="flex items-center justify-center" @click.stop>
+            <input
+              type="checkbox"
+              :checked="selectedJobIds.has(job.id)"
+              class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary focus:ring-2 focus:ring-primary"
+              @change="toggleSelectJob(job.id)"
+            >
+          </div>
+          <div class="min-w-0">
+            <p class="truncate text-[18px] font-bold tracking-tight text-on-surface">{{ job.title }}</p>
+            <p class="mt-1 truncate text-[13px] text-on-surface-variant">
+              {{ [job.department || "默认部门", job.city || "未设置", job.salary_range || "薪资面议"].join(" · ") }}
+            </p>
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <span
+                v-if="job.auto_request_resume"
+                class="inline-flex items-center rounded-full bg-[#ecf8f1] px-3 py-1 text-[12px] font-semibold text-[#1f9d62]"
+              >
+                自动请求已开启
+              </span>
+              <span
+                v-if="hasConfig(job)"
+                class="inline-flex items-center rounded-full bg-[#f3f6fb] px-3 py-1 text-[12px] font-medium text-[#71819a]"
+              >
+                {{ configSummary(job) }}
+              </span>
+            </div>
+          </div>
 
-        <div class="relative min-w-[160px]">
-          <label class="absolute -top-2 left-3 bg-white px-1 text-[9px] font-black text-on-surface-variant uppercase tracking-widest z-10">{{ zh.salary }}</label>
-          <input v-model.trim="salaryFilter" type="text" :placeholder="zh.salaryPlaceholder" class="w-full bg-surface-container-low/50 border border-outline-variant/10 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-primary/10 outline-none">
-          <span class="material-symbols-outlined absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-base text-on-surface-variant">expand_more</span>
+          <div class="flex items-center text-[13px] font-medium text-on-surface-variant">
+            {{ jobCode(job) }}
+          </div>
+
+          <div class="flex items-center text-[13px] text-on-surface-variant">
+            {{ job.department || "未分配" }}
+          </div>
+
+          <div class="flex items-center text-[13px] text-on-surface-variant">
+            {{ job.city || "-" }}
+          </div>
+
+          <div class="flex items-center">
+            <span class="admin-badge" :class="statusBadgeClass(job)">{{ statusText(job) }}</span>
+          </div>
+
+          <div class="flex items-center justify-center">
+            <span class="admin-badge admin-badge-blue min-w-[42px]">{{ job.candidate_count || 0 }}</span>
+          </div>
+
+          <div class="flex items-center text-[13px] text-on-surface-variant">
+            {{ formatDate(job.published_at || job.created_at) }}
+          </div>
+
+          <div class="flex items-center justify-end gap-4">
+            <button type="button" class="admin-link-btn" @click.stop="openConfig(job.id)">配置</button>
+            <button type="button" class="admin-link-btn" @click.stop="openJobCandidates(job.id)">详情</button>
+          </div>
         </div>
       </div>
 
-      <div class="flex items-center gap-2">
-        <button @click="resetFilters" class="px-5 py-2.5 bg-surface-container-high rounded-xl text-[11px] font-black text-on-surface-variant hover:bg-outline-variant/20 transition-all">{{ zh.reset }}</button>
+      <div class="flex items-center justify-between border-t border-[#eef2f7] px-6 py-4">
+        <p class="text-[13px] text-on-surface-variant">共 {{ filteredJobs.length }} 条</p>
+        <div class="flex items-center gap-2">
+          <button class="admin-pagination-btn" :disabled="currentPage === 1" @click="currentPage = Math.max(1, currentPage - 1)">
+            <span class="material-symbols-outlined text-[18px]">chevron_left</span>
+          </button>
+          <button
+            v-for="page in visiblePages"
+            :key="page"
+            class="admin-pagination-btn"
+            :class="{ 'is-active': page === currentPage }"
+            @click="currentPage = page"
+          >
+            {{ page }}
+          </button>
+          <button class="admin-pagination-btn" :disabled="currentPage === totalPages" @click="currentPage = Math.min(totalPages, currentPage + 1)">
+            <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+          </button>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <div class="mb-10">
-      <div class="flex justify-between items-center mb-6">
+    <div
+      v-if="configDialogOpen"
+      class="fixed inset-0 z-40 bg-[rgba(15,23,42,0.18)] backdrop-blur-[2px]"
+      @click="closeConfig"
+    ></div>
+
+    <div
+      v-if="configDialogOpen && activeConfigJob"
+      class="fixed left-1/2 top-1/2 z-50 w-[min(640px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-[20px] border border-[#e8eef8] bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.16)]"
+      @click.stop
+    >
+      <div class="flex items-start justify-between gap-4">
         <div>
-          <h2 class="text-2xl font-black text-on-surface">{{ zh.activeJobs }}</h2>
-          <p class="text-xs text-on-surface-variant font-bold mt-1 uppercase tracking-widest">
-            {{ zh.currentTotalPrefix }} <span class="text-primary">{{ filteredJobs.length }}</span> {{ zh.currentTotalSuffix }}
-          </p>
+          <p class="text-[12px] font-semibold uppercase tracking-[0.16em] text-primary">配置</p>
+          <h3 class="mt-2 text-[24px] font-bold tracking-tight text-on-surface">{{ activeConfigJob.title }}</h3>
+          <p class="mt-2 text-[13px] text-on-surface-variant">设置岗位筛选条件和自动请求简历策略</p>
+        </div>
+        <button
+          type="button"
+          class="flex h-9 w-9 items-center justify-center rounded-full text-[#7b8798] transition-colors hover:bg-[#f5f8fd] hover:text-primary"
+          @click="closeConfig"
+        >
+          <span class="material-symbols-outlined text-[18px]">close</span>
+        </button>
+      </div>
+
+      <div class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div>
+          <label class="admin-label">最低学历</label>
+          <select v-model="activeDraft.min_degree" class="admin-select mt-2">
+            <option value="">不限</option>
+            <option v-for="option in degreeOptions" :key="option" :value="option">{{ option }}</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="admin-label">最低工作经验</label>
+          <input
+            v-model="activeDraft.min_experience_years"
+            type="number"
+            min="0"
+            class="admin-input mt-2"
+            placeholder="例如 3"
+          >
+        </div>
+
+        <div>
+          <label class="admin-label">每日请求获取点数</label>
+          <input
+            v-model="activeDraft.max_daily_resume_requests"
+            type="number"
+            min="0"
+            class="admin-input mt-2"
+            placeholder="例如 10"
+          >
+        </div>
+
+        <div>
+          <label class="admin-label">自动获取简历</label>
+          <button
+            type="button"
+            class="mt-2 flex h-[44px] w-full items-center justify-between rounded-[12px] border border-[#e7edf7] bg-white px-4 text-[13px] font-medium transition-colors"
+            :class="activeDraft.auto_request_resume ? 'border-[#cfe0ff] text-primary' : 'text-on-surface-variant'"
+            @click="toggleAutoRequest(activeConfigJob.id)"
+          >
+            <span>{{ activeDraft.auto_request_resume ? "已开启" : "已关闭" }}</span>
+            <span
+              class="relative h-5 w-9 rounded-full transition-colors"
+              :class="activeDraft.auto_request_resume ? 'bg-primary' : 'bg-[#d9e1ee]'"
+            >
+              <span
+                class="absolute top-[2px] h-4 w-4 rounded-full bg-white transition-transform"
+                :class="activeDraft.auto_request_resume ? 'translate-x-4' : 'translate-x-0.5'"
+              ></span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-[14px] bg-[#f7faff] px-4 py-4">
+        <div>
+          <p class="text-[13px] font-semibold text-on-surface">岗位筛选条件</p>
+          <p class="mt-1 text-[12px] text-on-surface-variant">保存后会应用到自动请求简历流程</p>
         </div>
         <div class="flex items-center gap-3">
-          <button
-            @click="handleBatchDelete"
-            :disabled="selectedJobIds.length === 0"
-            class="px-4 py-2 rounded-xl bg-rose-50 text-rose-700 text-xs font-black border border-rose-200 disabled:opacity-50"
+          <span
+            v-if="activeDraft.auto_request_resume"
+            class="inline-flex items-center rounded-full bg-[#ecf8f1] px-3 py-1 text-[12px] font-semibold text-[#1f9d62]"
           >
-            {{ zh.batchDelete }} ({{ selectedJobIds.length }})
+            自动请求已开启
+          </span>
+          <button type="button" class="admin-quiet-btn" @click="closeConfig">取消</button>
+          <button
+            type="button"
+            class="admin-primary-btn whitespace-nowrap"
+            :disabled="savingJobId === activeConfigJob.id"
+            @click="handleSaveJobSettings(activeConfigJob.id)"
+          >
+            <span
+              v-if="savingJobId === activeConfigJob.id"
+              class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"
+            ></span>
+            {{ savingJobId === activeConfigJob.id ? "保存中..." : "保存配置" }}
           </button>
         </div>
       </div>
-
-      <div class="bg-surface-container-lowest rounded-2xl shadow-sm border border-outline-variant/10 overflow-hidden">
-        <div class="grid grid-cols-12 bg-surface-container-low/50 px-8 py-4 text-on-surface-variant border-b border-outline-variant/5">
-          <div class="col-span-1 text-center"><input type="checkbox" :checked="allVisibleSelected" @change="toggleSelectAllVisible" /></div>
-          <div class="col-span-2"><span class="text-xs font-black uppercase tracking-widest">{{ zh.jobName }}</span></div>
-          <div class="col-span-2 text-center"><span class="text-xs font-black uppercase tracking-widest">{{ zh.salaryRange }}</span></div>
-          <div class="col-span-2 text-center"><span class="text-xs font-black uppercase tracking-widest">{{ zh.status }}</span></div>
-          <div class="col-span-3 text-center"><span class="text-xs font-black uppercase tracking-widest">{{ zh.overview }}</span></div>
-          <div class="col-span-2 text-right"><span class="text-xs font-black uppercase tracking-widest">{{ zh.actions }}</span></div>
-        </div>
-
-        <div class="divide-y divide-outline-variant/5" v-if="!isLoading">
-          <div v-for="job in filteredJobs" :key="job.id" class="grid grid-cols-12 px-8 py-6 items-center hover:bg-surface/50 transition-colors group cursor-pointer" @click="$router.push(`/admin/candidates?jobId=${job.id}`)">
-            <div class="col-span-1 text-center">
-              <input type="checkbox" :checked="selectedJobIds.includes(job.id)" @click.stop @change="toggleJobSelection(job.id)" />
-            </div>
-            <div class="col-span-2">
-              <p class="font-headline font-black text-base text-on-surface group-hover:text-primary transition-colors">{{ job.title }}</p>
-              <p class="text-xs text-on-surface-variant font-bold mt-1 uppercase tracking-widest">{{ job.department }} · {{ job.city }}</p>
-            </div>
-            <div class="col-span-2 text-center text-sm font-black text-on-surface-variant">
-              {{ job.salary_range }}
-            </div>
-            <div class="col-span-2 text-center">
-              <div class="flex flex-col items-center gap-2">
-                <span class="px-3 py-1.5 rounded-full text-[10px] font-black tracking-widest uppercase border" :class="getStatusBadge(job.status)">
-                  {{ getStatusText(job.status) }}
-                </span>
-                <span v-if="job.auto_request_resume" class="flex items-center gap-1 text-[8px] font-black text-primary uppercase tracking-tighter bg-primary/5 px-2 py-0.5 rounded-md border border-primary/10">
-                  <span class="material-symbols-outlined text-[10px] animate-pulse">robot_2</span> {{ zh.autoResumeOn }}
-                </span>
-              </div>
-            </div>
-            <div class="col-span-3 grid grid-cols-2 gap-4 px-4 items-center">
-              <div class="text-center">
-                <p class="text-sm font-black text-on-surface leading-tight">{{ job.candidate_count || 0 }}</p>
-                <p class="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-tighter">{{ zh.candidates }}</p>
-              </div>
-              <div class="text-center">
-                <p class="text-sm font-black text-on-surface leading-tight">{{ job.publications?.length || 0 }}</p>
-                <p class="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-tighter">{{ zh.channels }}</p>
-              </div>
-            </div>
-            <div class="col-span-2 flex justify-end items-center">
-              <button @click.stop="openAutomationSettings(job)" class="w-10 h-10 rounded-xl hover:bg-surface-container-high text-on-surface-variant hover:text-primary transition-all flex items-center justify-center mr-1" :title="zh.automationConfig">
-                <span class="material-symbols-outlined text-xl">settings_input_composite</span>
-              </button>
-              <button @click.stop="handleSync(job.id)" class="w-10 h-10 rounded-xl hover:bg-primary/10 text-on-surface-variant hover:text-primary transition-all flex items-center justify-center group/btn">
-                <span class="material-symbols-outlined text-xl group-active/btn:rotate-180 transition-transform">sync</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div v-else-if="!isLoading && filteredJobs.length === 0" class="p-20 text-center">
-          <p class="text-xs font-bold text-on-surface-variant mt-4 uppercase tracking-widest">{{ zh.noJobs }}</p>
-        </div>
-
-        <div v-else class="p-20 text-center">
-          <div class="inline-block w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin"></div>
-          <p class="text-xs font-bold text-on-surface-variant mt-4 uppercase tracking-widest">{{ zh.loadingJobs }}</p>
-        </div>
-      </div>
     </div>
 
-    <div v-if="syncLog.length > 0" class="mt-8 bg-surface-container-low p-6 rounded-2xl border border-outline-variant/10">
-      <h3 class="text-xs font-black text-on-surface-variant uppercase tracking-widest mb-4">{{ zh.syncLog }}</h3>
-      <div class="space-y-2 font-mono text-[10px] text-on-surface-variant/70">
-        <p v-for="(log, i) in syncLog.slice(0, 5)" :key="i">{{ log }}</p>
-      </div>
-    </div>
+    <!-- Delete confirmation dialog -->
+    <div
+      v-if="showDeleteConfirm"
+      class="fixed inset-0 z-40 bg-[rgba(15,23,42,0.18)] backdrop-blur-[2px]"
+      @click="closeDeleteConfirm"
+    ></div>
 
-    <div class="bg-surface-container-lowest p-8 rounded-2xl shadow-sm border border-outline-variant/10 border-l-[4px] border-primary-container relative overflow-hidden group">
-      <div class="flex items-start gap-6 relative z-10">
-        <div class="w-12 h-12 bg-primary/5 rounded-2xl flex items-center justify-center shrink-0 border border-primary/10">
-          <span class="material-symbols-outlined text-primary text-2xl material-fill">lightbulb</span>
+    <div
+      v-if="showDeleteConfirm"
+      class="fixed left-1/2 top-1/2 z-50 w-[min(480px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-[20px] border border-[#e8eef8] bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.16)]"
+      @click.stop
+    >
+      <div class="flex items-start gap-4">
+        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+          <span class="material-symbols-outlined text-[24px] text-red-600">warning</span>
         </div>
         <div class="flex-1">
-          <h3 class="text-lg font-black text-on-surface mb-2">{{ zh.aiInsightTitle }}</h3>
-          <p class="text-xs text-on-surface-variant leading-relaxed font-medium opacity-80">{{ zh.aiInsightText }}</p>
+          <h3 class="text-[20px] font-bold tracking-tight text-on-surface">确认删除职位</h3>
+          <p class="mt-2 text-[14px] text-on-surface-variant">
+            您即将删除 <span class="font-semibold text-red-600">{{ selectedJobIds.size }}</span> 个职位，此操作不可撤销。
+          </p>
+          <p class="mt-1 text-[13px] text-on-surface-variant">
+            删除职位将同时删除相关的候选人数据和面试记录。
+          </p>
         </div>
       </div>
-      <div class="absolute -right-12 -bottom-12 w-48 h-48 bg-primary/5 rounded-full blur-3xl group-hover:bg-primary/10 transition-colors"></div>
-    </div>
 
-    <div class="fixed bottom-10 right-10">
-      <button class="w-14 h-14 rounded-full ai-gradient text-white shadow-2xl flex items-center justify-center hover:scale-110 active:scale-90 transition-all group">
-        <span class="material-symbols-outlined text-2xl">add</span>
-        <div class="absolute right-full mr-4 px-4 py-2 bg-on-surface text-white text-[10px] font-black rounded-xl opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap shadow-xl uppercase tracking-widest">
-          {{ zh.publishNewJob }}
-        </div>
-      </button>
-    </div>
-
-    <div v-if="showAutomationModal && currentJob" class="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div class="absolute inset-0 bg-on-surface/40 backdrop-blur-sm" @click="showAutomationModal = false"></div>
-      <div class="relative bg-surface-container-lowest w-full max-w-xl rounded-[40px] shadow-2xl overflow-hidden border border-outline-variant/10 animate-in fade-in zoom-in duration-300">
-        <div class="px-10 pt-10 pb-8">
-          <div class="flex items-center gap-6 mb-8">
-            <div class="w-16 h-16 rounded-[24px] ai-gradient flex items-center justify-center shadow-lg shadow-primary/20">
-              <span class="material-symbols-outlined text-white text-3xl">robot_2</span>
-            </div>
-            <div>
-              <h3 class="text-2xl font-black text-on-surface tracking-tight">{{ currentJob.title }}</h3>
-              <p class="text-[11px] font-bold text-on-surface-variant uppercase tracking-widest">{{ zh.pipelineConfig }}</p>
-            </div>
-          </div>
-
-          <div class="space-y-8">
-            <div class="flex items-center justify-between p-6 bg-surface-container-low rounded-[24px] border border-outline-variant/5">
-              <div>
-                <p class="text-base font-black text-on-surface">{{ zh.autoResumeTitle }}</p>
-                <p class="text-xs text-on-surface-variant font-medium">{{ zh.autoResumeDesc }}</p>
-              </div>
-              <label class="relative inline-flex items-center cursor-pointer scale-110">
-                <input type="checkbox" v-model="currentJob.auto_request_resume" class="sr-only peer">
-                <div class="w-12 h-6.5 bg-outline-variant/30 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5.5 after:w-5.5 after:transition-all peer-checked:bg-primary"></div>
-              </label>
-            </div>
-
-            <div class="grid grid-cols-2 gap-6" :class="{ 'opacity-40 pointer-events-none grayscale': !currentJob.auto_request_resume }">
-              <div class="relative">
-                <label class="absolute -top-2.5 left-4 bg-surface-container-lowest px-1.5 text-[10px] font-black text-primary uppercase tracking-widest z-10">{{ zh.minDegree }}</label>
-                <select v-model="currentJob.min_degree" class="w-full bg-surface-container-low/50 border border-outline-variant/10 rounded-2xl px-5 py-4 text-sm font-bold appearance-none cursor-pointer focus:ring-2 focus:ring-primary/20 outline-none">
-                  <option v-for="opt in degreeOptions" :key="opt" :value="opt === zh.unlimited ? null : opt">{{ opt }}</option>
-                </select>
-                <span class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-on-surface-variant">expand_more</span>
-              </div>
-
-              <div class="relative">
-                <label class="absolute -top-2.5 left-4 bg-surface-container-lowest px-1.5 text-[10px] font-black text-primary uppercase tracking-widest z-10">{{ zh.minExperience }}</label>
-                <input type="number" v-model="currentJob.min_experience_years" placeholder="0" class="w-full bg-surface-container-low/50 border border-outline-variant/10 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-primary/20 outline-none">
-                <span class="absolute right-5 top-1/2 -translate-y-1/2 text-xs font-black text-on-surface-variant/40">YRS</span>
-              </div>
-            </div>
-
-            <div class="relative" :class="{ 'opacity-40 pointer-events-none grayscale': !currentJob.auto_request_resume }">
-              <label class="absolute -top-2.5 left-4 bg-surface-container-lowest px-1.5 text-[10px] font-black text-primary uppercase tracking-widest z-10">{{ zh.dailyLimit }}</label>
-              <input type="number" v-model="currentJob.max_daily_resume_requests" placeholder="10" class="w-full bg-surface-container-low/50 border border-outline-variant/10 rounded-2xl px-5 py-4 text-sm font-bold focus:ring-2 focus:ring-primary/20 outline-none">
-              <p class="mt-3 text-[10px] text-on-surface-variant/60 font-medium px-2 flex items-center gap-1.5">
-                <span class="material-symbols-outlined text-sm">info</span> {{ zh.dailyLimitTip }}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div class="px-10 py-8 bg-surface-container-low/50 flex items-center justify-between gap-6">
-          <button @click="showAutomationModal = false" class="flex-1 px-8 py-4 rounded-2xl bg-surface-container-high text-sm font-black text-on-surface-variant uppercase tracking-widest hover:bg-outline-variant/20 transition-all">{{ zh.cancel }}</button>
-          <button @click="handleSaveSettings" :disabled="isSavingSettings" class="flex-[2] px-8 py-4 rounded-2xl ai-gradient text-white text-sm font-black shadow-lg hover-lift transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-            <span v-if="isSavingSettings" class="material-symbols-outlined text-base animate-spin">refresh</span>
-            {{ isSavingSettings ? zh.saving : zh.saveAutomation }}
-          </button>
-        </div>
+      <div class="mt-6 flex items-center justify-end gap-3">
+        <button type="button" class="admin-quiet-btn" :disabled="isDeleting" @click="closeDeleteConfirm">
+          取消
+        </button>
+        <button
+          type="button"
+          class="admin-primary-btn bg-red-600 hover:bg-red-700"
+          :disabled="isDeleting"
+          @click="handleBatchDelete"
+        >
+          <span
+            v-if="isDeleting"
+            class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"
+          ></span>
+          {{ isDeleting ? "删除中..." : "确认删除" }}
+        </button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
-import { batchDeleteJobs, listJobs, syncJobCandidates, importRemoteJobs, updateJobSettings, type Job } from '../../api';
+import { computed, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { batchDeleteJobs, importRemoteJobs, listJobs, updateJobSettings, type Job } from "../../api";
 
-const zh = {
-  pageTitle: '\u804C\u4F4D\u53D1\u5E03\u5217\u8868',
-  syncBossJobs: '\u540C\u6B65 BOSS \u804C\u4F4D',
-  publishNewJob: '\u53D1\u5E03\u65B0\u804C\u4F4D',
-  smartFilter: '\u667A\u80FD\u7B5B\u9009',
-  platform: '\u62DB\u8058\u5E73\u53F0',
-  all: '\u5168\u90E8',
-  searchJobs: '\u641C\u7D22\u804C\u4F4D\u540D\u79F0...',
-  type: '\u7C7B\u578B',
-  intern: '\u5B9E\u4E60',
-  social: '\u793E\u62DB',
-  salary: '\u85AA\u8D44\u5F85\u9047',
-  salaryPlaceholder: '\u5982 20k-40k',
-  reset: '\u91CD\u7F6E',
-  activeJobs: '\u5728\u62DB\u804C\u4F4D\u7EDF\u8BA1',
-  currentTotalPrefix: '\u5F53\u524D\u5171\u6709',
-  currentTotalSuffix: '\u4E2A\u6709\u6548\u5C97\u4F4D\u6B63\u5728\u63A5\u6536\u6295\u9012',
-  batchDelete: '\u6279\u91CF\u5220\u9664',
-  jobName: '\u804C\u4F4D\u540D\u79F0',
-  salaryRange: '\u85AA\u8D44\u8303\u56F4',
-  status: '\u72B6\u6001',
-  overview: '\u6570\u636E\u6982\u89C8',
-  actions: '\u64CD\u4F5C',
-  autoResumeOn: '\u667A\u80FD\u83B7\u53D6\u5DF2\u5F00\u542F',
-  candidates: '\u5019\u9009\u4EBA',
-  channels: '\u6E20\u9053',
-  automationConfig: '\u81EA\u52A8\u5316\u914D\u7F6E',
-  noJobs: '\u5F53\u524D\u7B5B\u9009\u6761\u4EF6\u4E0B\u6682\u65E0\u5C97\u4F4D\u3002',
-  loadingJobs: '\u6B63\u5728\u52A0\u8F7D\u804C\u4F4D\u6570\u636E...',
-  syncLog: '\u540C\u6B65\u65E5\u5FD7',
-  aiInsightTitle: 'AI \u6E20\u9053\u6D1E\u5BDF',
-  aiInsightText: '\u6839\u636E\u76EE\u524D\u7684\u62DB\u8058\u8D8B\u52BF\u5206\u6790\uff0cBOSS \u76F4\u8058\u5728\u6280\u672F\u7C7B\u5C97\u4F4D\uff08AI\u3001\u524D\u7AEF\uff09\u7684\u6295\u9012\u8F6C\u5316\u7387\u66F4\u9AD8\uff0c\u5EFA\u8BAE\u5C06\u91CD\u70B9\u9884\u7B97\u5411\u8BE5\u6E20\u9053\u503E\u659C\u3002',
-  pipelineConfig: '\u667A\u80FD\u83B7\u53D6\u6D41\u6C34\u7EBF\u914D\u7F6E',
-  autoResumeTitle: '\u5F00\u542F\u81EA\u52A8\u83B7\u53D6\u7B80\u5386',
-  autoResumeDesc: '\u7CFB\u7EDF\u5C06\u6309\u8BBE\u5B9A\u9891\u7387\u81EA\u52A8\u7533\u8BF7\u7B26\u5408\u6761\u4EF6\u7684\u7B80\u5386',
-  minDegree: '\u6700\u4F4E\u5B66\u5386\u8981\u6C42',
-  minExperience: '\u5DE5\u4F5C\u5E74\u9650\u8981\u6C42',
-  dailyLimit: '\u6BCF\u65E5\u83B7\u53D6\u4E0A\u9650 (BOSS\u70B9\u6570)',
-  dailyLimitTip: '\u5EFA\u8BAE\u8BBE\u7F6E\u4E3A 10-20\uff0c\u4EE5\u4FDD\u8BC1\u70B9\u6570\u53EF\u6301\u7EED\u6D88\u8017\u3002',
-  cancel: '\u53D6\u6D88',
-  saving: '\u6B63\u5728\u4FDD\u5B58...',
-  saveAutomation: '\u4FDD\u5B58\u81EA\u52A8\u5316\u914D\u7F6E',
-  unknownError: '\u672A\u77E5\u9519\u8BEF',
-  unlimited: '\u4E0D\u9650',
-  syncBossAllStart: '\u6B63\u5728\u540C\u6B65 BOSS \u5E73\u53F0\u5168\u91CF\u804C\u4F4D...',
-  syncBossAllSuccess: '\u5168\u91CF\u540C\u6B65\u6210\u529F',
-  syncBossAllFail: '\u5168\u91CF\u540C\u6B65\u5931\u8D25',
-  syncJobStart: '\u6B63\u5728\u540C\u6B65\u804C\u4F4D',
-  syncJobSuccess: '\u540C\u6B65\u6210\u529F',
-  syncFail: '\u540C\u6B65\u5931\u8D25',
-  batchDeleteFail: '\u6279\u91CF\u5220\u9664\u5931\u8D25',
-  confirmDeletePrefix: '\u786E\u8BA4\u5220\u9664\u9009\u4E2D\u7684',
-  confirmDeleteSuffix: '\u4E2A\u5C97\u4F4D\u5417\uff1F',
-  saveFail: '\u4FDD\u5B58\u5931\u8D25',
-  statusPublished: '\u5DF2\u53D1\u5E03',
-  statusDraft: '\u8349\u7A3F',
-  statusActive: '\u8FDB\u884C\u4E2D',
+type JobTab = "all" | "active" | "paused" | "closed";
+type JobSettingDraft = {
+  min_degree: string;
+  min_experience_years: string;
+  max_daily_resume_requests: string;
+  auto_request_resume: boolean;
 };
 
-const viewMode = ref<'grid' | 'list'>('list');
+const router = useRouter();
+
 const jobs = ref<Job[]>([]);
-const selectedJobIds = ref<string[]>([]);
 const isLoading = ref(true);
 const isGlobalSyncing = ref(false);
-const syncLog = ref<string[]>([]);
-const platformFilter = ref('');
-const nameFilter = ref('');
-const typeFilter = ref('');
-const salaryFilter = ref('');
+const savingJobId = ref("");
+const keyword = ref("");
+const departmentFilter = ref("");
+const statusFilter = ref("");
+const activeTab = ref<JobTab>("all");
+const currentPage = ref(1);
+const settingDrafts = ref<Record<string, JobSettingDraft>>({});
+const configDialogOpen = ref(false);
+const activeConfigJobId = ref("");
+const selectedJobIds = ref<Set<string>>(new Set());
+const isDeleting = ref(false);
+const showDeleteConfirm = ref(false);
 
-const platformOptions = computed(() => {
-  const channels = new Set<string>();
-  for (const job of jobs.value) {
-    for (const publication of job.publications || []) {
-      if (publication.channel) channels.add(publication.channel);
-    }
-  }
-  return Array.from(channels).sort();
-});
+const pageSize = 6;
+const degreeOptions = ["博士", "硕士", "本科", "大专", "中专", "高中"];
+
+const departmentOptions = computed(() => Array.from(new Set(jobs.value.map((job) => job.department).filter(Boolean) as string[])).sort());
+const activeJobsCount = computed(() => jobs.value.filter((job) => normalizedStatus(job) === "active").length);
+const pausedJobsCount = computed(() => jobs.value.filter((job) => normalizedStatus(job) === "paused").length);
+const closedJobsCount = computed(() => jobs.value.filter((job) => normalizedStatus(job) === "closed").length);
+
+const statusTabs = computed(() => [
+  { key: "all" as JobTab, label: "全部职位", count: jobs.value.length },
+  { key: "active" as JobTab, label: "招聘中", count: activeJobsCount.value },
+  { key: "paused" as JobTab, label: "暂停中", count: pausedJobsCount.value },
+  { key: "closed" as JobTab, label: "已关闭", count: closedJobsCount.value },
+]);
 
 const filteredJobs = computed(() => {
   return jobs.value.filter((job) => {
-    if (platformFilter.value) {
-      const matched = (job.publications || []).some((publication) => publication.channel === platformFilter.value);
-      if (!matched) return false;
-    }
-    if (nameFilter.value && !job.title.toLowerCase().includes(nameFilter.value.toLowerCase())) return false;
-    if (typeFilter.value && inferJobType(job) !== typeFilter.value) return false;
-    if (salaryFilter.value) {
-      const normalizedSalary = (job.salary_range || '').toLowerCase().replace(/\s+/g, '');
-      const query = salaryFilter.value.toLowerCase().replace(/\s+/g, '');
-      if (!normalizedSalary.includes(query)) return false;
-    }
+    const status = normalizedStatus(job);
+    const query = keyword.value.trim().toLowerCase();
+
+    if (activeTab.value !== "all" && status !== activeTab.value) return false;
+    if (statusFilter.value && status !== statusFilter.value) return false;
+    if (departmentFilter.value && (job.department || "") !== departmentFilter.value) return false;
+    if (query && ![job.title, job.department || "", job.city || "", job.id].join(" ").toLowerCase().includes(query)) return false;
+
     return true;
   });
 });
 
-const allVisibleSelected = computed(() => {
-  if (filteredJobs.value.length === 0) return false;
-  return filteredJobs.value.every((job) => selectedJobIds.value.includes(job.id));
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredJobs.value.length / pageSize)));
+const pagedJobs = computed(() => filteredJobs.value.slice((currentPage.value - 1) * pageSize, currentPage.value * pageSize));
+const visiblePages = computed(() => {
+  const pages: number[] = [];
+  const start = Math.max(1, currentPage.value - 1);
+  const end = Math.min(totalPages.value, start + 2);
+  for (let page = start; page <= end; page += 1) pages.push(page);
+  if (!pages.includes(1)) pages.unshift(1);
+  if (!pages.includes(totalPages.value)) pages.push(totalPages.value);
+  return Array.from(new Set(pages));
 });
 
-const fetchJobs = async () => {
+const activeConfigJob = computed(() => jobs.value.find((job) => job.id === activeConfigJobId.value) || null);
+const activeDraft = computed(() => {
+  if (!activeConfigJobId.value) {
+    return { min_degree: "", min_experience_years: "", max_daily_resume_requests: "", auto_request_resume: false };
+  }
+  return settingDrafts.value[activeConfigJobId.value];
+});
+
+const isAllSelected = computed(() => {
+  return pagedJobs.value.length > 0 && pagedJobs.value.every((job) => selectedJobIds.value.has(job.id));
+});
+
+const hasSelection = computed(() => selectedJobIds.value.size > 0);
+
+function normalizedStatus(job: Job): JobTab {
+  const value = String(job.status || "").toLowerCase();
+  if (value.includes("pause")) return "paused";
+  if (value.includes("draft") || value.includes("close")) return "closed";
+  return "active";
+}
+
+function statusText(job: Job): string {
+  const value = normalizedStatus(job);
+  if (value === "paused") return "暂停中";
+  if (value === "closed") return "已关闭";
+  return "招聘中";
+}
+
+function statusBadgeClass(job: Job): string {
+  const value = normalizedStatus(job);
+  if (value === "paused") return "admin-badge-orange";
+  if (value === "closed") return "bg-[#f3f6fb] text-[#7d8799]";
+  return "admin-badge-green";
+}
+
+function jobCode(job: Job): string {
+  return `JOB-${job.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 6).toUpperCase()}`;
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return "-";
+  return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+}
+
+function hasConfig(job: Job): boolean {
+  return Boolean(job.min_degree || job.min_experience_years != null || job.max_daily_resume_requests != null);
+}
+
+function configSummary(job: Job): string {
+  const parts = [
+    job.min_degree ? `学历 ${job.min_degree}` : "",
+    job.min_experience_years != null ? `经验 ${job.min_experience_years} 年` : "",
+    job.max_daily_resume_requests != null ? `点数 ${job.max_daily_resume_requests}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function resetFilters(): void {
+  keyword.value = "";
+  departmentFilter.value = "";
+  statusFilter.value = "";
+  activeTab.value = "all";
+}
+
+function syncSettingDrafts(): void {
+  const next: Record<string, JobSettingDraft> = {};
+  for (const job of jobs.value) {
+    next[job.id] = {
+      min_degree: job.min_degree || "",
+      min_experience_years: job.min_experience_years == null ? "" : String(job.min_experience_years),
+      max_daily_resume_requests: job.max_daily_resume_requests == null ? "" : String(job.max_daily_resume_requests),
+      auto_request_resume: Boolean(job.auto_request_resume),
+    };
+  }
+  settingDrafts.value = next;
+}
+
+async function fetchJobs(): Promise<void> {
   isLoading.value = true;
   try {
     jobs.value = await listJobs();
-    selectedJobIds.value = selectedJobIds.value.filter((id) => jobs.value.some((job) => job.id === id));
-  } catch (e) {
-    console.error('Failed to fetch jobs', e);
+    syncSettingDrafts();
+  } catch (error) {
+    console.error("Failed to fetch jobs", error);
+    jobs.value = [];
+    settingDrafts.value = {};
   } finally {
     isLoading.value = false;
   }
-};
+}
 
-const resetFilters = () => {
-  platformFilter.value = '';
-  nameFilter.value = '';
-  typeFilter.value = '';
-  salaryFilter.value = '';
-};
-
-onMounted(fetchJobs);
-
-const cleanErrorMessage = (err: any) => {
-  let msg = String(err || zh.unknownError);
-  if (msg.includes('{')) {
-    try {
-      const jsonStr = msg.substring(msg.indexOf('{'));
-      const errData = JSON.parse(jsonStr);
-      if (errData?.error?.message) msg = errData.error.message;
-    } catch {
-      // ignore
-    }
-  }
-  return msg.replace(/\s*\(.*\)\s*/, '').replace(/^.*:\s*/, '').trim();
-};
-
-const handleGlobalSync = async () => {
+async function handleGlobalSync(): Promise<void> {
+  if (isGlobalSyncing.value) return;
   isGlobalSyncing.value = true;
-  syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncBossAllStart}`);
   try {
-    const result = await importRemoteJobs('boss');
-    syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncBossAllSuccess}: +${result.created_count}, ~${result.updated_count}`);
+    await importRemoteJobs("boss");
     await fetchJobs();
-  } catch (e) {
-    syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncBossAllFail}: ${cleanErrorMessage(e)}`);
+  } catch (error) {
+    console.error("Failed to sync jobs", error);
   } finally {
     isGlobalSyncing.value = false;
   }
-};
+}
 
-const handleSync = async (jobId: string) => {
-  syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncJobStart} ${jobId}...`);
+function openConfig(jobId: string): void {
+  activeConfigJobId.value = jobId;
+  if (!settingDrafts.value[jobId]) {
+    syncSettingDrafts();
+  }
+  configDialogOpen.value = true;
+}
+
+function closeConfig(): void {
+  configDialogOpen.value = false;
+  activeConfigJobId.value = "";
+}
+
+async function handleSaveJobSettings(jobId: string): Promise<void> {
+  const draft = settingDrafts.value[jobId];
+  if (!draft || savingJobId.value) return;
+
+  savingJobId.value = jobId;
   try {
-    const job = jobs.value.find((item) => item.id === jobId);
-    await syncJobCandidates(jobId, {
-      max_pages: 5,
-      auto_request_resume: Boolean(job?.auto_request_resume),
+    const updated = await updateJobSettings(jobId, {
+      auto_request_resume: draft.auto_request_resume,
+      min_degree: draft.min_degree || null,
+      min_experience_years: draft.min_experience_years === "" ? null : Number(draft.min_experience_years),
+      max_daily_resume_requests: draft.max_daily_resume_requests === "" ? null : Number(draft.max_daily_resume_requests),
     });
-    syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncJobStart} ${jobId} ${zh.syncJobSuccess}`);
-    await fetchJobs();
-  } catch (e) {
-    syncLog.value.unshift(`[${new Date().toLocaleTimeString()}] ${zh.syncFail}: ${cleanErrorMessage(e)}`);
-  }
-};
-
-const toggleJobSelection = (jobId: string) => {
-  if (selectedJobIds.value.includes(jobId)) {
-    selectedJobIds.value = selectedJobIds.value.filter((id) => id !== jobId);
-    return;
-  }
-  selectedJobIds.value = [...selectedJobIds.value, jobId];
-};
-
-const toggleSelectAllVisible = () => {
-  if (allVisibleSelected.value) {
-    const visibleIds = new Set(filteredJobs.value.map((job) => job.id));
-    selectedJobIds.value = selectedJobIds.value.filter((id) => !visibleIds.has(id));
-    return;
-  }
-  const merged = new Set(selectedJobIds.value);
-  for (const job of filteredJobs.value) merged.add(job.id);
-  selectedJobIds.value = Array.from(merged);
-};
-
-const handleBatchDelete = async () => {
-  if (selectedJobIds.value.length === 0) return;
-  const confirmed = window.confirm(`${zh.confirmDeletePrefix} ${selectedJobIds.value.length} ${zh.confirmDeleteSuffix}`);
-  if (!confirmed) return;
-  try {
-    await batchDeleteJobs(selectedJobIds.value);
-    selectedJobIds.value = [];
-    await fetchJobs();
-  } catch (e) {
-    console.error('Failed to batch delete jobs', e);
-    alert(`${zh.batchDeleteFail}: ${e}`);
-  }
-};
-
-const inferJobType = (job: Job): 'intern' | 'social' => {
-  const text = `${job.title || ''} ${job.department || ''} ${job.requirements || ''}`.toLowerCase();
-  const internshipKeywords = ['\u5B9E\u4E60', 'intern', '\u5E94\u5C4A', '\u6821\u62DB', '\u6821\u56ED'];
-  if (internshipKeywords.some((keyword) => text.includes(keyword))) return 'intern';
-  return 'social';
-};
-
-const getStatusBadge = (status: string) => {
-  switch (status) {
-    case 'published': return 'bg-green-50 text-green-700 border-green-100';
-    case 'draft': return 'bg-surface-container-high text-on-surface-variant/60 border-outline-variant/10';
-    default: return 'bg-primary/10 text-primary border-primary/10';
-  }
-};
-
-const getStatusText = (status: string) => {
-  switch (status) {
-    case 'published': return zh.statusPublished;
-    case 'draft': return zh.statusDraft;
-    default: return zh.statusActive;
-  }
-};
-
-const showAutomationModal = ref(false);
-const currentJob = ref<Job | null>(null);
-const isSavingSettings = ref(false);
-
-const openAutomationSettings = (job: Job) => {
-  currentJob.value = { ...job };
-  showAutomationModal.value = true;
-};
-
-const handleSaveSettings = async () => {
-  if (!currentJob.value) return;
-  isSavingSettings.value = true;
-  try {
-    const updated = await updateJobSettings(currentJob.value.id, {
-      auto_request_resume: currentJob.value.auto_request_resume,
-      min_degree: currentJob.value.min_degree,
-      min_experience_years: currentJob.value.min_experience_years,
-      max_daily_resume_requests: currentJob.value.max_daily_resume_requests,
-    });
-    const idx = jobs.value.findIndex((j) => j.id === updated.id);
-    if (idx !== -1) jobs.value[idx] = updated;
-    showAutomationModal.value = false;
-  } catch (e) {
-    console.error('Failed to save job settings', e);
-    alert(`${zh.saveFail}: ${e}`);
+    jobs.value = jobs.value.map((job) => (job.id === jobId ? updated : job));
+    settingDrafts.value[jobId] = {
+      min_degree: updated.min_degree || "",
+      min_experience_years: updated.min_experience_years == null ? "" : String(updated.min_experience_years),
+      max_daily_resume_requests: updated.max_daily_resume_requests == null ? "" : String(updated.max_daily_resume_requests),
+      auto_request_resume: Boolean(updated.auto_request_resume),
+    };
+    closeConfig();
+  } catch (error) {
+    console.error("Failed to save job settings", error);
   } finally {
-    isSavingSettings.value = false;
+    savingJobId.value = "";
   }
-};
+}
 
-const degreeOptions = [zh.unlimited, '\u5DE5\u4F5C\u7ECF\u9A8C', '\u5927\u4E13', '\u672C\u79D1', '\u7855\u58EB', '\u535A\u58EB'];
+function toggleAutoRequest(jobId: string): void {
+  settingDrafts.value[jobId].auto_request_resume = !settingDrafts.value[jobId].auto_request_resume;
+}
+
+function openJobCandidates(jobId: string): void {
+  router.push(`/admin/candidates?jobId=${jobId}`);
+}
+
+function toggleSelectAll(): void {
+  if (isAllSelected.value) {
+    pagedJobs.value.forEach((job) => selectedJobIds.value.delete(job.id));
+  } else {
+    pagedJobs.value.forEach((job) => selectedJobIds.value.add(job.id));
+  }
+}
+
+function toggleSelectJob(jobId: string): void {
+  if (selectedJobIds.value.has(jobId)) {
+    selectedJobIds.value.delete(jobId);
+  } else {
+    selectedJobIds.value.add(jobId);
+  }
+}
+
+function openDeleteConfirm(): void {
+  if (selectedJobIds.value.size === 0) return;
+  showDeleteConfirm.value = true;
+}
+
+function closeDeleteConfirm(): void {
+  showDeleteConfirm.value = false;
+}
+
+async function handleBatchDelete(): Promise<void> {
+  if (isDeleting.value || selectedJobIds.value.size === 0) return;
+
+  isDeleting.value = true;
+  try {
+    const jobIds = Array.from(selectedJobIds.value);
+    await batchDeleteJobs(jobIds);
+    selectedJobIds.value.clear();
+    showDeleteConfirm.value = false;
+    await fetchJobs();
+  } catch (error) {
+    console.error("Failed to delete jobs", error);
+  } finally {
+    isDeleting.value = false;
+  }
+}
+
+watch([keyword, departmentFilter, statusFilter, activeTab], () => {
+  currentPage.value = 1;
+});
+
+watch(totalPages, (value) => {
+  if (currentPage.value > value) currentPage.value = value;
+});
+
+onMounted(() => {
+  fetchJobs();
+});
 </script>
