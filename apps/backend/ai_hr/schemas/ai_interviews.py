@@ -232,6 +232,8 @@ class AIInterviewReplayTurnItem(BaseModel):
     turn_id: str
     turn_no: int
     speaker: str
+    question_id: str | None = None
+    question_seq: int | None = None
     transcript: str | None = None
     audio_uri: str | None = None
     confidence: float | None = None

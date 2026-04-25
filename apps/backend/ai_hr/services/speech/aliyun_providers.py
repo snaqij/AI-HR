@@ -453,6 +453,11 @@ class _AliyunNlsCallback:
         self.last_flush_at = 0.0
         self.sentence_start_ts = 0.0
         self.asr_physical_stop_ts = 0.0  # Set by on_sentence_end; 0.0 means not yet confirmed
+        self._last_final_fragment = ""
+        self._last_final_seq = -1
+        self._last_final_epoch = -1
+        self._last_final_publish_at = 0.0
+        self._publish_counter = 0
 
     def on_start(self, message, *args):
         """Called when TranscriptionStarted is received (for Transcriber)."""
@@ -560,6 +565,10 @@ class _AliyunNlsCallback:
         self.sentence_start_ts = 0.0
         self.asr_physical_stop_ts = 0.0  # Reset to prevent stale ts leaking into next turn
         self.completed_event.clear()
+        self._last_final_fragment = ""
+        self._last_final_seq = -1
+        self._last_final_epoch = -1
+        self._last_final_publish_at = 0.0
 
     @property
     def full_transcript(self) -> str:
@@ -567,28 +576,49 @@ class _AliyunNlsCallback:
 
     def _publish_asr_turn(self, is_final: bool = False, fragment: str = ""):
         """Publish an incremental ASR fragment to the event bus."""
-        if not fragment.strip() or not DEFAULT_INTERVIEW_EVENT_BUS:
+        normalized_fragment = str(fragment or "").strip()
+        if not normalized_fragment or not DEFAULT_INTERVIEW_EVENT_BUS:
             return
 
-        # Guard: if final result for this epoch is already published, skip duplicate publish (stop() vs on_sentence_end)
+        # Deduplicate only exact repeated finals in a very short window.
+        # Do not suppress different finals within the same epoch, otherwise long answers lose sentences.
         if is_final:
-             if getattr(self, "_last_final_published_epoch", -1) == self.epoch:
-                 return
-             self._last_final_published_epoch = self.epoch
+            now = time.time()
+            compact = " ".join(normalized_fragment.split())
+            is_immediate_duplicate = (
+                compact == self._last_final_fragment
+                and self.current_seq == self._last_final_seq
+                and self.epoch == self._last_final_epoch
+                and (now - self._last_final_publish_at) <= 0.8
+            )
+            if is_immediate_duplicate:
+                logger.debug(
+                    "aliyun_nls.skip_duplicate_final session_id=%s seq=%s epoch=%s fragment=%s",
+                    self.session_id,
+                    self.current_seq,
+                    self.epoch,
+                    compact[:60],
+                )
+                return
+            self._last_final_fragment = compact
+            self._last_final_seq = self.current_seq
+            self._last_final_epoch = self.epoch
+            self._last_final_publish_at = now
+        self._publish_counter += 1
 
         try:
             if is_final:
-                logger.debug("aliyun_nls.eventbus_publish_final session_id=%s fragment=%s", self.session_id, fragment[:60])
+                logger.debug("aliyun_nls.eventbus_publish_final session_id=%s fragment=%s", self.session_id, normalized_fragment[:60])
             
             DEFAULT_INTERVIEW_EVENT_BUS.publish(
                 session_id=self.session_id,
                 event_type="asr.turn",
                 payload={
-                    "event_id": f"nls-{self.session_id}-{int(time.time()*1000)}",
+                    "event_id": f"nls-{self.session_id}-{self.epoch}-{self.current_seq}-{self._publish_counter}",
                     "turn_id": None,
                     "seq": self.current_seq,
                     "speaker": "candidate" if is_final else "candidate_partial",
-                    "transcript": fragment,
+                    "transcript": normalized_fragment,
                     "latency_ms": 0,
                     "is_final": is_final,
                 },

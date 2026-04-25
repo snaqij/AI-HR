@@ -62,6 +62,8 @@ const currentQuestion = ref("正在准备面试链路...");
 const followupQuestion = ref("");
 const transportStatus = ref("未连接");
 const transcriptView = ref<TimelineItem[]>([]);
+const seenReplayTurnIds = new Set<string>();
+const seenRealtimeEventIds = new Set<string>();
 const candidateDraft = ref("");
 const candidateDraftOccurredAt = ref("");
 const timelineBaseEpochMs = ref<number | null>(null);
@@ -288,7 +290,9 @@ function normalizeSpeaker(raw?: string | null): string {
   const lower = value.toLowerCase();
   if (!value) return "候选人";
   if (
+    lower === "ai" ||
     lower.includes("assistant") ||
+    lower.includes("bot") ||
     lower.includes("agent") ||
     lower.includes("interviewer") ||
     value.includes("面试官")
@@ -334,6 +338,48 @@ function isTranscriptOverlap(left: string, right: string): boolean {
   const a = left.trim();
   const b = right.trim();
   return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+function mergeTranscriptFragment(baseText: string, incomingText: string): string {
+  const base = String(baseText || "").trim();
+  const incoming = String(incomingText || "").trim();
+  if (!base) return incoming;
+  if (!incoming) return base;
+  if (base === incoming || base.includes(incoming)) return base;
+  if (incoming.includes(base)) return incoming;
+
+  const overlapMax = Math.min(base.length, incoming.length);
+  for (let size = overlapMax; size >= 2; size -= 1) {
+    if (base.slice(-size) === incoming.slice(0, size)) {
+      return `${base}${incoming.slice(size)}`;
+    }
+  }
+
+  return `${base} ${incoming}`.trim();
+}
+
+function appendCandidateDraftFragment(fragment: string, occurredAt = ""): void {
+  const text = String(fragment || "").trim();
+  if (!text) return;
+  candidateDraft.value = mergeTranscriptFragment(candidateDraft.value, text);
+  if (!candidateDraftOccurredAt.value && occurredAt) {
+    candidateDraftOccurredAt.value = occurredAt;
+  }
+}
+
+function rememberRealtimeEvent(eventType: string, payload: Record<string, any>, event: InterviewRealtimeEvent): boolean {
+  const explicitId = String(payload.event_id || (event as any).event_id || "").trim();
+  const dedupeKey = explicitId
+    || `${eventType}|${String((event as any).ts || payload.ts || payload.occurred_at || "")}|${String(payload.trace_id || payload.seq || payload.turn_id || payload.chunk_index || payload.question_id || payload.state || payload.text || payload.transcript || "")}`;
+  if (!dedupeKey) return false;
+  if (seenRealtimeEventIds.has(dedupeKey)) return true;
+  seenRealtimeEventIds.add(dedupeKey);
+  // Keep memory bounded for long sessions.
+  if (seenRealtimeEventIds.size > 4000) {
+    const first = seenRealtimeEventIds.values().next().value as string | undefined;
+    if (first) seenRealtimeEventIds.delete(first);
+  }
+  return false;
 }
 
 function clearCandidateDraftFallbackTimer(): void {
@@ -402,7 +448,22 @@ function scheduleCandidateDraftFallback(): void {
 function hydrateReplay(items: ReplayItem[]): void {
   timelineBaseEpochMs.value = parseOccurredAtMs(items[0]?.occurred_at || "") ?? null;
   transcriptView.value = [];
-  items.filter((item) => item.transcript).forEach((item) => appendTranscript(item.transcript!, item.speaker, item.occurred_at));
+  seenReplayTurnIds.clear();
+  seenRealtimeEventIds.clear();
+  items.filter((item) => item.transcript).forEach((item) => {
+    if (item.turn_id) seenReplayTurnIds.add(item.turn_id);
+    appendTranscript(item.transcript!, item.speaker, item.occurred_at);
+  });
+}
+
+function mergeReplay(items: ReplayItem[]): void {
+  for (const item of items) {
+    if (!item.transcript) continue;
+    const turnId = String(item.turn_id || "").trim();
+    if (turnId && seenReplayTurnIds.has(turnId)) continue;
+    if (turnId) seenReplayTurnIds.add(turnId);
+    appendTranscript(item.transcript, item.speaker, item.occurred_at);
+  }
 }
 
 async function scrollTranscriptToLatest(): Promise<void> {
@@ -446,8 +507,10 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
     // Events from the simple /events/ws bus come with top-level event_type
     // Events bridged from TEN duplex bus wrap the payload under a nested key
     const eventType = parsed.event_type;
-    const payload = parsed.payload || (parsed as any).data || {};
+    const rawPayload = parsed.payload || (parsed as any).data || {};
+    const payload = (rawPayload && typeof rawPayload === "object" ? rawPayload : {}) as Record<string, any>;
     if (eventType === "connected" || eventType === "ping") return;
+    if (rememberRealtimeEvent(eventType, payload, parsed)) return;
 
     // --- TEN / Aliyun ASR transcript ---
     if (eventType === "asr.turn") {
@@ -456,15 +519,15 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
         if (!isFinal) {
             // partial - show as draft
             if (text) {
-                candidateDraft.value = text;
-                candidateDraftOccurredAt.value = String(payload.occurred_at || "");
+                appendCandidateDraftFragment(text, String(payload.occurred_at || ""));
                 scheduleCandidateDraftFallback();
             }
         } else {
             // final - commit to transcript
             if (text) {
                 clearCandidateDraftFallbackTimer();
-                appendTranscript(text, "候选人", String(payload.occurred_at || ""), "confirmed");
+                const mergedFinal = mergeTranscriptFragment(candidateDraft.value, text);
+                appendTranscript(mergedFinal, "候选人", String(payload.occurred_at || ""), "confirmed", { forceSeparate: true });
                 candidateDraft.value = "";
                 candidateDraftOccurredAt.value = "";
             }
@@ -498,8 +561,7 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
         return;
     }
     if (eventType === "candidate.partial") {
-        candidateDraft.value = String(payload.text || "");
-        candidateDraftOccurredAt.value = String(payload.occurred_at || "");
+        appendCandidateDraftFragment(String(payload.text || ""), String(payload.occurred_at || ""));
         scheduleCandidateDraftFallback();
         return;
     }
@@ -507,7 +569,8 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
         const text = String(payload.text || payload.transcript || "");
         if (text) {
             clearCandidateDraftFallbackTimer();
-            appendTranscript(text, "候选人", String(payload.occurred_at || ""), "confirmed");
+            const mergedFinal = mergeTranscriptFragment(candidateDraft.value, text);
+            appendTranscript(mergedFinal, "候选人", String(payload.occurred_at || ""), "confirmed", { forceSeparate: true });
             candidateDraft.value = "";
             candidateDraftOccurredAt.value = "";
         }
@@ -596,6 +659,9 @@ async function bootstrap(): Promise<void> {
     hydrateReplay(replay);
     isTranscriptPinnedToLatest.value = true;
     await connectEventBus(session.value!.id);
+    // Close replay->WS subscription race window.
+    const replayAfterWs = await loadReplayItems(session.value!.id);
+    mergeReplay(replayAfterWs);
     tickerTimer = window.setInterval(() => { elapsedSeconds.value += 1; const mins = Math.floor(elapsedSeconds.value / 60).toString().padStart(2, "0"); const secs = Math.floor(elapsedSeconds.value % 60).toString().padStart(2, "0"); meetingTimeText.value = `${mins}:${secs}`; }, 1000);
   } catch (err: any) {
     errorText.value = err.message;

@@ -105,6 +105,8 @@ class AIInterviewReportFollowupMixin:
                 "turn_id": item.id,
                 "turn_no": item.turn_no,
                 "speaker": item.speaker,
+                "question_id": item.question_id,
+                "question_seq": item.question_seq,
                 "transcript": item.transcript,
                 "audio_uri": item.audio_uri,
                 "confidence": item.confidence,

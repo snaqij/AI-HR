@@ -27,6 +27,7 @@ from .contracts import (
     InterviewQuestionSetLLMOutput,
     ReplyGenerateLLMOutput,
     ResumeParseLLMOutput,
+    AnswerEvaluationLLMOutput,
 )
 from .guardrails import GuardrailService
 from .router import ModelRoute, ModelRouter
@@ -338,6 +339,8 @@ class LLMClient:
         """Validate payload by task contract."""
         if task_key == "resume_parse":
             return ResumeParseLLMOutput.model_validate(payload).model_dump()
+        if task_key == "answer_evaluation":
+            return AnswerEvaluationLLMOutput.model_validate(payload).model_dump()
         if task_key == "candidate_score":
             return CandidateScoreLLMOutput.model_validate(payload).model_dump()
         if task_key == "candidate_evaluation":
@@ -448,6 +451,16 @@ class LLMClient:
                 "projects": [],
                 "confidence": 0.82 if skills else 0.58,
                 "risk_tags": risks,
+            }
+        if task_key == "answer_evaluation":
+            return {
+                "completeness": 80.0,
+                "logic": 85.0,
+                "evidence": 75.0,
+                "communication": 90.0,
+                "domain_fit": 88.0,
+                "confidence": 0.9,
+                "risk_tags": [],
             }
         if task_key == "candidate_score":
             base = 70.0

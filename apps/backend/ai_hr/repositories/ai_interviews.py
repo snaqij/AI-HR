@@ -38,6 +38,12 @@ class AIInterviewSessionRepository:
         note: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> AIInterviewSession:
+        safe_payload = payload or {}
+        print(
+            "[PERSIST][AIInterviewSession.create] preparing insert "
+            f"candidate_id={candidate_id} job_id={job_id} channel={channel} language={language} "
+            f"rtc_room_id={rtc_room_id} payload_keys={list(safe_payload.keys())}"
+        )
         entity = AIInterviewSession(
             workspace_id=get_workspace_id(self._session),
             candidate_id=candidate_id,
@@ -48,11 +54,15 @@ class AIInterviewSessionRepository:
             rtc_room_id=rtc_room_id,
             join_token=join_token,
             note=note,
-            payload=payload or {},
+            payload=safe_payload,
         )
         self._session.add(entity)
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewSession.create] committed "
+            f"id={entity.id} status={entity.status} created_at={entity.created_at}"
+        )
         return entity
 
     def get(self, session_id: str) -> AIInterviewSession:
@@ -81,6 +91,8 @@ class AIInterviewSessionRepository:
         payload_patch: dict[str, Any] | None = None,
     ) -> AIInterviewSession:
         entity = self.get(session_id)
+        before_status = entity.status
+        before_payload = dict(entity.payload or {})
         entity.status = status
         if note is not None:
             entity.note = note
@@ -93,8 +105,19 @@ class AIInterviewSessionRepository:
         if payload_patch:
             merged_payload.update(payload_patch)
         entity.payload = merged_payload
+        print(
+            "[PERSIST][AIInterviewSession.update_status] preparing update "
+            f"session_id={session_id} status={before_status}->{status} "
+            f"note_set={note is not None} "
+            f"payload_patch_keys={list((payload_patch or {}).keys())} "
+            f"payload_key_count={len(before_payload)}->{len(merged_payload)}"
+        )
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewSession.update_status] committed "
+            f"id={entity.id} status={entity.status} started_at={entity.started_at} ended_at={entity.ended_at}"
+        )
         return entity
 
     def update_payload(self, session_id: str, *, payload_patch: dict[str, Any]) -> AIInterviewSession:
@@ -152,6 +175,10 @@ class AIInterviewSessionRepository:
         session_payload = dict(session_entity.payload or {})
         seen_event_ids = list(session_payload.get("seen_event_ids", []))
         if event_id in seen_event_ids:
+            print(
+                "[PERSIST][AIInterviewTurn.create_turn_event] deduplicated "
+                f"session_id={session_id} event_id={event_id} speaker={speaker}"
+            )
             return None, True
 
         max_turn_stmt = select(func.max(AIInterviewTurn.turn_no)).where(AIInterviewTurn.session_id == session_id)
@@ -161,6 +188,17 @@ class AIInterviewSessionRepository:
         now = datetime.now(UTC).replace(tzinfo=None)
         turn_payload = dict(payload or {})
         turn_payload["event_id"] = event_id
+        transcript_preview = (transcript or "").strip().replace("\n", " ")
+        if len(transcript_preview) > 120:
+            transcript_preview = transcript_preview[:120] + "..."
+        print(
+            "[PERSIST][AIInterviewTurn.create_turn_event] preparing insert "
+            f"session_id={session_id} turn_no={next_turn_no} event_id={event_id} speaker={speaker} "
+            f"question_id={question_id} question_seq={question_seq} question_attempt_id={question_attempt_id} "
+            f"confidence={confidence} latency_ms={latency_ms} "
+            f"policy_flags={policy_flags or []} transcript={transcript_preview!r} "
+            f"payload_keys={list(turn_payload.keys())}"
+        )
         turn_entity = AIInterviewTurn(
             session_id=session_id,
             turn_no=next_turn_no,
@@ -185,6 +223,11 @@ class AIInterviewSessionRepository:
         session_entity.payload = session_payload
         self._session.commit()
         self._session.refresh(turn_entity)
+        print(
+            "[PERSIST][AIInterviewTurn.create_turn_event] committed "
+            f"id={turn_entity.id} session_id={turn_entity.session_id} turn_no={turn_entity.turn_no} "
+            f"speaker={turn_entity.speaker} created_at={turn_entity.created_at}"
+        )
         return turn_entity, False
 
     def is_event_seen(self, *, session_id: str, event_id: str) -> bool:
@@ -219,6 +262,11 @@ class AIInterviewSessionRepository:
         source: str,
         questions: list[dict[str, Any]],
     ) -> AIInterviewQuestionSet:
+        print(
+            "[PERSIST][AIInterviewQuestionSet.create] preparing insert "
+            f"session_id={session_id} invitation_id={invitation_id} version={version} source={source} "
+            f"question_count={len(questions or [])}"
+        )
         entity = AIInterviewQuestionSet(
             session_id=session_id,
             invitation_id=invitation_id,
@@ -229,6 +277,10 @@ class AIInterviewSessionRepository:
         self._session.add(entity)
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewQuestionSet.create] committed "
+            f"id={entity.id} version={entity.version} created_at={entity.created_at}"
+        )
         return entity
 
     def list_turns(self, session_id: str) -> list[AIInterviewTurn]:
@@ -316,6 +368,14 @@ class AIInterviewSessionRepository:
         recommendation: str,
         payload: dict[str, Any] | None = None,
     ) -> AIInterviewReport:
+        print(
+            "[PERSIST][AIInterviewReport.create] preparing insert "
+            f"session_id={session_id} report_version={report_version} recommendation={recommendation} "
+            f"summary_len={len(summary or '')} "
+            f"dimension_keys={list((dimension_scores_json or {}).keys())} "
+            f"risk_tags={risk_tags_json or []} "
+            f"payload_keys={list((payload or {}).keys())}"
+        )
         entity = AIInterviewReport(
             session_id=session_id,
             report_version=report_version,
@@ -328,6 +388,10 @@ class AIInterviewSessionRepository:
         self._session.add(entity)
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewReport.create] committed "
+            f"id={entity.id} session_id={entity.session_id} report_version={entity.report_version} created_at={entity.created_at}"
+        )
         return entity
 
 class AIInterviewInvitationRepository:
@@ -346,18 +410,28 @@ class AIInterviewInvitationRepository:
         payload: dict[str, Any] | None = None,
         note: str | None = None,
     ) -> AIInterviewInvitation:
+        safe_payload = payload or {}
+        print(
+            "[PERSIST][AIInterviewInvitation.create] preparing insert "
+            f"candidate_id={candidate_id} job_id={job_id} expires_at={expires_at} "
+            f"token={token} payload_keys={list(safe_payload.keys())}"
+        )
         entity = AIInterviewInvitation(
             candidate_id=candidate_id,
             job_id=job_id,
             token=token,
             status="pending",
             expires_at=expires_at,
-            payload=payload or {},
+            payload=safe_payload,
             note=note,
         )
         self._session.add(entity)
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewInvitation.create] committed "
+            f"id={entity.id} status={entity.status} created_at={entity.created_at}"
+        )
         return entity
 
     def get_by_id(self, invitation_id: str) -> AIInterviewInvitation:
@@ -379,9 +453,18 @@ class AIInterviewInvitationRepository:
         entity = self._session.execute(stmt).scalar_one_or_none()
         if entity is None:
             raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
+        before_status = entity.status
+        print(
+            "[PERSIST][AIInterviewInvitation.update_status] preparing update "
+            f"invitation_id={invitation_id} status={before_status}->{status}"
+        )
         entity.status = status
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewInvitation.update_status] committed "
+            f"id={entity.id} status={entity.status} updated_at={entity.updated_at}"
+        )
         return entity
 
     def update_payload(self, invitation_id: str, *, payload_patch: dict[str, Any]) -> AIInterviewInvitation:
@@ -402,13 +485,21 @@ class AIInterviewInvitationRepository:
         entity = self._session.execute(stmt).scalar_one_or_none()
         if entity is None:
             raise ResourceNotFoundError(f"AI interview invitation '{invitation_id}' was not found")
-        
+        print(
+            "[PERSIST][AIInterviewInvitation.mark_activated] preparing update "
+            f"invitation_id={invitation_id} status={entity.status}->started "
+            f"used_count={entity.used_count}->{entity.used_count + 1}"
+        )
         entity.status = "started"
         entity.used_count += 1
         entity.activated_at = datetime.now(UTC).replace(tzinfo=None)
         
         self._session.commit()
         self._session.refresh(entity)
+        print(
+            "[PERSIST][AIInterviewInvitation.mark_activated] committed "
+            f"id={entity.id} status={entity.status} used_count={entity.used_count} activated_at={entity.activated_at}"
+        )
         return entity
 
     def update_delivery(

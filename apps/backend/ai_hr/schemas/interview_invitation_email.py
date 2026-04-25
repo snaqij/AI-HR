@@ -98,6 +98,7 @@ class InterviewQuestionAnswerItem(BaseModel):
 
     question_id: str
     question: str
+    followup_questions: list[str] = Field(default_factory=list)
     candidate_answer: str | None = None
     answer_turn_no: int | None = None
 
@@ -106,6 +107,7 @@ class InterviewOpeningSegmentItem(BaseModel):
     """Opening segment shown before formal question list."""
 
     title: str
+    followup_questions: list[str] = Field(default_factory=list)
     candidate_answer: str | None = None
     answer_turn_no: int | None = None
 

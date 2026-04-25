@@ -344,12 +344,14 @@ export interface InterviewInvitationHistoryResult {
 export interface InterviewQuestionAnswerItem {
   question_id: string;
   question: string;
+  followup_questions?: string[];
   candidate_answer?: string | null;
   answer_turn_no?: number | null;
 }
 
 export interface InterviewOpeningSegmentItem {
   title: string;
+  followup_questions?: string[];
   candidate_answer?: string | null;
   answer_turn_no?: number | null;
 }

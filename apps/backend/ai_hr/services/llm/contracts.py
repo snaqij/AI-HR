@@ -42,6 +42,18 @@ class CandidateEvaluationLLMOutput(BaseModel):
     job_requirement_coverage: dict[str, str] = Field(default_factory=dict)
 
 
+class AnswerEvaluationLLMOutput(BaseModel):
+    """单题答案评估输出契约。"""
+
+    completeness: float = 0.0
+    logic: float = 0.0
+    evidence: float = 0.0
+    communication: float = 0.0
+    domain_fit: float = 0.0
+    confidence: float = 0.0
+    risk_tags: list[str] = Field(default_factory=list)
+
+
 class IntentClassifyLLMOutput(BaseModel):
     """意图分类输出契约。"""
 

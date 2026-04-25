@@ -31,6 +31,13 @@ class EventRepository:
         payload: dict | None = None,
     ) -> Event:
         """创建事件记录并返回持久化实体。"""
+        safe_payload = payload or {}
+        print(
+            "[PERSIST][Event.create] preparing insert "
+            f"event_type={event_type} entity_type={entity_type} entity_id={entity_id} "
+            f"status={status} channel={channel} operator={operator} session_id={session_id} job_id={job_id} "
+            f"payload_keys={list(safe_payload.keys())}"
+        )
         event = Event(
             event_type=event_type,
             entity_type=entity_type,
@@ -40,11 +47,15 @@ class EventRepository:
             operator=operator,
             session_id=session_id,
             job_id=job_id,
-            payload=payload or {},
+            payload=safe_payload,
         )
         self._session.add(event)
         self._session.commit()
         self._session.refresh(event)
+        print(
+            "[PERSIST][Event.create] committed "
+            f"id={event.id} occurred_at={event.occurred_at} created_at={event.created_at}"
+        )
         return event
 
     def query(

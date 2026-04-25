@@ -14,18 +14,18 @@
               "extension_group": "rtc",
               "property": {
                 "app_id": "72f8343592b64607a2e0c7b995c637c2",
-                "channel": "ai-intv-edbd7f74-019b-4812-b8ca-0784c151af1e",
+                "channel": "ai-intv-ff5be986-a38e-4fed-9110-c8694fe02f77",
                 "remote_user_id": "639413109",
                 "subscribe_audio": true,
                 "publish_audio": true,
-                "token": "00672f8343592b64607a2e0c7b995c637c2IAB/EJS+s3ILgVCy2Kgca2oJ0nyz9IpkH1YuokNLxEVIErOxamraIpyxIgDL4QoBOr7saQQAAQD6pOtpAgD6pOtpAwD6pOtpBAD6pOtp",
-                "user_id": "1004617298",
+                "token": "00672f8343592b64607a2e0c7b995c637c2IADqCari5x5kY5LFFlVTNST+Efe51WboPzUqh9u/U966XNZs1jnrWTkSIgAX624EaMjtaQQAAQAor+xpAgAor+xpAwAor+xpBAAor+xp",
+                "user_id": "1898957110",
                 "uid": 882763965,
                 "remote_uid": 1205891896,
                 "enable_string_uid": false,
                 "publish_data": false,
                 "auto_join": true,
-                "stream_id": 1004617298,
+                "stream_id": 1898957110,
                 "remote_stream_id": 639413109,
                 "app_certificate": "ec7f70298bc7479da3326d5ece61e10b",
                 "token_expire_seconds": 14400,
@@ -65,9 +65,9 @@
                 "max_followup": 2,
                 "resume_summary": "酒敬哲：酒敬哲 电话：16639783713（微信同号）| 邮箱：jiujingz@126.com 性别：男 | Gitee：https://gitee.com/jiujing-zhe 求职意向：java后端开发 教育经历 2023.9-2027.6 河南科技学院 数据科学与大数据技术 | 本科一批 GPA 4.01/5 (前5%) 主修课程：数据结构(96)，线性代数(97)，高等数学(97)，Java(92)，计算机组成原理(91.6)，大学英语(93) 相关技能 1. 具备扎实的JavaSE基础，熟练掌握集合框架和Java8新特性，具有丰富的面向对象编程经验，熟悉常用设计模式，如单例模式和策略模式。 2. 熟悉高并发编程，熟练使用CountDownLatch、ReentrantLock等并发工具，深入理解CAS原理及LongAdder等高性能计数器实现，熟悉线程池工作流程和源码，具备线程池配置和调优经验。 3. 深入了解JVM内存结构、类加载机制和GC原理，具有处理内存溢出问题的实践经验。 4. 熟练使用MySQL，了解数据库原理，对索引、日志、事务、MVCC有深入了解，具有一定的 SQL调优经验。 5. 熟练使用Redis，了解基本数据结构的设计原理和使用场景，熟悉多线程网络模型，了解RDB和AOF持久化方案，熟悉缓存问题的解决方案、哨兵领导者选举、故障转移等思想。 6. 熟练应用Spring、SpringMVC、SpringBoot等主流框架，具有丰富的调试和日志打印经验，理解IoC、AOP特性，了解自动装配原理、三级缓存解决循环依赖等，具备良好的分层思想。 7. 熟悉RabbitMQ等消息队列中间件，了解实际使用场景和解耦异步开发经验。 8. 了解微服务开发SpringCloud体系，具有良好的去中心化思想，了解RPC调用过程。 项目经历 2024.11-2025.3 算法软件与应用平台 后端开发工程师 技术栈：Spring Cloud、MySQL、Redis、RabbitMQ、Seata、MyBatis、Flowable、Minio 项目描述： 与中国科学院数学与系统科学研究院联合开发，打造面向最优化算法及其交叉学科应用的开源科研协作平台。平台支持项目管理、资源共享、任务协作、流程审批和高效消息通知，服务学术与工程领域的多元化研究需求。 项目职责： 1.分布式事务治理：基于Seata AT模式实现跨服务事务一致性，结合本地消息表与补偿机制保障核心数据可靠落库 2.流程自动化审批：自定义项目审核流程与权限节点，支持端到端自动化审批与流程可视化配置 3.缓存架构设计：构建Redis多级缓存体系，结合布隆过滤器与互斥锁机制，有效防止缓存穿透、击穿与雪崩 4.可靠消息通知机制：基于MQ实现异步消息推送，结合回调控制与线程池隔离机制，提升消息投递可靠性 5.数据",
                 "job_requirements": "1. 计算机或相关专业本科及以上学历在读生。\n2. 热爱编程，具备扎实的Java语言基础，了解JVM、多线程及集合框架。\n3. 熟悉Spring、Spring Boot、MyBatis等主流应用开发框架优先。\n4. 熟悉关系型数据库（MySQL）的基本使用，了解常用SQL优化。\n5. 有较强的逻辑分析能力和系统除错能力，能快速适应新领域和学习新技术。\n6. 重点考察：基础技术功底、项目实践的真实度、以及遇到 Bug 时真实的解决思路。",
-                "session_id": "0e9b5fd7-ec6c-4c07-8dd7-eb8bd218db63",
+                "session_id": "5624c5a0-a114-4f4a-9287-b2f4e53d3693",
                 "candidate_id": "5c4b16ed-92aa-4b26-bd6a-6c7eabc95b81",
-                "job_id": "d5f2db9a-8cb2-43be-92be-0e9e953ef8a5",
+                "job_id": "9c3a37b3-0096-4a10-ae1a-c0c310c300cd",
                 "language": "zh-CN",
                 "company_info": "【公司介绍】\n我们是“北京深澜智远科技有限公司”。\n公司成立于2025年，是一家非常具有爆发力的初创企业，曾在短短三个月内连续完成两轮千万级融资。\n\n【团队背景】\n我们的核心团队拥有深厚的学术与工业界背景，成员主要由来自北京邮电大学、香港中文大学等顶尖高校的硕士，以及阿里巴巴等知名互联网公司的资深工程师组成。\n\n【核心业务与愿景】\n我们专注于 AI 数字员工在各行各业的业务赋能。\n我们的愿景是“构建千行百业的 AI 员工”，致力于通过先进的 AI 技术，为企业打造高效、智能的数字劳动力，推动产业智能化升级。",
                 "company_info_source": "payload",
@@ -94,7 +94,7 @@
                       "idx": 1,
                       "question_id": "1",
                       "id": "1",
-                      "question": "在你的算法软件与应用平台项目中，你提到基于Seata AT模式实现分布式事务治理，并结合本地消息表与补偿机制。请详细说明在什么业务场景下你选择了AT模式而不是TCC或Saga模式？本地消息表与补偿机制是如何与Seata协同工作的？如果Seata全局事务提交失败，你们是如何保证最终一致性的？",
+                      "question": "在你的算法软件与应用平台项目中，你提到基于Seata AT模式实现分布式事务治理。请详细说明在什么业务场景下选择了AT模式而不是TCC或Saga模式？AT模式在跨服务调用中如何保证全局事务的隔离性？如果遇到全局事务回滚时某个分支事务的回滚失败，你们是如何处理的？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -108,13 +108,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 1
                     },
                     {
-                      "idx": 1,
+                      "idx": 2,
                       "question_id": "2",
                       "id": "2",
-                      "question": "在ChatUni项目中，你使用RocketMQ进行消息广播，并通过Websocket服务过滤连接消息实现跨进程推送。请解释RocketMQ的消息模型（如Topic、Tag、Consumer Group）在你们项目中的具体设计？你是如何保证Websocket消息的有序性和不重复投递的？如果RocketMQ Broker宕机，你们的消息可靠性如何保障？",
+                      "question": "在ChatUni项目中，你提到使用RocketMQ进行消息广播，并通过Websocket服务过滤连接消息实现跨进程推送。请详细描述消息从发送到接收的完整链路，包括RocketMQ的消息模型（Topic、Tag、Consumer Group）是如何设计的？Websocket服务如何根据用户连接状态过滤消息？如果某个Websocket服务实例宕机，未消费的消息如何保证不丢失？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -128,13 +129,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 2
                     },
                     {
-                      "idx": 1,
+                      "idx": 3,
                       "question_id": "3",
                       "id": "3",
-                      "question": "在算法软件与应用平台中，你设计了Redis多级缓存体系，结合布隆过滤器与互斥锁防止缓存穿透、击穿与雪崩。请画出该缓存架构的简要示意图，并说明布隆过滤器如何更新？当缓存击穿发生时，互斥锁的具体实现逻辑是怎样的？如果缓存雪崩已经发生，你们有哪些快速恢复措施？",
+                      "question": "在算法软件与应用平台项目中，你设计了Redis多级缓存体系，并结合布隆过滤器与互斥锁防止缓存穿透、击穿与雪崩。请画出该缓存架构的示意图（文字描述即可），并说明布隆过滤器的误判率如何影响系统设计？当缓存雪崩发生时，你们的降级策略是什么？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -148,13 +150,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 3
                     },
                     {
-                      "idx": 1,
+                      "idx": 4,
                       "question_id": "4",
                       "id": "4",
-                      "question": "在ChatUni项目中，你引入了游标翻页机制来避免深翻页和频繁变动问题。请对比游标翻页与传统的offset/limit分页在性能上的差异？你们是如何设计游标的？如果数据在翻页过程中发生了新增或删除，游标翻页如何保证数据一致性？",
+                      "question": "在ChatUni项目中，你引入了游标翻页机制来避免深翻页问题。请对比游标翻页与传统的offset/limit分页在性能上的差异，并说明你们是如何封装Redis和MySQL两种数据源的游标翻页工具类的？在群聊消息场景中，如果消息量极大（如百万级），游标翻页的cursor字段如何设计才能保证唯一性和有序性？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -168,13 +171,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 4
                     },
                     {
-                      "idx": 1,
+                      "idx": 5,
                       "question_id": "5",
                       "id": "5",
-                      "question": "在ChatUni项目中，你提到使用策略模式、责任链模式和模板方法模式实现URL解析小卡片。请具体说明这三种设计模式在代码中是如何组合使用的？请给出一个简化的类图或伪代码示例。这种设计带来了哪些可维护性和可扩展性的好处？",
+                      "question": "在ChatUni项目中，你提到结合AOP和封装Starter实现了Token解析、请求上下文存储、黑名单拦截和接口日志记录。请详细说明这个Starter的架构设计，包括核心注解、切面定义、配置项加载方式。你是如何保证该Starter的通用性和可扩展性的？如果后续需要增加一个“接口限流”功能，你会在现有Starter基础上如何扩展？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -188,13 +192,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 5
                     },
                     {
-                      "idx": 1,
+                      "idx": 6,
                       "question_id": "6",
                       "id": "6",
-                      "question": "在算法软件与应用平台项目中，你提到通过执行计划与慢查询分析设计高效组合索引与覆盖索引。请举一个具体的慢查询例子，说明你是如何通过分析执行计划发现问题的？你最终设计的索引是什么？如何验证优化效果？",
+                      "question": "在ChatUni项目中，你采用策略模式、责任链模式和模板方法模式实现URL解析小卡片功能。请以代码片段为例，说明这三种设计模式是如何协同工作的？如果未来需要支持一种新的链接类型（如抖音视频链接），你需要修改哪些代码？如何保证新增类型时对现有代码的改动最小？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -208,13 +213,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 6
                     },
                     {
-                      "idx": 1,
+                      "idx": 7,
                       "question_id": "7",
                       "id": "7",
-                      "question": "在算法软件与应用平台项目中，你提到基于MQ实现异步消息推送，结合回调控制与线程池隔离机制提升消息投递可靠性。请描述一个你实际遇到的消息丢失或重复消费的问题？你是如何通过回调控制和线程池隔离定位并解决的？最终方案是什么？",
+                      "question": "在算法软件与应用平台项目中，你提到通过执行计划与慢查询分析设计高效组合索引。请举一个具体的慢查询案例，说明你是如何通过EXPLAIN分析发现问题的？最终设计的组合索引是什么样的？为什么选择这种字段顺序？如果该查询仍然存在性能瓶颈，你会考虑哪些进一步的优化手段？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -228,13 +234,14 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 7
                     },
                     {
-                      "idx": 1,
+                      "idx": 8,
                       "question_id": "8",
                       "id": "8",
-                      "question": "在ChatUni项目中，你提到使用Redisson和AOP封装分布式锁工具。请描述一个你实际遇到的分布式锁失效的场景（如锁超时、Redis主从切换导致锁丢失）？你是如何发现这个问题的？最终如何通过Redisson的看门狗机制或其它方式解决的？",
+                      "question": "在ChatUni项目中，你提到采用CompletableFuture并行解析多个URL，并借助Jsoup的请求超时进行熔断。请描述一个你实际遇到的解析超时或异常场景，你是如何通过CompletableFuture的异常处理机制（如exceptionally、handle）来保证系统稳定性的？如果某个URL解析一直不返回（死锁或无限重定向），你的熔断策略如何避免线程池资源耗尽？",
                       "dimension": "communication",
                       "question_type": "profile",
                       "expected_signal": "",
@@ -248,10 +255,11 @@
                       "focus_hint": "communication",
                       "bucket": "stack",
                       "target_skill": "",
-                      "source_evidence": ""
+                      "source_evidence": "",
+                      "question_seq": 8
                     }
                   ],
-                  "session_id": "0e9b5fd7-ec6c-4c07-8dd7-eb8bd218db63",
+                  "session_id": "5624c5a0-a114-4f4a-9287-b2f4e53d3693",
                   "question_count": 8
                 },
                 "question_pack_source": "llm:invitation",

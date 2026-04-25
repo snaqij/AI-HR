@@ -221,6 +221,18 @@
                       <p class="text-[14px] font-semibold text-primary">{{ item.title }}</p>
                       <span class="text-[11px] text-on-surface-variant">{{ item.answer_turn_no ? `轮次 #${item.answer_turn_no}` : "未记录轮次" }}</span>
                     </div>
+                    <div v-if="item.followup_questions?.length" class="mt-3 rounded-[10px] border border-[#eef2f7] bg-[#f8fbff] p-3">
+                      <p class="mb-2 text-[11px] text-on-surface-variant">追问</p>
+                      <ul class="space-y-1.5">
+                        <li
+                          v-for="(followup, fidx) in item.followup_questions"
+                          :key="`opening-${index}-followup-${fidx}`"
+                          class="text-[12px] leading-6 text-on-surface"
+                        >
+                          {{ fidx + 1 }}. {{ followup }}
+                        </li>
+                      </ul>
+                    </div>
                     <div class="mt-3 border-t border-[#eef2f7] pt-3">
                       <p class="mb-2 text-[11px] text-on-surface-variant">候选人回答</p>
                       <p class="text-[13px] leading-7 text-on-surface">{{ item.candidate_answer || "候选人尚未作答" }}</p>
@@ -237,6 +249,18 @@
                       <span class="text-[11px] text-on-surface-variant">{{ item.answer_turn_no ? `轮次 #${item.answer_turn_no}` : "未记录轮次" }}</span>
                     </div>
                     <p class="mt-2 text-[13px] font-semibold leading-7 text-on-surface">{{ item.question }}</p>
+                    <div v-if="item.followup_questions?.length" class="mt-3 rounded-[10px] border border-[#eef2f7] bg-[#f8fbff] p-3">
+                      <p class="mb-2 text-[11px] text-on-surface-variant">追问</p>
+                      <ul class="space-y-1.5">
+                        <li
+                          v-for="(followup, fidx) in item.followup_questions"
+                          :key="`${item.question_id}-followup-${fidx}`"
+                          class="text-[12px] leading-6 text-on-surface"
+                        >
+                          {{ fidx + 1 }}. {{ followup }}
+                        </li>
+                      </ul>
+                    </div>
                     <div class="mt-4 border-t border-[#eef2f7] pt-3">
                       <p class="mb-2 text-[11px] text-on-surface-variant">候选人回答</p>
                       <p class="text-[13px] leading-7 text-on-surface">{{ item.candidate_answer || "候选人尚未作答" }}</p>

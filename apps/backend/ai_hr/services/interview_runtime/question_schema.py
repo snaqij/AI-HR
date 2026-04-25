@@ -164,6 +164,21 @@ def normalize_question_pack(question_pack: dict[str, Any] | None) -> dict[str, A
             if normalized is not None:
                 normalized_questions.append((int(normalized.get("idx") or idx + 1), idx, normalized))
     normalized_questions.sort(key=lambda item: (item[0], item[1]))
-    pack["questions"] = [item[2] for item in normalized_questions]
+    ordered = [item[2] for item in normalized_questions]
+    used_ids: set[str] = set()
+    for seq, question in enumerate(ordered, start=1):
+        stage = str(question.get("stage") or "").strip().lower() or "q"
+        base_id = str(question.get("question_id") or question.get("id") or f"{stage}_{seq}").strip() or f"{stage}_{seq}"
+        candidate_id = base_id
+        suffix = 1
+        while candidate_id in used_ids:
+            suffix += 1
+            candidate_id = f"{base_id}__{suffix}"
+        used_ids.add(candidate_id)
+        question["idx"] = seq
+        question["question_seq"] = seq
+        question["question_id"] = candidate_id
+        question["id"] = candidate_id
+    pack["questions"] = ordered
     pack["question_count"] = len(pack["questions"])
     return pack

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from ...core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -23,6 +26,9 @@ class InterviewEventBus:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.Lock()
         self._subs: dict[str, dict[str, EventSubscription]] = {}
+        self._drop_total = 0
+        self._drop_by_session: dict[str, int] = {}
+        self._drop_by_subscription: dict[str, int] = {}
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -47,6 +53,14 @@ class InterviewEventBus:
             session_map.pop(subscription.subscription_id, None)
             if not session_map:
                 self._subs.pop(subscription.session_id, None)
+            drop_total = self._drop_by_subscription.get(subscription.subscription_id, 0)
+        if drop_total:
+            logger.info(
+                "interview.event_bus.unsubscribe_drop_summary session_id=%s subscription_id=%s dropped=%s",
+                subscription.session_id,
+                subscription.subscription_id,
+                drop_total,
+            )
 
     def publish(self, *, session_id: str, event_type: str, payload: dict[str, Any]) -> None:
         event = {
@@ -70,16 +84,72 @@ class InterviewEventBus:
         # Silencing noisy publishing logs for production-like use
         # Debug hook reserved for fanout diagnostics.
         for sub in targets:
-            loop.call_soon_threadsafe(self._put_safely, sub.queue, event)
+            loop.call_soon_threadsafe(
+                self._put_safely,
+                sub.queue,
+                event,
+                sub.session_id,
+                sub.subscription_id,
+            )
 
-    @staticmethod
-    def _put_safely(queue: asyncio.Queue[dict[str, Any]], item: dict[str, Any]) -> None:
+    def _put_safely(
+        self,
+        queue: asyncio.Queue[dict[str, Any]],
+        item: dict[str, Any],
+        session_id: str,
+        subscription_id: str,
+    ) -> None:
+        dropped = False
         if queue.full():
+            try:
+                queue.get_nowait()
+                dropped = True
+            except Exception:
+                pass
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            dropped = True
             try:
                 queue.get_nowait()
             except Exception:
                 pass
-        queue.put_nowait(item)
+            try:
+                queue.put_nowait(item)
+            except Exception:
+                return
+
+        if not dropped:
+            return
+
+        with self._lock:
+            self._drop_total += 1
+            self._drop_by_session[session_id] = self._drop_by_session.get(session_id, 0) + 1
+            self._drop_by_subscription[subscription_id] = self._drop_by_subscription.get(subscription_id, 0) + 1
+            drop_total = self._drop_total
+            drop_session = self._drop_by_session[session_id]
+            drop_sub = self._drop_by_subscription[subscription_id]
+
+        if drop_total <= 5 or drop_total % 50 == 0:
+            logger.warning(
+                "interview.event_bus.queue_drop session_id=%s subscription_id=%s event_type=%s "
+                "queue_size=%s drop_total=%s session_drop_total=%s subscription_drop_total=%s",
+                session_id,
+                subscription_id,
+                str(item.get("event_type") or ""),
+                queue.qsize(),
+                drop_total,
+                drop_session,
+                drop_sub,
+            )
+
+    def get_drop_stats_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "drop_total": self._drop_total,
+                "drop_by_session": dict(self._drop_by_session),
+                "drop_by_subscription": dict(self._drop_by_subscription),
+            }
 
 
 def _build_default_event_bus() -> InterviewEventBus:

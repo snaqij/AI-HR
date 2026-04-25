@@ -316,25 +316,31 @@ class InterviewInvitationEmailService:
             detail.opening_segments = opening_from_questions
             detail.questions = self._build_question_answers(
                 questions=remaining_questions,
-                candidate_turns=[],
+                turns_by_question_id={},
+                anonymous_question_groups=[],
+                unassigned_turns=[],
+                followups_by_question_id={},
             )
             return detail
 
         detail.session_id = session_id
         turns = self._interview_session_repository.list_turns(session_id)
-        candidate_turns = [
-            turn
-            for turn in turns
-            if str(turn.speaker).lower() == "candidate" and (turn.transcript or "").strip()
-        ]
+        bindings = self._bind_turns_to_question_context(turns=turns, questions=remaining_questions)
+        candidate_turns = list(bindings.get("candidate_turns", []))
         report = self._interview_session_repository.get_latest_report(session_id)
-        opening_from_turns, consumed_turn_nos = self._build_opening_segments(candidate_turns=candidate_turns)
-        detail.opening_segments = opening_from_turns or opening_from_questions
-        question_turns = [turn for turn in candidate_turns if int(turn.turn_no) not in consumed_turn_nos]
+        opening_by_stage = dict(bindings.get("opening_by_stage", {}) or {})
+        detail.opening_segments = self._build_opening_segments_from_bindings(
+            opening_from_questions=opening_from_questions,
+            opening_by_stage=opening_by_stage,
+            opening_followups=list(bindings.get("opening_followups", []) or []),
+        )
 
         detail.questions = self._build_question_answers(
             questions=remaining_questions,
-            candidate_turns=question_turns,
+            turns_by_question_id=dict(bindings.get("turns_by_question_id", {}) or {}),
+            anonymous_question_groups=list(bindings.get("anonymous_question_groups", []) or []),
+            unassigned_turns=list(bindings.get("unassigned_turns", []) or []),
+            followups_by_question_id=dict(bindings.get("followups_by_question_id", {}) or {}),
         )
         detail.analysis = InterviewAIAnalysis(
             summary=report.summary if report else None,
@@ -347,48 +353,48 @@ class InterviewInvitationEmailService:
             detail.record_message = "暂无面试记录。"
         return detail
 
-    def _build_opening_segments(self, *, candidate_turns: list[Any]) -> tuple[list[InterviewOpeningSegmentItem], set[int]]:
-        stage_to_title = {
-            "S1": "自我介绍",
-            "S2": "项目介绍",
-        }
-        stage_turn_map: dict[str, Any] = {}
-        for turn in candidate_turns:
-            stage = str((turn.payload or {}).get("interview_stage") or "").strip().upper()
-            if stage in stage_to_title and stage not in stage_turn_map:
-                stage_turn_map[stage] = turn
-
+    def _build_opening_segments_from_bindings(
+        self,
+        *,
+        opening_from_questions: list[InterviewOpeningSegmentItem],
+        opening_by_stage: dict[str, list[Any]],
+        opening_followups: list[str],
+    ) -> list[InterviewOpeningSegmentItem]:
         segments: list[InterviewOpeningSegmentItem] = []
-        consumed_turn_nos: set[int] = set()
-        for stage in ("S1", "S2"):
-            turn = stage_turn_map.get(stage)
-            if turn is None:
+        dedup_followups: list[str] = []
+        for followup in list(opening_followups or []):
+            text = str(followup or "").strip()
+            if not text or text in dedup_followups:
                 continue
-            turn_no = int(turn.turn_no)
-            consumed_turn_nos.add(turn_no)
-            segments.append(
-                InterviewOpeningSegmentItem(
-                    title=stage_to_title[stage],
-                    candidate_answer=(turn.transcript or "").strip(),
-                    answer_turn_no=turn_no,
+            dedup_followups.append(text)
+        for segment in opening_from_questions:
+            title = str(segment.title or "").strip()
+            if title != "自我介绍":
+                continue
+            # Product decision: remove standalone "项目介绍" section and merge its follow-ups into 自我介绍.
+            grouped_turns = list((opening_by_stage or {}).get("S1", []) or [])
+            grouped_turns.extend(list((opening_by_stage or {}).get("S2", []) or []))
+            grouped_turns.sort(key=lambda item: int(getattr(item, "turn_no", 0) or 0))
+            if grouped_turns:
+                merged_answer = self._merge_turn_texts(grouped_turns)
+                segments.append(
+                    InterviewOpeningSegmentItem(
+                        title=title or segment.title,
+                        followup_questions=dedup_followups,
+                        candidate_answer=merged_answer,
+                        answer_turn_no=int(grouped_turns[0].turn_no),
+                    )
                 )
-            )
-
-        if segments:
-            return segments, consumed_turn_nos
-
-        fallback_titles = ("自我介绍", "项目介绍")
-        for idx, turn in enumerate(candidate_turns[:2]):
-            turn_no = int(turn.turn_no)
-            consumed_turn_nos.add(turn_no)
-            segments.append(
-                InterviewOpeningSegmentItem(
-                    title=fallback_titles[idx],
-                    candidate_answer=(turn.transcript or "").strip(),
-                    answer_turn_no=turn_no,
+            else:
+                segments.append(
+                    InterviewOpeningSegmentItem(
+                        title=title or segment.title,
+                        followup_questions=dedup_followups,
+                        candidate_answer=segment.candidate_answer,
+                        answer_turn_no=segment.answer_turn_no,
+                    )
                 )
-            )
-        return segments, consumed_turn_nos
+        return segments
 
     def _split_opening_questions(
         self, questions: list[dict[str, Any]]
@@ -430,8 +436,8 @@ class InterviewInvitationEmailService:
                 opening.append(InterviewOpeningSegmentItem(title="自我介绍", candidate_answer=None, answer_turn_no=None))
                 opening_indexes.add(idx)
                 continue
-            if stage == "S2" and not any(seg.title == "项目介绍" for seg in opening):
-                opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
+            if stage == "S2":
+                # Remove standalone 项目介绍 section; keep S2 prompts out of formal question list.
                 opening_indexes.add(idx)
                 continue
 
@@ -443,34 +449,41 @@ class InterviewInvitationEmailService:
                     opening_indexes.add(idx)
                     break
 
-        if not any(seg.title == "项目介绍" for seg in opening):
-            for idx, item in enumerate(questions):
-                text = str(item.get("question") or item.get("text") or item.get("title") or item.get("prompt") or "").strip()
-                if _is_project_intro_prompt(text):
-                    opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
-                    opening_indexes.add(idx)
-                    break
+        for idx, item in enumerate(questions):
+            text = str(item.get("question") or item.get("text") or item.get("title") or item.get("prompt") or "").strip()
+            if _is_project_intro_prompt(text):
+                # Remove project-intro prompt from formal question list and fold it into 自我介绍阶段.
+                opening_indexes.add(idx)
 
         # Ensure opening sections are always visible in UI even when question pack
-        # does not explicitly include S1/S2 or opening-style prompts.
+        # does not explicitly include S1/opening-style prompts.
         if not any(seg.title == "自我介绍" for seg in opening):
             opening.append(InterviewOpeningSegmentItem(title="自我介绍", candidate_answer=None, answer_turn_no=None))
-        if not any(seg.title == "项目介绍" for seg in opening):
-            opening.append(InterviewOpeningSegmentItem(title="项目介绍", candidate_answer=None, answer_turn_no=None))
 
-        opening.sort(key=lambda seg: 0 if seg.title == "自我介绍" else 1)
+        opening = [seg for seg in opening if seg.title == "自我介绍"]
         remaining = [item for idx, item in enumerate(questions) if idx not in opening_indexes]
         return opening, remaining
 
-    def _build_question_answers(self, *, questions: list[dict[str, Any]], candidate_turns: list[Any]) -> list[InterviewQuestionAnswerItem]:
+    def _build_question_answers(
+        self,
+        *,
+        questions: list[dict[str, Any]],
+        turns_by_question_id: dict[str, list[Any]],
+        anonymous_question_groups: list[list[Any]],
+        unassigned_turns: list[Any],
+        followups_by_question_id: dict[str, list[str]],
+    ) -> list[InterviewQuestionAnswerItem]:
+        def _normalize_question_identifier(raw: Any) -> str:
+            return str(raw or "").strip()
+
         question_items: list[InterviewQuestionAnswerItem] = []
         for index, raw_question in enumerate(questions, start=1):
-            question_id = str(
+            question_id = _normalize_question_identifier(
                 raw_question.get("id")
                 or raw_question.get("question_id")
                 or raw_question.get("idx")
                 or index
-            ).strip()
+            )
             question_text = str(
                 raw_question.get("question")
                 or raw_question.get("text")
@@ -480,18 +493,42 @@ class InterviewInvitationEmailService:
             ).strip()
             if not question_text:
                 continue
-            turn = candidate_turns[index - 1] if index - 1 < len(candidate_turns) else None
+            followups = [
+                str(item or "").strip()
+                for item in list((followups_by_question_id or {}).get(question_id, []) or [])
+                if str(item or "").strip()
+            ]
+            dedup_followups: list[str] = []
+            for followup in followups:
+                if followup == question_text or followup in dedup_followups:
+                    continue
+                dedup_followups.append(followup)
+            matched_turns = list(turns_by_question_id.get(question_id, []))
+            answer_text = self._merge_turn_texts(matched_turns) if matched_turns else None
+            answer_turn_no = int(matched_turns[0].turn_no) if matched_turns else None
             question_items.append(
                 InterviewQuestionAnswerItem(
                     question_id=question_id or str(index),
                     question=question_text,
-                    candidate_answer=(turn.transcript or "").strip() if turn else None,
-                    answer_turn_no=int(turn.turn_no) if turn else None,
+                    followup_questions=dedup_followups,
+                    candidate_answer=answer_text,
+                    answer_turn_no=answer_turn_no,
                 )
             )
         if question_items:
             return question_items
 
+        # Fallback only when there is no question-pack at all.
+        candidate_turns: list[Any] = []
+        seen_turn_nos: set[int] = set()
+        for grouped in list((turns_by_question_id or {}).values()) + list(anonymous_question_groups or []) + [[t] for t in (unassigned_turns or [])]:
+            for turn in grouped or []:
+                turn_no = int(getattr(turn, "turn_no", 0) or 0)
+                if turn_no <= 0 or turn_no in seen_turn_nos:
+                    continue
+                seen_turn_nos.add(turn_no)
+                candidate_turns.append(turn)
+        candidate_turns.sort(key=lambda item: int(getattr(item, "turn_no", 0) or 0))
         return [
             InterviewQuestionAnswerItem(
                 question_id=f"candidate-turn-{idx + 1}",
@@ -501,6 +538,131 @@ class InterviewInvitationEmailService:
             )
             for idx, turn in enumerate(candidate_turns)
         ]
+
+    def _merge_turn_texts(self, turns: list[Any]) -> str | None:
+        merged_parts: list[str] = []
+        for turn in turns:
+            text = str(turn.transcript or "").strip()
+            if not text:
+                continue
+            if merged_parts and merged_parts[-1] == text:
+                continue
+            merged_parts.append(text)
+        merged = " ".join(merged_parts).strip()
+        return merged or None
+
+    def _extract_turn_question_id(self, turn: Any) -> str:
+        payload = dict(getattr(turn, "payload", {}) or {})
+        return str(getattr(turn, "question_id", None) or payload.get("question_id") or "").strip()
+
+    def _extract_turn_stage(self, turn: Any) -> str:
+        payload = dict(getattr(turn, "payload", {}) or {})
+        return str(payload.get("stage") or payload.get("interview_stage") or "").strip().upper()
+
+    def _bind_turns_to_question_context(self, *, turns: list[Any], questions: list[dict[str, Any]]) -> dict[str, Any]:
+        question_ids = {
+            str(item.get("id") or item.get("question_id") or "").strip()
+            for item in questions
+            if isinstance(item, dict)
+        }
+        question_ids.discard("")
+        question_id_by_seq: dict[int, str] = {}
+        for index, item in enumerate(list(questions or []), start=1):
+            if not isinstance(item, dict):
+                continue
+            qid = str(item.get("id") or item.get("question_id") or "").strip()
+            if not qid:
+                continue
+            raw_seq = item.get("question_seq")
+            if raw_seq is None:
+                raw_seq = item.get("idx")
+            try:
+                seq = int(raw_seq) if raw_seq is not None else index
+            except (TypeError, ValueError):
+                seq = index
+            if seq > 0 and seq not in question_id_by_seq:
+                question_id_by_seq[seq] = qid
+
+        opening_by_stage: dict[str, list[Any]] = {"S1": []}
+        turns_by_question_id: dict[str, list[Any]] = {}
+        followups_by_question_id: dict[str, list[str]] = {}
+        opening_followups: list[str] = []
+        anonymous_question_groups: list[list[Any]] = []
+        unassigned_turns: list[Any] = []
+        candidate_turns: list[Any] = []
+
+        sorted_turns = sorted(list(turns or []), key=lambda item: int(getattr(item, "turn_no", 0) or 0))
+        opening_root_seen = False
+        formal_started = False
+
+        for turn in sorted_turns:
+            payload = dict(getattr(turn, "payload", {}) or {})
+            speaker = str(getattr(turn, "speaker", "") or "").strip().lower()
+            transcript = str(getattr(turn, "transcript", "") or "").strip()
+            if not transcript:
+                continue
+
+            phase = str(payload.get("phase") or "").strip().lower()
+            stage = self._extract_turn_stage(turn)
+            raw_qid = self._extract_turn_question_id(turn)
+            qid = raw_qid if raw_qid in question_ids else ""
+            raw_seq = payload.get("question_seq")
+            if raw_seq is None:
+                raw_seq = getattr(turn, "question_seq", None)
+            try:
+                qseq = int(raw_seq) if raw_seq is not None else None
+            except (TypeError, ValueError):
+                qseq = None
+            if not qid and qseq is not None:
+                qid = str(question_id_by_seq.get(qseq) or "").strip()
+            is_followup = bool(payload.get("is_followup", False))
+            event_type = str(payload.get("original_event_type") or "").strip().lower()
+
+            is_opening = bool(
+                phase == "opening"
+                or stage in ("S1", "S2", "OPENING", "SELF_INTRO")
+                or (not phase and not qid and not formal_started and speaker == "ai")
+            )
+            is_formal = bool(
+                phase == "formal"
+                or bool(qid)
+                or (qseq is not None and qseq in question_id_by_seq)
+            )
+
+            if speaker == "ai":
+                if event_type == "question.final":
+                    if is_opening and not is_formal:
+                        if opening_root_seen:
+                            opening_followups.append(transcript)
+                        else:
+                            opening_root_seen = True
+                    elif is_formal and qid:
+                        formal_started = True
+                        if is_followup:
+                            followups_by_question_id.setdefault(qid, []).append(transcript)
+                continue
+
+            if speaker != "candidate":
+                continue
+
+            candidate_turns.append(turn)
+            if is_opening and not is_formal:
+                opening_by_stage.setdefault("S1", []).append(turn)
+                continue
+            if is_formal and qid:
+                turns_by_question_id.setdefault(qid, []).append(turn)
+                continue
+            unassigned_turns.append(turn)
+
+        return {
+            "candidate_turns": candidate_turns,
+            "opening_by_stage": opening_by_stage,
+            "opening_followups": opening_followups,
+            "turns_by_question_id": turns_by_question_id,
+            "followups_by_question_id": followups_by_question_id,
+            "anonymous_question_groups": anonymous_question_groups,
+            "unassigned_turns": unassigned_turns,
+        }
 
     def _render_email(
         self,

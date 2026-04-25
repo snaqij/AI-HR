@@ -308,6 +308,13 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.event_bridge: RealtimeEventBridge | None = None
         self.current_question_trace_id = ""
         self.current_question_buffer = ""
+        self.opening_topic_id = ""
+        self.active_topic_id = ""
+        self.active_parent_topic_id = ""
+        self.active_is_followup = False
+        self.active_phase = "opening"
+        self.active_question_seq: int | None = None
+        self.active_question_id = ""
         self.session_context = SessionContext(session_id="")
         self.prompt_builder = InterviewPromptBuilder()
         self._bg_tasks: set[asyncio.Task] = set()
@@ -528,12 +535,34 @@ class InterviewOrchestratorExtension(AsyncExtension):
             state=self.state,
             question_pack=self.question_pack,
         ) or {}
+        raw_seq = question.get("idx")
+        try:
+            question_seq = int(raw_seq) if raw_seq is not None else None
+        except (TypeError, ValueError):
+            question_seq = None
+        if question_seq is None:
+            try:
+                question_seq = int((self.state or {}).get("active_question_index") or 0) + 1
+            except (TypeError, ValueError):
+                question_seq = None
         return {
             "question": question,
             "question_id": str(question.get("question_id") or question.get("id") or ""),
+            "question_seq": question_seq,
             "topic_name": str(question.get("topic_name") or ""),
             "topic_aliases": question.get("topic_aliases") if isinstance(question.get("topic_aliases"), list) else [],
         }
+
+    def _resolve_phase_from_stage(self, stage: str) -> str:
+        normalized = str(stage or "").strip()
+        if normalized in {InterviewStage.OPENING, InterviewStage.SELF_INTRO}:
+            return "opening"
+        return "formal"
+
+    def _ensure_opening_topic_id(self) -> str:
+        if not self.opening_topic_id:
+            self.opening_topic_id = f"opening-{uuid.uuid4().hex[:12]}"
+        return self.opening_topic_id
 
     def _now_ms(self) -> int:
         return int(time.perf_counter() * 1000)
@@ -1128,6 +1157,13 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.pending_finalize_token = 0
         self.pending_finalize_wait_logged = False
         self.llm_task = None
+        self.opening_topic_id = ""
+        self.active_topic_id = ""
+        self.active_parent_topic_id = ""
+        self.active_is_followup = False
+        self.active_phase = "opening"
+        self.active_question_seq = None
+        self.active_question_id = ""
 
     async def _handle_interaction(
         self,
@@ -1492,6 +1528,10 @@ class InterviewOrchestratorExtension(AsyncExtension):
             self._log(logging.INFO, "orchestrator.final_ignored_short", transcript=transcript[:200], short_stage=stage)
             return
 
+        # Emit every accepted ASR-final sentence for transcript visibility.
+        # Downstream duplicate suppression should only gate orchestration actions, not transcript capture.
+        self._emit_candidate_final(transcript)
+
         if stage == InterviewStage.OPENING and any(phrase in transcript for phrase in audio_issue_phrases):
             self._log(logging.WARNING, "orchestrator.handshake_audio_issue", transcript=transcript[:200])
             self._cancel_pending_finalize()
@@ -1523,7 +1563,6 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.turn_triggered = True
         self.last_triggered_text = transcript
         self._finalize_candidate_answer(answer_text=transcript)
-        self._emit_candidate_final(transcript)
         self._emit_agent_state(AgentState.THINKING)
         orch_receive_ts = time.perf_counter()
         self._schedule_finalize(
@@ -1777,10 +1816,41 @@ class InterviewOrchestratorExtension(AsyncExtension):
         text = str(transcript or "").strip()
         if not text or self.event_bridge is None:
             return
+        question_ctx = self._get_active_question_context()
+        stage = str((self.state or {}).get("interview_stage") or "")
+        phase = self._resolve_phase_from_stage(stage)
+        trace_id = str(self.trace_id or "").strip()
+        question_seq = question_ctx.get("question_seq")
+        question_id = str(question_ctx.get("question_id") or "")
+        topic_id = str(self.active_topic_id or "").strip()
+        parent_topic_id = str(self.active_parent_topic_id or "").strip()
+        is_followup = bool(self.active_is_followup)
+        if phase == "opening":
+            topic_id = self._ensure_opening_topic_id()
+            parent_topic_id = ""
+            is_followup = False
+            question_seq = None
+        elif not topic_id:
+            topic_id = f"formal-{uuid.uuid4().hex[:12]}"
+            self.active_topic_id = topic_id
+            self.active_phase = "formal"
+            self.active_question_seq = int(question_seq) if isinstance(question_seq, int) else None
+            self.active_question_id = question_id
         self.event_bridge.emit(
             event_type=InterviewEventType.CANDIDATE_FINAL,
             critical=True,
-            payload={"text": text},
+            payload={
+                "text": text,
+                "trace_id": trace_id,
+                "stage": stage,
+                "phase": phase,
+                "question_id": question_id,
+                "question_seq": question_seq,
+                "topic_id": topic_id,
+                "parent_topic_id": parent_topic_id,
+                "is_followup": is_followup,
+                "topic_name": str(question_ctx.get("topic_name") or ""),
+            },
         )
 
     def _normalize_question_chunk(self, text: str) -> str:
@@ -1801,6 +1871,17 @@ class InterviewOrchestratorExtension(AsyncExtension):
             return
         trace = str(trace_id or "").strip() or "default"
         question_ctx = self._get_active_question_context()
+        stage = str((self.state or {}).get("interview_stage") or "")
+        phase = self._resolve_phase_from_stage(stage)
+        question_seq = question_ctx.get("question_seq")
+        topic_id = str(self.active_topic_id or "").strip()
+        parent_topic_id = str(self.active_parent_topic_id or "").strip()
+        is_followup = bool(self.active_is_followup)
+        if phase == "opening":
+            topic_id = self._ensure_opening_topic_id()
+            parent_topic_id = ""
+            is_followup = False
+            question_seq = None
         if trace != self.current_question_trace_id:
             self.current_question_trace_id = trace
             self.current_question_buffer = ""
@@ -1814,7 +1895,13 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 "text": self.current_question_buffer,
                 "spoken_text": self.current_question_buffer,
                 "trace_id": trace,
+                "stage": stage,
+                "phase": phase,
                 "question_id": str(question_ctx.get("question_id") or ""),
+                "question_seq": question_seq,
+                "topic_id": topic_id,
+                "parent_topic_id": parent_topic_id,
+                "is_followup": is_followup,
                 "topic_name": str(question_ctx.get("topic_name") or ""),
             },
         )
@@ -1824,12 +1911,54 @@ class InterviewOrchestratorExtension(AsyncExtension):
             return
         trace = str(trace_id or "").strip() or self.current_question_trace_id or "default"
         stage = str((self.state or {}).get("interview_stage") or "")
+        phase = self._resolve_phase_from_stage(stage)
         question_ctx = self._get_active_question_context()
+        question_id = str(question_ctx.get("question_id") or "").strip()
+        question_seq = question_ctx.get("question_seq")
+        parent_topic_id = ""
+        topic_id = ""
+        is_followup = False
+        if phase == "opening":
+            topic_id = self._ensure_opening_topic_id()
+            is_followup = bool(self.active_phase == "opening" and bool(self.active_topic_id))
+            if is_followup:
+                parent_topic_id = topic_id
+            question_seq = None
+            self.active_topic_id = topic_id
+            self.active_parent_topic_id = parent_topic_id
+            self.active_is_followup = is_followup
+            self.active_phase = "opening"
+            self.active_question_seq = None
+            self.active_question_id = question_id
+        else:
+            normalized_seq = int(question_seq) if isinstance(question_seq, int) else None
+            same_topic = bool(
+                self.active_phase == "formal"
+                and self.active_topic_id
+                and (
+                    (normalized_seq is not None and self.active_question_seq == normalized_seq)
+                    or (question_id and self.active_question_id and self.active_question_id == question_id)
+                )
+            )
+            if same_topic:
+                topic_id = self.active_topic_id
+                is_followup = True
+                parent_topic_id = topic_id
+            else:
+                topic_id = f"formal-{uuid.uuid4().hex[:12]}"
+                is_followup = False
+                parent_topic_id = ""
+            self.active_topic_id = topic_id
+            self.active_parent_topic_id = parent_topic_id
+            self.active_is_followup = is_followup
+            self.active_phase = "formal"
+            self.active_question_seq = normalized_seq
+            self.active_question_id = question_id
         self._start_pending_question(
             question_text=self.current_question_buffer,
             stage=stage,
             trace_id=trace,
-            question_id=str(question_ctx.get("question_id") or ""),
+            question_id=question_id,
             topic_name=str(question_ctx.get("topic_name") or ""),
         )
         self.event_bridge.emit(
@@ -1839,7 +1968,13 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 "text": self.current_question_buffer,
                 "spoken_text": self.current_question_buffer,
                 "trace_id": trace,
-                "question_id": str(question_ctx.get("question_id") or ""),
+                "stage": stage,
+                "phase": phase,
+                "question_id": question_id,
+                "question_seq": question_seq,
+                "topic_id": topic_id,
+                "parent_topic_id": parent_topic_id,
+                "is_followup": is_followup,
                 "topic_name": str(question_ctx.get("topic_name") or ""),
             },
         )

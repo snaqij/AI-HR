@@ -57,9 +57,9 @@ STAGE_REALTIME_POLICIES: dict[str, StageRealtimePolicy] = {
 
     "S3": StageRealtimePolicy(
         soft_pause_ms=800,
-        likely_done_ms=2000,
-        hard_done_ms=4500,
-        max_force_finalize_ms=3000,
+        likely_done_ms=1200,
+        hard_done_ms=2000,
+        max_force_finalize_ms=2500,
         resume_grace_ms=350,
         min_speaking_hold_ms=2000,
         commit_guard_ms=700,

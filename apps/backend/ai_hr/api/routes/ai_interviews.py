@@ -7,6 +7,7 @@ import logging
 import json
 import time
 import uuid
+from datetime import UTC, datetime
 from collections import deque
 from typing import Any
 from fastapi import APIRouter, Depends, Query, status
@@ -168,22 +169,54 @@ def append_ai_interview_bridge_events(
     payload: BridgeBatchRequest,
 ) -> Envelope[dict[str, int]]:
     """Ingest realtime bridge events emitted by TEN sidecar without blocking the audio path."""
+    print(
+        "[BRIDGE][request] "
+        f"session_id={session_id} events_count={len(payload.events)}",
+        flush=True,
+    )
     accepted = 0
     for item in payload.events:
         event_session_id = str(item.session_id or session_id).strip()
         if event_session_id != session_id:
+            print(
+                "[BRIDGE][drop] "
+                f"path_session_id={session_id} event_session_id={event_session_id} "
+                f"event_type={str(item.event_type or '').strip()}",
+                flush=True,
+            )
             continue
+        bridge_event_type = str(item.event_type or "").strip()
+        bridge_payload = dict(item.payload or {})
+        if "occurred_at" not in bridge_payload:
+            if item.ts is not None:
+                try:
+                    bridge_payload["occurred_at"] = datetime.fromtimestamp(float(item.ts) / 1000.0, tz=UTC).isoformat()
+                except (TypeError, ValueError):
+                    bridge_payload["occurred_at"] = datetime.now(tz=UTC).isoformat()
+            else:
+                bridge_payload["occurred_at"] = datetime.now(tz=UTC).isoformat()
+        print(
+            "[BRIDGE][accept] "
+            f"session_id={session_id} event_type={bridge_event_type} "
+            f"source={item.source or 'ten_agent'} payload_keys={list(bridge_payload.keys())}",
+            flush=True,
+        )
         DEFAULT_INTERVIEW_EVENT_BUS.publish(
             session_id=session_id,
-            event_type=str(item.event_type or "").strip(),
+            event_type=bridge_event_type,
             payload={
-                **dict(item.payload or {}),
+                **bridge_payload,
                 "event_id": item.event_id,
                 "source": item.source or "ten_agent",
                 "bridge_ts": item.ts,
             },
         )
         accepted += 1
+    print(
+        "[BRIDGE][response] "
+        f"session_id={session_id} accepted={accepted} total={len(payload.events)}",
+        flush=True,
+    )
     return Envelope.success({"accepted": accepted})
 
 

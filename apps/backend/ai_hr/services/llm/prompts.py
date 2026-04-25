@@ -182,6 +182,26 @@ DEFAULT_PROMPT_LIBRARY: dict[tuple[str, str], PromptTemplate] = {
         system_prompt="你是一名简历联系方式提取专家。请从混乱的文本中精准识别邮箱，输出 JSON {'email': '...'}。如果找不到，输出空。解析混淆格式如 (at) [dot] 等。",
         user_template="简历文本片段：\n{text_context}",
     ),
+    (PromptTaskKey.ANSWER_EVALUATION, "v1"): PromptTemplate(
+        task_key=PromptTaskKey.ANSWER_EVALUATION,
+        version="v1",
+        system_prompt="你是一个资深的 AI 评估助手，负责对候选人的单道面试题回答进行多维度的量化评估。必须输出严格的 JSON 格式。",
+        user_template=(
+            "面试要求（JD）：{job_requirements}\n"
+            "考察维度：{dimension}\n"
+            "面试阶段：{stage}\n"
+            "面试问题：{question_text}\n"
+            "候选人回答：{answer_text}\n\n"
+            "请评估以下维度（0-100分）：\n"
+            "- completeness (完整度)\n"
+            "- logic (逻辑性)\n"
+            "- evidence (证据密度)\n"
+            "- communication (表达沟通能力)\n"
+            "- domain_fit (结合岗位要求JD的专业契合度)\n"
+            "- confidence (模型打分置信度 0-1)\n"
+            "- risk_tags (风险标签，如伪造、合规等，字符串列表)\n"
+        ),
+    ),
     (PromptTaskKey.INTENT_CLASSIFY, "v1"): PromptTemplate(
         task_key=PromptTaskKey.INTENT_CLASSIFY,
         version="v1",

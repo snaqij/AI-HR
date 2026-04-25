@@ -27,6 +27,7 @@ from ..db.models import (
     CandidateJobPipeline,
     DecisionEvent,
     DecisionPolicyVersion,
+    Job,
     JobMarketSnapshot,
     ReviewQueueTask,
 )
@@ -114,9 +115,10 @@ class _AnswerScorePack:
 class EnterpriseAssessmentService:
     """Service for event mapping, interview assessment, and composite decisioning."""
 
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, llm_client: Any = None):
         self._session = session
         self._event_repository = EventRepository(session)
+        self._llm_client = llm_client
 
     def bind_question_answer_from_turn(
         self,
@@ -1037,6 +1039,68 @@ class EnterpriseAssessmentService:
             1.0,
         )
 
+        if self._llm_client is not None:
+            session_entity = self._session.get(AIInterviewSession, attempt.session_id)
+            jd_text = ""
+            if session_entity and session_entity.job_id:
+                job = self._session.get(Job, session_entity.job_id)
+                if job:
+                    jd_text = f"Title: {job.title}\nRequirements: {job.requirements}"
+
+            from ..llm.client import InvokeContext
+            from ..llm.prompts import get_prompt_template
+            
+            context = InvokeContext(
+                task_key="answer_evaluation",
+                trace_id=f"eval-{answer.id}-{uuid.uuid4().hex[:8]}",
+                prompt=get_prompt_template("answer_evaluation", "v1").render(
+                    job_requirements=jd_text or "No specific JD provided",
+                    dimension=str((attempt.context_payload or {}).get("dimension") or "General"),
+                    stage=str((attempt.context_payload or {}).get("stage") or "Unknown"),
+                    question_text=question_text,
+                    answer_text=answer_text,
+                )
+            )
+            
+            try:
+                llm_result = self._llm_client.invoke_json(context)
+                data = llm_result.content
+                if isinstance(data, dict) and not data.get("error"):
+                    completeness = _clip(data.get("completeness", completeness), 0.0, 100.0)
+                    logic = _clip(data.get("logic", logic), 0.0, 100.0)
+                    evidence_val = data.get("evidence")
+                    if evidence_val is not None:
+                        evidence = _clip(float(evidence_val), 0.0, 100.0)
+                    communication = _clip(data.get("communication", communication), 0.0, 100.0)
+                    domain_fit = _clip(data.get("domain_fit", domain_fit), 0.0, 100.0)
+                    
+                    if data.get("confidence") is not None:
+                        model_confidence = _clip(float(data.get("confidence", model_confidence)), 0.0, 1.0)
+                        reliability = _clip(0.50 * asr_confidence + 0.50 * model_confidence, 0.0, 1.0)
+                    
+                    if data.get("risk_tags"):
+                        for tag in data.get("risk_tags", []):
+                            if tag not in risk_tags:
+                                risk_tags.append(str(tag))
+                                risk_penalty += 10.0
+                    
+                    risk_penalty = _clip(risk_penalty, 0.0, 40.0)
+                    
+                    # Recompute question_score with LLM outputs
+                    question_score = _clip(
+                        QUESTION_SCORE_WEIGHTS["completeness"] * completeness
+                        + QUESTION_SCORE_WEIGHTS["depth"] * depth
+                        + QUESTION_SCORE_WEIGHTS["evidence"] * evidence
+                        + QUESTION_SCORE_WEIGHTS["logic"] * logic
+                        + QUESTION_SCORE_WEIGHTS["communication"] * communication
+                        + QUESTION_SCORE_WEIGHTS["domain_fit"] * domain_fit
+                        - risk_penalty,
+                        0.0,
+                        100.0,
+                    )
+            except Exception:
+                pass
+
         stage_key = str((attempt.context_payload or {}).get("stage") or "").strip().lower()
         stage_weight = DEFAULT_STAGE_WEIGHTS.get(stage_key, 1.0)
         difficulty_weight = DEFAULT_DIFFICULTY_WEIGHTS.get(str(attempt.difficulty_level or "medium").lower(), 1.0)
@@ -1329,6 +1393,13 @@ class EnterpriseAssessmentService:
         )
 
 
-def get_enterprise_assessment_service(session: Session) -> EnterpriseAssessmentService:
+def get_enterprise_assessment_service(session: Session, llm_client: Any = None) -> EnterpriseAssessmentService:
     """Return an enterprise assessment service bound to current DB session."""
-    return EnterpriseAssessmentService(session)
+    if llm_client is None:
+        try:
+            from ..llm.client import LLMClient
+            from ..llm.router import ModelRouter
+            llm_client = LLMClient(router=ModelRouter())
+        except Exception:
+            pass
+    return EnterpriseAssessmentService(session, llm_client=llm_client)
