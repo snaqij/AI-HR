@@ -405,6 +405,89 @@ class EnterpriseAssessmentService:
             interview_confidence=interview_confidence,
         )
 
+        # Generate AI summary using LLM
+        summary_text = "面试评估已完成，综合表现有待进一步分析。"
+        strengths_list: list[str] = []
+        gaps_list: list[str] = []
+        
+        if self._llm_client is not None:
+            try:
+                # Get session and candidate info
+                session_entity = self._session.get(AIInterviewSession, session_id)
+                candidate_name = "候选人"
+                job_title = "目标岗位"
+                
+                if session_entity:
+                    if session_entity.candidate_id:
+                        candidate = self._session.get(Candidate, session_entity.candidate_id)
+                        if candidate:
+                            candidate_name = candidate.name or "候选人"
+                    if session_entity.job_id:
+                        job = self._session.get(Job, session_entity.job_id)
+                        if job:
+                            job_title = job.title or "目标岗位"
+                
+                # Build QA summary (first 5 questions for context)
+                qa_parts = []
+                for idx, attempt in enumerate(attempts[:5], 1):
+                    answer = self._session.execute(
+                        select(AIInterviewAnswerRecord)
+                        .where(AIInterviewAnswerRecord.question_attempt_id == attempt.id)
+                        .order_by(AIInterviewAnswerRecord.is_final.desc(), AIInterviewAnswerRecord.created_at.desc())
+                        .limit(1)
+                    ).scalars().first()
+                    
+                    if answer and answer.answer_text:
+                        q_text = (attempt.question_text or "")[:100]
+                        a_text = (answer.answer_text or "")[:200]
+                        qa_parts.append(f"Q{idx}: {q_text}\nA{idx}: {a_text}")
+                
+                qa_summary = "\n\n".join(qa_parts) if qa_parts else "无详细问答记录"
+                
+                from .llm.client import InvokeContext
+                from .llm.prompts import get_prompt_template
+                
+                template = get_prompt_template("interview_summary", "v1")
+                context = InvokeContext(
+                    task_key="interview_summary",
+                    trace_id=f"summary-{session_id}-{uuid.uuid4().hex[:8]}",
+                    prompt=template.render(
+                        candidate_name=candidate_name,
+                        job_title=job_title,
+                        total_score=interview_score,
+                        competency_score=competency_score,
+                        communication_score=communication_score,
+                        consistency_score=consistency_score,
+                        stability_score=stability_score,
+                        coverage_rate=coverage_rate,
+                        question_count=total_required,
+                        answered_count=answered_required,
+                        risk_tags=", ".join(unique_risks) if unique_risks else "无",
+                        qa_summary=qa_summary,
+                    ),
+                    system_prompt=template.system_prompt,
+                )
+                
+                llm_result = self._llm_client.invoke_json(context)
+                data = llm_result.content
+                
+                if isinstance(data, dict) and not data.get("error"):
+                    summary_text = data.get("summary", summary_text)
+                    strengths_list = data.get("strengths", [])
+                    gaps_list = data.get("gaps", [])
+                    
+                    # Ensure lists are valid
+                    if not isinstance(strengths_list, list):
+                        strengths_list = []
+                    if not isinstance(gaps_list, list):
+                        gaps_list = []
+                        
+            except Exception as llm_exc:
+                # Log but don't fail the assessment
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to generate AI summary for session {session_id}: {llm_exc}", exc_info=True)
+
         versions = list(
             self._session.execute(
                 select(AIInterviewAssessment.assessment_version).where(
@@ -429,12 +512,12 @@ class EnterpriseAssessmentService:
             recommendation=recommendation,
             hard_fail=hard_fail,
             must_review=must_review,
-            strengths_json=[],
-            gaps_json=[],
+            strengths_json=strengths_list,
+            gaps_json=gaps_list,
             risk_flags_json=unique_risks,
             evidence_json=evidence_refs,
             dimension_weights_json=QUESTION_SCORE_WEIGHTS,
-            summary="Enterprise interview assessment computed from question-answer evidence.",
+            summary=summary_text,
             payload={
                 "coverage_rate": round(coverage_rate, 4),
                 "interview_confidence": round(interview_confidence, 4),
@@ -1211,8 +1294,8 @@ class EnterpriseAssessmentService:
                 if job:
                     jd_text = f"Title: {job.title}\nRequirements: {job.requirements}"
 
-            from ..llm.client import InvokeContext
-            from ..llm.prompts import get_prompt_template
+            from .llm.client import InvokeContext
+            from .llm.prompts import get_prompt_template
             
             context = InvokeContext(
                 task_key="answer_evaluation",
@@ -1561,9 +1644,11 @@ def get_enterprise_assessment_service(session: Session, llm_client: Any = None) 
     """Return an enterprise assessment service bound to current DB session."""
     if llm_client is None:
         try:
-            from ..llm.client import LLMClient
-            from ..llm.router import ModelRouter
+            from .llm.client import LLMClient
+            from .llm.router import ModelRouter
             llm_client = LLMClient(router=ModelRouter())
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to initialize LLM Client: {e}", exc_info=True)
     return EnterpriseAssessmentService(session, llm_client=llm_client)

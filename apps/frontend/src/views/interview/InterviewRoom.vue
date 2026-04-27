@@ -368,18 +368,132 @@ function appendCandidateDraftFragment(fragment: string, occurredAt = ""): void {
 }
 
 function rememberRealtimeEvent(eventType: string, payload: Record<string, any>, event: InterviewRealtimeEvent): boolean {
+  // 1. 优先使用明确的 event_id（最可靠的去重依据）
   const explicitId = String(payload.event_id || (event as any).event_id || "").trim();
-  const dedupeKey = explicitId
-    || `${eventType}|${String((event as any).ts || payload.ts || payload.occurred_at || "")}|${String(payload.trace_id || payload.seq || payload.turn_id || payload.chunk_index || payload.question_id || payload.state || payload.text || payload.transcript || "")}`;
-  if (!dedupeKey) return false;
-  if (seenRealtimeEventIds.has(dedupeKey)) return true;
-  seenRealtimeEventIds.add(dedupeKey);
+  if (explicitId) {
+    if (seenRealtimeEventIds.has(explicitId)) return true;
+    seenRealtimeEventIds.add(explicitId);
+    _boundSeenEventIds();
+    return false;
+  }
+  
+  // 2. 对于 ASR 转写事件，使用结构化 ID 去重（避免使用文本内容）
+  if (eventType === "asr.turn" || eventType === "candidate.final" || eventType === "candidate.partial") {
+    const turnId = String(payload.turn_id || "").trim();
+    const seq = String(payload.seq || "").trim();
+    const ts = String((event as any).ts || payload.ts || "").trim();
+    const isFinal = Boolean(payload.is_final);
+    
+    // 使用 turn_id 作为主要去重键
+    if (turnId) {
+      const key = `${eventType}|turn|${turnId}|${isFinal ? "final" : "partial"}`;
+      if (seenRealtimeEventIds.has(key)) return true;
+      seenRealtimeEventIds.add(key);
+      _boundSeenEventIds();
+      return false;
+    }
+    
+    // 使用 seq + ts 作为备用去重键
+    if (seq && ts) {
+      const key = `${eventType}|seq|${seq}|${ts}|${isFinal ? "final" : "partial"}`;
+      if (seenRealtimeEventIds.has(key)) return true;
+      seenRealtimeEventIds.add(key);
+      _boundSeenEventIds();
+      return false;
+    }
+    
+    // 如果没有结构化 ID，不去重（宁可重复显示也不要丢失内容）
+    console.warn(`[Dedupe] ASR event without structured ID, allowing through:`, eventType, payload);
+    return false;
+  }
+  
+  // 3. 对于问题更新事件，使用 trace_id 或 question_id
+  if (eventType === "question.update" || eventType === "question.final") {
+    const traceId = String(payload.trace_id || "").trim();
+    const questionId = String(payload.question_id || "").trim();
+    const ts = String((event as any).ts || payload.ts || "").trim();
+    
+    if (traceId && ts) {
+      const key = `${eventType}|trace|${traceId}|${ts}`;
+      if (seenRealtimeEventIds.has(key)) return true;
+      seenRealtimeEventIds.add(key);
+      _boundSeenEventIds();
+      return false;
+    }
+    
+    if (questionId && ts) {
+      const key = `${eventType}|question|${questionId}|${ts}`;
+      if (seenRealtimeEventIds.has(key)) return true;
+      seenRealtimeEventIds.add(key);
+      _boundSeenEventIds();
+      return false;
+    }
+    
+    return false;
+  }
+  
+  // 4. 对于状态事件，使用 state + ts
+  if (eventType === "agent.state") {
+    const state = String(payload.state || "").trim();
+    const ts = String((event as any).ts || payload.ts || "").trim();
+    
+    if (state && ts) {
+      const key = `${eventType}|${state}|${ts}`;
+      if (seenRealtimeEventIds.has(key)) return true;
+      seenRealtimeEventIds.add(key);
+      _boundSeenEventIds();
+      return false;
+    }
+    
+    return false;
+  }
+  
+  // 5. 对于 session.event，使用 occurred_at + speaker + transcript 的组合
+  if (eventType === "session.event") {
+    const occurredAt = String(payload.occurred_at || "").trim();
+    const speaker = String(payload.speaker || "").trim();
+    const transcript = String(payload.transcript || "").trim();
+    
+    if (occurredAt && speaker && transcript) {
+      // 使用 transcript 的前 50 个字符作为指纹（避免完整文本）
+      const textFingerprint = transcript.substring(0, 50);
+      const key = `${eventType}|${occurredAt}|${speaker}|${textFingerprint}`;
+      if (seenRealtimeEventIds.has(key)) return true;
+      seenRealtimeEventIds.add(key);
+      _boundSeenEventIds();
+      return false;
+    }
+    
+    return false;
+  }
+  
+  // 6. 其他事件类型：使用通用的 ts + 任意可用 ID
+  const ts = String((event as any).ts || payload.ts || "").trim();
+  const anyId = String(
+    payload.trace_id || 
+    payload.chunk_index || 
+    payload.question_id || 
+    ""
+  ).trim();
+  
+  if (ts && anyId) {
+    const key = `${eventType}|${ts}|${anyId}`;
+    if (seenRealtimeEventIds.has(key)) return true;
+    seenRealtimeEventIds.add(key);
+    _boundSeenEventIds();
+    return false;
+  }
+  
+  // 没有足够的信息去重，让事件通过
+  return false;
+}
+
+function _boundSeenEventIds(): void {
   // Keep memory bounded for long sessions.
   if (seenRealtimeEventIds.size > 4000) {
     const first = seenRealtimeEventIds.values().next().value as string | undefined;
     if (first) seenRealtimeEventIds.delete(first);
   }
-  return false;
 }
 
 function clearCandidateDraftFallbackTimer(): void {

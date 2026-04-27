@@ -31,7 +31,15 @@ class AIInterviewQuestionGenerationMixin:
 
         request = payload or AIInterviewQuestionGenerateRequest()
         should_regenerate = request.force_regenerate if force_regenerate is None else bool(force_regenerate)
-        question_count = max(1, int(request.question_count))
+        
+        # Read question count from config if not provided
+        if request.question_count is None:
+            question_count = self._settings.ai_interview_question_count_default
+        else:
+            question_count = max(
+                self._settings.ai_interview_question_count_min,
+                min(request.question_count, self._settings.ai_interview_question_count_max)
+            )
 
         if not should_regenerate:
             existing = self._session_repository.get_latest_question_set(

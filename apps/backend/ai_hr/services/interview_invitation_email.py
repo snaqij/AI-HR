@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from email.message import EmailMessage
 from string import Template
 from typing import Any
-
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
-
 from ..core.config import get_settings
 from ..core.exceptions import InvalidStateError, ResourceNotFoundError
+from ..db.models import AIInterviewAssessment
 from ..repositories.ai_interviews import AIInterviewInvitationRepository, AIInterviewSessionRepository
 from ..repositories.automation_task_logs import AutomationTaskLogRepository
 from ..repositories.candidate_email_deliveries import CandidateEmailDeliveryRepository
@@ -280,6 +280,15 @@ class InterviewInvitationEmailService:
             ],
         )
 
+    def _get_latest_interview_assessment(self, session_id: str) -> AIInterviewAssessment | None:
+        """Get the latest interview assessment for a session."""
+        return self._session.execute(
+            select(AIInterviewAssessment)
+            .where(AIInterviewAssessment.session_id == session_id)
+            .order_by(desc(AIInterviewAssessment.evaluated_at), desc(AIInterviewAssessment.created_at))
+            .limit(1)
+        ).scalars().first()
+
     def get_invitation_record_detail(self, *, delivery_id: str) -> InterviewInvitationRecordDetailResult:
         """Get interview record detail for one invitation delivery."""
         delivery = self._email_delivery_repository.get(delivery_id)
@@ -342,13 +351,36 @@ class InterviewInvitationEmailService:
             unassigned_turns=list(bindings.get("unassigned_turns", []) or []),
             followups_by_question_id=dict(bindings.get("followups_by_question_id", {}) or {}),
         )
-        detail.analysis = InterviewAIAnalysis(
-            summary=report.summary if report else None,
-            recommendation=report.recommendation if report else None,
-            dimension_scores=dict(report.dimension_scores_json or {}) if report else {},
-            risk_tags=list(report.risk_tags_json or []) if report else [],
-        )
-        detail.has_record = bool(detail.opening_segments or detail.questions or candidate_turns or report)
+        
+        # 优先使用 AIInterviewAssessment（新版企业级评估）
+        assessment = self._get_latest_interview_assessment(session_id)
+        
+        if assessment:
+            # 使用新版评估数据
+            detail.analysis = InterviewAIAnalysis(
+                summary=assessment.summary,
+                recommendation=assessment.recommendation,
+                dimension_scores={
+                    "专业能力": float(assessment.competency_score or 0),
+                    "沟通表达": float(assessment.communication_score or 0),
+                    "逻辑一致性": float(assessment.consistency_score or 0),
+                    "稳定性": float(assessment.stability_score or 0),
+                    "覆盖率": float(assessment.coverage_score or 0),
+                    "总分": float(assessment.total_score or 0),
+                },
+                risk_tags=list(assessment.risk_flags_json or []),
+            )
+        else:
+            # Fallback: 使用旧版报告（向后兼容）
+            report = self._interview_session_repository.get_latest_report(session_id)
+            detail.analysis = InterviewAIAnalysis(
+                summary=report.summary if report else None,
+                recommendation=report.recommendation if report else None,
+                dimension_scores=dict(report.dimension_scores_json or {}) if report else {},
+                risk_tags=list(report.risk_tags_json or []) if report else [],
+            )
+        
+        detail.has_record = bool(detail.opening_segments or detail.questions or candidate_turns or assessment or report)
         if not detail.has_record:
             detail.record_message = "暂无面试记录。"
         return detail

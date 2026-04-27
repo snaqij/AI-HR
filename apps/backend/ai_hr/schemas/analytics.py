@@ -15,10 +15,20 @@ class EfficiencyMetric(BaseModel):
     unit: str
     progress: int
 
+
+class DashboardDailyDelta(BaseModel):
+    open_jobs: int = 0
+    total_candidates: int = 0
+    pending_interviews: int = 0
+    pending_invitations: int = 0
+    monthly_hires: int = 0
+
+
 class DashboardAnalyticsResult(BaseModel):
     funnel: list[FunnelStep]
     efficiency: list[EfficiencyMetric]
     total_synced: int
+    daily_deltas: DashboardDailyDelta = Field(default_factory=DashboardDailyDelta)
 
 
 class HiringCenterEvaluationItem(BaseModel):

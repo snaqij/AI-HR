@@ -165,7 +165,7 @@ class AIInterviewSessionHandoffResult(BaseModel):
 class AIInterviewQuestionGenerateRequest(BaseModel):
     """生成面试问题集请求。"""
 
-    question_count: int = Field(default=14, ge=1, le=20)
+    question_count: int | None = Field(default=None, ge=1, le=20)
     source: str = Field(default="resume+jd", min_length=1, max_length=64)
     explicit_role_id: str | None = Field(default=None, min_length=1)
     force_regenerate: bool = True

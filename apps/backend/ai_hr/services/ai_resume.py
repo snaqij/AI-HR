@@ -626,7 +626,22 @@ class AIResumeService:
     def _sync_resume_attachment_for_candidate(self, candidate_id: str) -> dict[str, Any]:
         candidate = self._candidate_repository.get(candidate_id)
         connector = self._build_connector(candidate.source_channel)
-        result = connector.fetch_resume_attachment(candidate.external_candidate_id, raw_profile=candidate.raw_profile or {})
+        try:
+            result = connector.fetch_resume_attachment(candidate.external_candidate_id, raw_profile=candidate.raw_profile or {})
+        except ConnectorOperationError as exc:
+            friendly_message = self._to_user_friendly_attachment_sync_error(
+                channel=candidate.source_channel,
+                raw_error=str(exc),
+            )
+            logger.warning(
+                "resume_attachment_sync_failed candidate_id=%s external_candidate_id=%s channel=%s error=%s",
+                candidate.id,
+                candidate.external_candidate_id,
+                candidate.source_channel,
+                str(exc),
+                exc_info=True,
+            )
+            raise InvalidStateError(friendly_message) from exc
         object_storage_meta = self._upload_resume_attachment_to_object_storage(
             candidate_id=candidate.id,
             source_channel=candidate.source_channel,
@@ -718,6 +733,25 @@ class AIResumeService:
             "attachment": self._to_attachment_payload(attachment),
             "candidate_resume_text_updated": updated_resume_text,
         }
+
+    def _to_user_friendly_attachment_sync_error(self, *, channel: str, raw_error: str) -> str:
+        normalized_channel = str(channel or "").strip().lower()
+        raw_text = str(raw_error or "").strip()
+        lower_text = raw_text.lower()
+        if normalized_channel == "boss":
+            if (
+                "attachment download is currently unavailable for this candidate" in lower_text
+                or "download4boss" in lower_text
+                or "no permission to view attachment" in lower_text
+                or "invalid candidate identifier" in lower_text
+            ):
+                return (
+                    "暂时无法下载该候选人的附件简历。可能是 BOSS 侧附件权限未开放或附件标识异常。"
+                    "请先在 BOSS 聊天页确认可查看附件简历，必要时先执行“申请获取简历”，稍后再重试。"
+                )
+            if "did not include a downloadable attachment url" in lower_text:
+                return "暂时未获取到可下载的附件简历链接，请稍后重试或先在 BOSS 侧申请简历权限。"
+        return "简历附件同步失败，请稍后重试。若多次失败，请检查渠道权限配置后再试。"
 
     def hydrate_resume_text_from_latest_attachment(self, candidate_id: str, *, force_refresh: bool = False) -> bool:
         """Backfill candidate.resume_text/email from latest attachment.

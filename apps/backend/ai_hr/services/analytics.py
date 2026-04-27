@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from ..core.exceptions import ResourceNotFoundError
 from ..repositories.job_candidates import JobCandidateRepository
 from ..repositories.workspace_scope import get_workspace_id
 from ..schemas.analytics import (
+    DashboardDailyDelta,
     DashboardAnalyticsResult,
     EfficiencyMetric,
     FunnelStep,
@@ -80,6 +81,7 @@ class AnalyticsService:
             funnel=funnel,
             efficiency=self._build_efficiency_metrics(total_candidates=total),
             total_synced=total,
+            daily_deltas=self._build_dashboard_daily_deltas(),
         )
 
     def get_hiring_center_overview(
@@ -876,6 +878,95 @@ class AnalyticsService:
         # Derived from actual automation volume: resume processing + invitation sending + completed AI interviews.
         saved_minutes = (total_candidates * 3) + (sent_count * 5) + (interview_completed * 45)
         return int(round(saved_minutes / 60))
+
+    def _build_dashboard_daily_deltas(self) -> DashboardDailyDelta:
+        today_start, tomorrow_start, yesterday_start = self._day_boundaries()
+        return DashboardDailyDelta(
+            open_jobs=(
+                self._count_jobs_created_between(today_start, tomorrow_start)
+                - self._count_jobs_created_between(yesterday_start, today_start)
+            ),
+            total_candidates=(
+                self._count_job_candidates_synced_between(today_start, tomorrow_start)
+                - self._count_job_candidates_synced_between(yesterday_start, today_start)
+            ),
+            pending_interviews=(
+                self._count_manual_review_evaluations_between(today_start, tomorrow_start)
+                - self._count_manual_review_evaluations_between(yesterday_start, today_start)
+            ),
+            pending_invitations=(
+                self._count_invitation_deliveries_created_between(today_start, tomorrow_start)
+                - self._count_invitation_deliveries_created_between(yesterday_start, today_start)
+            ),
+            monthly_hires=(
+                self._count_recommended_evaluations_between(today_start, tomorrow_start)
+                - self._count_recommended_evaluations_between(yesterday_start, today_start)
+            ),
+        )
+
+    def _day_boundaries(self) -> tuple[datetime, datetime, datetime]:
+        now = datetime.utcnow()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_start = today_start + timedelta(days=1)
+        yesterday_start = today_start - timedelta(days=1)
+        return today_start, tomorrow_start, yesterday_start
+
+    def _count_jobs_created_between(self, start_at: datetime, end_at: datetime) -> int:
+        stmt = select(func.count(Job.id)).where(Job.created_at >= start_at, Job.created_at < end_at)
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(Job.workspace_id == workspace_id)
+        return int(self._session.execute(stmt).scalar() or 0)
+
+    def _count_job_candidates_synced_between(self, start_at: datetime, end_at: datetime) -> int:
+        stmt = select(func.count(JobCandidate.id)).where(
+            JobCandidate.first_synced_at >= start_at,
+            JobCandidate.first_synced_at < end_at,
+        )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == JobCandidate.job_id).where(Job.workspace_id == workspace_id)
+        return int(self._session.execute(stmt).scalar() or 0)
+
+    def _count_manual_review_evaluations_between(self, start_at: datetime, end_at: datetime) -> int:
+        stmt = select(func.count(CandidateJobEvaluation.id)).where(
+            CandidateJobEvaluation.created_at >= start_at,
+            CandidateJobEvaluation.created_at < end_at,
+            CandidateJobEvaluation.status.in_(("completed", "reviewed")),
+            CandidateJobEvaluation.recommendation == "manual_review",
+        )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
+        return int(self._session.execute(stmt).scalar() or 0)
+
+    def _count_recommended_evaluations_between(self, start_at: datetime, end_at: datetime) -> int:
+        stmt = select(func.count(CandidateJobEvaluation.id)).where(
+            CandidateJobEvaluation.created_at >= start_at,
+            CandidateJobEvaluation.created_at < end_at,
+            CandidateJobEvaluation.status.in_(("completed", "reviewed")),
+            CandidateJobEvaluation.recommendation.in_(("recommend", "strong_recommend")),
+        )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
+        return int(self._session.execute(stmt).scalar() or 0)
+
+    def _count_invitation_deliveries_created_between(self, start_at: datetime, end_at: datetime) -> int:
+        stmt = select(func.count(CandidateEmailDelivery.id)).where(
+            CandidateEmailDelivery.scene == "interview_invitation",
+            CandidateEmailDelivery.created_at >= start_at,
+            CandidateEmailDelivery.created_at < end_at,
+        )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.join(Job, Job.id == CandidateEmailDelivery.job_id).where(
+                or_(
+                    CandidateEmailDelivery.workspace_id == workspace_id,
+                    CandidateEmailDelivery.workspace_id.is_(None) & (Job.workspace_id == workspace_id),
+                )
+            )
+        return int(self._session.execute(stmt).scalar() or 0)
 
 
 def get_analytics_service(session: Session) -> AnalyticsService:

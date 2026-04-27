@@ -398,6 +398,13 @@ export interface DashboardAnalytics {
     progress: number
   }>;
   total_synced: number;
+  daily_deltas: {
+    open_jobs: number;
+    total_candidates: number;
+    pending_interviews: number;
+    pending_invitations: number;
+    monthly_hires: number;
+  };
 }
 
 export interface HiringCenterEvaluationItem {
@@ -740,8 +747,11 @@ async function extractErrorText(res: Response): Promise<string> {
   }
   try {
     const parsed = JSON.parse(rawText) as Envelope<unknown>;
-    const message = parsed?.error?.message || rawText;
-    return `HTTP ${res.status}: ${message}`;
+    const message = parsed?.error?.message;
+    if (message && String(message).trim()) {
+      return String(message).trim();
+    }
+    return `HTTP ${res.status}`;
   } catch {
     return `HTTP ${res.status}: ${rawText}`;
   }

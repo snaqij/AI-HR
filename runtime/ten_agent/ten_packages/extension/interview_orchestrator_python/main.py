@@ -78,16 +78,16 @@ class RealtimeEventBridge:
         api_key: str = "",
         flush_interval_ms: int = 80,
         batch_max_events: int = 20,
-        critical_queue_size: int = 128,
-        volatile_queue_size: int = 512,
-        request_timeout_s: float = 1.5,
+        critical_queue_size: int = 512,
+        volatile_queue_size: int = 1024,
+        request_timeout_s: float = 3.0,
     ):
         self.session_id = str(session_id or "").strip()
         self.base_url = str(base_url or "").rstrip("/")
         self.api_key = str(api_key or "").strip()
         self.flush_interval_ms = max(20, int(flush_interval_ms or 80))
         self.batch_max_events = max(1, int(batch_max_events or 20))
-        self.request_timeout_s = max(0.1, float(request_timeout_s or 0.3))
+        self.request_timeout_s = max(0.1, float(request_timeout_s or 3.0))
         self.critical_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=max(8, critical_queue_size))
         self.volatile_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=max(16, volatile_queue_size))
         self._worker_task: asyncio.Task | None = None
@@ -133,8 +133,26 @@ class RealtimeEventBridge:
                 with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait(event)
                 self._drop_counters["critical"] += 1
+                logger.error(
+                    "event_bridge.critical_queue_full session_id=%s event_type=%s "
+                    "queue_size=%s drop_count=%s text_preview=%s",
+                    self.session_id,
+                    event_type,
+                    queue.qsize(),
+                    self._drop_counters["critical"],
+                    str(payload.get("text", ""))[:50],
+                )
             else:
                 self._drop_counters["volatile"] += 1
+                if self._drop_counters["volatile"] % 10 == 1:  # Log every 10th drop
+                    logger.warning(
+                        "event_bridge.volatile_queue_full session_id=%s event_type=%s "
+                        "queue_size=%s drop_count=%s",
+                        self.session_id,
+                        event_type,
+                        queue.qsize(),
+                        self._drop_counters["volatile"],
+                    )
 
     async def _run(self) -> None:
         try:
@@ -1294,6 +1312,24 @@ class InterviewOrchestratorExtension(AsyncExtension):
                 ) or current_q
 
             if getattr(decision, "output_mode", "") == "scripted_question":
+                await self._emit_scripted_question(
+                    ten_env,
+                    question=current_q,
+                    trace_id=self.trace_id,
+                )
+                return
+
+            # CRITICAL: Enforce followup budget limit at code level
+            followup_budget = int(getattr(decision, "followup_budget_remaining", 0) or 0)
+            if followup_budget <= 0 and decision.must_transition:
+                self._log(
+                    logging.WARNING,
+                    "orchestrator.followup_budget_exhausted_force_transition",
+                    followup_budget_remaining=followup_budget,
+                    followup_count_current=int(self.state.get("followup_count_current", 0)),
+                    current_question_id=str(current_q.get("question_id") or ""),
+                )
+                # Force transition to next question instead of generating followup
                 await self._emit_scripted_question(
                     ten_env,
                     question=current_q,

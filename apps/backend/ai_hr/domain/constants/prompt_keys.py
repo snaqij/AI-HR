@@ -12,6 +12,7 @@ class PromptTaskKey(StrEnum):
     REPLY_GENERATE = "reply_generate"
     INTERVIEW_QUESTION_SET = "interview_question_set"
     INTERVIEW_FOLLOWUP = "interview_followup"
+    INTERVIEW_SUMMARY = "interview_summary"
     CONTACT_EXTRACT = "contact_extract"
 
 

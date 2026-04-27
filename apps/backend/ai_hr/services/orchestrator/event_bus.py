@@ -35,7 +35,7 @@ class InterviewEventBus:
             self._loop = loop
 
     def subscribe(self, *, session_id: str) -> EventSubscription:
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=128)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=512)
         sub = EventSubscription(
             session_id=session_id,
             subscription_id=f"sub-{int(time.time() * 1000)}-{id(queue)}",

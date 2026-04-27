@@ -196,6 +196,7 @@ const totalOffers = computed(() => hiringOverview.value?.invited_count || 0);
 const monthlyHiring = computed(() => hiringOverview.value?.recommended_count || 0);
 const reviewCount = computed(() => hiringOverview.value?.review_count || 0);
 const activeInviteCount = computed(() => invites.value.filter((item) => item.delivery_status !== "failed").length);
+const dashboardDeltas = computed(() => analytics.value?.daily_deltas);
 
 const funnelItems = computed<FunnelLayer[]>(() => {
   const raw = analytics.value?.funnel || [];
@@ -218,8 +219,8 @@ const statCards = computed<StatCard[]>(() => [
   {
     label: "在招职位",
     value: formatNumber(totalJobs.value),
-    delta: `+${Math.max(1, Math.min(totalJobs.value, 4))}`,
-    deltaClass: "text-[#42bc7a]",
+    delta: formatDelta(Number(dashboardDeltas.value?.open_jobs ?? 0)),
+    deltaClass: deltaClass(Number(dashboardDeltas.value?.open_jobs ?? 0)),
     icon: "work_outline",
     iconWrapClass: "bg-[#eef4ff]",
     iconClass: "text-primary",
@@ -227,8 +228,8 @@ const statCards = computed<StatCard[]>(() => [
   {
     label: "候选人总数",
     value: formatNumber(totalCandidates.value),
-    delta: `+${Math.max(6, Math.min(totalCandidates.value, 86))}`,
-    deltaClass: "text-[#42bc7a]",
+    delta: formatDelta(Number(dashboardDeltas.value?.total_candidates ?? 0)),
+    deltaClass: deltaClass(Number(dashboardDeltas.value?.total_candidates ?? 0)),
     icon: "group",
     iconWrapClass: "bg-[#e9f8ef]",
     iconClass: "text-[#42bc7a]",
@@ -236,8 +237,8 @@ const statCards = computed<StatCard[]>(() => [
   {
     label: "待面试",
     value: formatNumber(reviewCount.value),
-    delta: `+${Math.max(2, Math.min(reviewCount.value, 11))}`,
-    deltaClass: "text-[#42bc7a]",
+    delta: formatDelta(Number(dashboardDeltas.value?.pending_interviews ?? 0)),
+    deltaClass: deltaClass(Number(dashboardDeltas.value?.pending_interviews ?? 0)),
     icon: "calendar_month",
     iconWrapClass: "bg-[#fff4e8]",
     iconClass: "text-[#f5a24a]",
@@ -245,8 +246,8 @@ const statCards = computed<StatCard[]>(() => [
   {
     label: "待处理邀约",
     value: formatNumber(totalInterviews.value),
-    delta: `-${Math.min(2, totalInterviews.value)}`,
-    deltaClass: "text-[#8a95a8]",
+    delta: formatDelta(Number(dashboardDeltas.value?.pending_invitations ?? 0)),
+    deltaClass: deltaClass(Number(dashboardDeltas.value?.pending_invitations ?? 0)),
     icon: "mail",
     iconWrapClass: "bg-[#f2edff]",
     iconClass: "text-[#9b7af3]",
@@ -254,8 +255,8 @@ const statCards = computed<StatCard[]>(() => [
   {
     label: "本月录用",
     value: formatNumber(monthlyHiring.value),
-    delta: `+${Math.max(1, Math.min(monthlyHiring.value, 5))}`,
-    deltaClass: "text-[#42bc7a]",
+    delta: formatDelta(Number(dashboardDeltas.value?.monthly_hires ?? 0)),
+    deltaClass: deltaClass(Number(dashboardDeltas.value?.monthly_hires ?? 0)),
     icon: "verified",
     iconWrapClass: "bg-[#e9f8ef]",
     iconClass: "text-[#42bc7a]",
@@ -337,6 +338,23 @@ function formatNumber(value: number): string {
 function percentText(value: number, total: number): string {
   if (!total) return "0.0%";
   return `${((value / total) * 100).toFixed(1)}%`;
+}
+
+function formatDelta(value: number): string {
+  if (value > 0) {
+    return `+${value}`;
+  }
+  return String(value);
+}
+
+function deltaClass(value: number): string {
+  if (value > 0) {
+    return "text-[#42bc7a]";
+  }
+  if (value < 0) {
+    return "text-[#8a95a8]";
+  }
+  return "text-[#708099]";
 }
 
 async function loadData(): Promise<void> {

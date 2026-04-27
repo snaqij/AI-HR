@@ -615,7 +615,7 @@ class _AliyunNlsCallback:
                 event_type="asr.turn",
                 payload={
                     "event_id": f"nls-{self.session_id}-{self.epoch}-{self.current_seq}-{self._publish_counter}",
-                    "turn_id": None,
+                    "turn_id": f"nls-turn-{self.session_id}-{self.epoch}-{self.current_seq}",
                     "seq": self.current_seq,
                     "speaker": "candidate" if is_final else "candidate_partial",
                     "transcript": normalized_fragment,

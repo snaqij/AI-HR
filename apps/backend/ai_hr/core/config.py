@@ -208,6 +208,9 @@ class Settings(BaseSettings):
     ai_interview_audio_retention_days: int = 30
     ai_interview_event_retention_days: int = 365
     ai_interview_cleanup_batch_size: int = 500
+    ai_interview_question_count_default: int = 14
+    ai_interview_question_count_min: int = 1
+    ai_interview_question_count_max: int = 20
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,

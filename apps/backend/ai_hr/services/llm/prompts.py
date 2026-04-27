@@ -275,6 +275,42 @@ DEFAULT_PROMPT_LIBRARY: dict[tuple[str, str], PromptTemplate] = {
             "话题：{active_topic_name}\n轮次：{active_topic_rounds}\n候选人是否请求切题：{candidate_requested_move_on}"
         ),
     ),
+    (PromptTaskKey.INTERVIEW_SUMMARY, "v1"): PromptTemplate(
+        task_key=PromptTaskKey.INTERVIEW_SUMMARY,
+        version="v1",
+        system_prompt=(
+            "你是一名资深的技术面试官，负责根据候选人的面试表现生成专业的评估总结。\n"
+            "你的评估应该客观、准确、有洞察力，既要指出候选人的优势，也要指出不足。\n"
+            "评估语言应该专业但易懂，避免过于技术化的术语。\n"
+            "必须输出严格的 JSON 格式。"
+        ),
+        user_template=(
+            "候选人姓名：{candidate_name}\n"
+            "应聘岗位：{job_title}\n"
+            "面试总分：{total_score:.1f}/100\n"
+            "专业能力：{competency_score:.1f}/100\n"
+            "沟通表达：{communication_score:.1f}/100\n"
+            "逻辑一致性：{consistency_score:.1f}/100\n"
+            "稳定性：{stability_score:.1f}/100\n"
+            "覆盖率：{coverage_rate:.1%}\n"
+            "问题总数：{question_count}\n"
+            "已回答：{answered_count}\n"
+            "风险标签：{risk_tags}\n\n"
+            "面试问答记录：\n{qa_summary}\n\n"
+            "请生成评估总结，必须严格按照以下 JSON 格式输出，不要添加任何其他文本：\n\n"
+            "{{\n"
+            '  "summary": "一段话的综合评估（150-300字，中文），客观描述候选人的整体表现、优势和不足",\n'
+            '  "strengths": ["优势1（20-50字）", "优势2", "优势3"],\n'
+            '  "gaps": ["不足1（20-50字）", "不足2"]\n'
+            "}}\n\n"
+            "注意：\n"
+            "1. summary 必须基于实际的面试表现，不要泛泛而谈\n"
+            "2. 如果分数较低，要明确指出问题所在\n"
+            "3. 如果有风险标签，必须在 summary 中提及\n"
+            "4. strengths 和 gaps 要具体，避免空洞的描述\n"
+            "5. 只输出 JSON，不要添加任何解释或markdown格式"
+        ),
+    ),
 }
 
 
