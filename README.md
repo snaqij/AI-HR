@@ -91,9 +91,9 @@ graph TD
 ### 2. 安装步骤
 
 #### 后端 (Backend)
-项目使用 `pyproject.toml` 管理依赖。
+项目使用 `apps/backend/pyproject.toml` 管理依赖。
 ```bash
-cd AI-HR
+cd apps/backend
 
 # 推荐：使用 uv 安装 (自动处理虚拟环境与依赖)
 uv sync
@@ -107,14 +107,14 @@ pip install .
 #### TEN Agent
 Agent 的依赖由插件系统动态管理。
 ```bash
-cd ten_agent
+cd runtime/ten_agent
 # 部署并链接插件依赖
 tman install
 ```
 
 #### 前端 (Frontend)
 ```bash
-cd frontend
+cd apps/frontend
 npm install
 ```
 
@@ -153,7 +153,7 @@ npm install
 ### 第一步：后端服务 (Backend)
 后端负责 API 提供、业务逻辑与任务调度。
 ```bash
-cd AI-HR
+cd apps/backend
 # 确保已配置 infra/env/.env.system 或 infra/env/.env.secrets
 uv run python -m ai_hr.main
 ```
@@ -186,7 +186,7 @@ tman run start -- --property .ten_sessions/<session_id>.property.json
 ### 第三步：前端界面 (Frontend)
 前端提供 HR 管理后台以及候选人面试房间。
 ```bash
-cd frontend
+cd apps/frontend
 # 安装依赖
 npm install
 # 启动开发服务器
@@ -200,7 +200,7 @@ npm run dev
 
 ## ⚙️ 详细配置项说明
 
-项目采用环境变量驱动配置。你可以创建 `infra/env/.env.system` 和 `infra/env/.env.secrets` 文件。所有配置项前缀均为 `AI_HR_`。
+项目采用环境变量驱动配置。可先复制 `infra/env/.env.example` 作为模板，再按需拆分为 `infra/env/.env.system` 和 `infra/env/.env.secrets`。所有配置项前缀均为 `AI_HR_`。
 
 ### 核心基础配置
 | 变量名 | 默认值 | 说明 |
@@ -224,8 +224,6 @@ npm run dev
 | `AI_HR_TTS_PROVIDER` | `mock` | `aliyun`, `tencent` 或 `mock` |
 
 ---
-
-## 📝 开发规范
 
 ## 📝 开发规范
 

@@ -13,14 +13,14 @@ Thanks for your interest in contributing.
 ### Backend
 
 ```bash
-cd AI-HR
+cd apps/backend
 uv sync
 ```
 
 ### Frontend
 
 ```bash
-cd frontend
+cd apps/frontend
 npm install
 ```
 
@@ -58,7 +58,7 @@ Prefer conventional style:
 Run before opening a PR:
 
 ```bash
-cd AI-HR
+cd apps/backend
 python -m pytest
 ```
 

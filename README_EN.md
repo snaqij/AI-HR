@@ -69,7 +69,7 @@ graph TD
 
 #### Backend
 ```bash
-cd AI-HR
+cd apps/backend
 # Recommended: install via uv
 uv sync
 # Alternative: install via pip
@@ -78,14 +78,14 @@ pip install .
 
 #### TEN Agent
 ```bash
-cd ten_agent
+cd runtime/ten_agent
 # Install dependencies via TEN Manager
 tman install
 ```
 
 #### Frontend
 ```bash
-cd frontend
+cd apps/frontend
 npm install
 ```
 
@@ -106,7 +106,9 @@ To enable full functionality, you need to prepare the following:
 
 ### Step 1: Backend Service
 ```bash
-cd AI-HR
+cd apps/backend
+# Prepare env files first:
+# cp ../../infra/env/.env.example ../../infra/env/.env.system
 uv run python -m ai_hr.main
 ```
 *   API Docs: `http://localhost:8000/docs`
@@ -126,7 +128,7 @@ tman run start -- --property .ten_sessions/<session_id>.property.json
 
 ### Step 3: Frontend UI
 ```bash
-cd frontend
+cd apps/frontend
 npm run dev
 ```
 *   URL: `http://localhost:5173`

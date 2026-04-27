@@ -10,7 +10,7 @@
 ## 本地运行
 
 ```bash
-cd frontend
+cd apps/frontend
 npm install
 npm run dev
 ```

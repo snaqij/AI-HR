@@ -528,6 +528,17 @@ class AnalyticsService:
             "project_relevance": "项目经验",
             "experience_depth": "实习经历",
             "competitiveness": "综合素质",
+            "education": "教育背景",
+            "projects": "项目经历",
+            "skills": "专业技能",
+            "learning_agility": "学习潜力",
+            "potential": "学习潜力",
+            "experience": "团队协作能力",
+            "jd_coverage": "解决问题能力",
+            "evidence_quality": "代码能力",
+            "engineering_ability": "专业技能",
+            "requirement_strictness": "解决问题能力",
+            "risk_penalty": "风险控制",
         }
         labels_interview = {
             "competency": "专业技能",
@@ -535,6 +546,38 @@ class AnalyticsService:
             "consistency": "问题解决能力",
             "stability": "团队协作能力",
             "risk_penalty": "风险控制",
+            "education": "教育背景",
+            "projects": "项目经历",
+            "skills": "专业技能",
+            "learning_agility": "学习潜力",
+            "potential": "学习潜力",
+            "experience": "团队协作能力",
+            "jd_coverage": "问题解决能力",
+            "evidence_quality": "代码能力",
+            "engineering_ability": "专业技能",
+            "requirement_strictness": "问题解决能力",
+        }
+        benchmark_scores = {
+            "education_match": 75.0,
+            "skill_match": 80.0,
+            "project_relevance": 80.0,
+            "experience_depth": 75.0,
+            "competitiveness": 75.0,
+            "competency": 80.0,
+            "communication": 75.0,
+            "consistency": 80.0,
+            "stability": 75.0,
+            "risk_penalty": 75.0,
+            "education": 75.0,
+            "projects": 80.0,
+            "skills": 80.0,
+            "learning_agility": 75.0,
+            "potential": 75.0,
+            "experience": 75.0,
+            "jd_coverage": 80.0,
+            "evidence_quality": 80.0,
+            "engineering_ability": 80.0,
+            "requirement_strictness": 80.0,
         }
         labels = labels_resume if domain == "resume" else labels_interview
         rows: list[HiringDecisionDimensionItem] = []
@@ -543,12 +586,19 @@ class AnalyticsService:
             score = self._to_float_or_none(value)
             if score is None:
                 continue
+            raw_key = str(key).strip().lower()
+            normalized_key = (
+                raw_key.replace("-", "_")
+                .replace(" ", "_")
+                .replace("__", "_")
+                .replace("__", "_")
+            )
             rows.append(
                 HiringDecisionDimensionItem(
-                    key=str(key),
-                    label=labels.get(str(key), self._labelize(str(key))),
+                    key=normalized_key,
+                    label=labels.get(normalized_key, self._labelize(normalized_key)),
                     score=round(score, 2),
-                    max_score=100.0,
+                    max_score=float(benchmark_scores.get(normalized_key, 100.0)),
                 )
             )
         rows.sort(key=lambda item: item.score, reverse=True)
