@@ -1,5 +1,5 @@
 from __future__ import annotations
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class FunnelStep(BaseModel):
     label: str
@@ -24,6 +24,7 @@ class DashboardAnalyticsResult(BaseModel):
 class HiringCenterEvaluationItem(BaseModel):
     candidate_id: str
     candidate_name: str
+    avatar_url: str | None = None
     candidate_stage: str
     candidate_expected_salary: str | None = None
     candidate_score_explanation: str | None = None
@@ -31,6 +32,8 @@ class HiringCenterEvaluationItem(BaseModel):
     job_title: str
     job_salary_range: str | None = None
     evaluation_status: str
+    resume_score: float | None = None
+    interview_score: float | None = None
     final_score: float
     recommendation: str
     summary: str | None = None
@@ -48,3 +51,91 @@ class HiringCenterOverviewResult(BaseModel):
     conversion_rate: float
     top_items: list[HiringCenterEvaluationItem]
     queue_items: list[HiringCenterEvaluationItem]
+
+
+class HiringDecisionDimensionItem(BaseModel):
+    key: str
+    label: str
+    score: float
+    max_score: float = 100.0
+
+
+class HiringDecisionCandidateProfile(BaseModel):
+    candidate_id: str
+    candidate_name: str
+    avatar_url: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    city: str | None = None
+    degree: str | None = None
+    work_experience: str | None = None
+    current_role: str | None = None
+    current_stage: str
+    expected_salary: str | None = None
+    applied_at: str | None = None
+    updated_at: str | None = None
+    job_id: str
+    job_title: str
+    department: str | None = None
+    job_city: str | None = None
+    job_salary_range: str | None = None
+
+
+class HiringDecisionOverview(BaseModel):
+    resume_score: float
+    interview_score: float
+    composite_score: float
+    grade: str
+    recommendation: str
+    recommended_salary: str | None = None
+    updated_at: str | None = None
+
+
+class HiringDecisionAssessmentPanel(BaseModel):
+    score: float
+    summary: str | None = None
+    dimensions: list[HiringDecisionDimensionItem] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    risk_tags: list[str] = Field(default_factory=list)
+
+
+class HiringDecisionTimelineItem(BaseModel):
+    step: str
+    time: str | None = None
+    status: str | None = None
+
+
+class HiringDecisionInterviewerReviewItem(BaseModel):
+    reviewer: str
+    stage: str | None = None
+    score: float | None = None
+    time: str | None = None
+    comment: str | None = None
+
+
+class HiringDecisionQAItem(BaseModel):
+    question: str
+    answer: str | None = None
+    turn_no: int | None = None
+    occurred_at: str | None = None
+
+
+class HiringDecisionOperationLogItem(BaseModel):
+    type: str
+    title: str
+    status: str | None = None
+    time: str | None = None
+    detail: str | None = None
+
+
+class HiringDecisionDetailResult(BaseModel):
+    profile: HiringDecisionCandidateProfile
+    overview: HiringDecisionOverview
+    resume_assessment: HiringDecisionAssessmentPanel
+    interview_assessment: HiringDecisionAssessmentPanel
+    composite_assessment: HiringDecisionAssessmentPanel
+    timeline: list[HiringDecisionTimelineItem] = Field(default_factory=list)
+    interviewer_reviews: list[HiringDecisionInterviewerReviewItem] = Field(default_factory=list)
+    qa_items: list[HiringDecisionQAItem] = Field(default_factory=list)
+    operation_logs: list[HiringDecisionOperationLogItem] = Field(default_factory=list)

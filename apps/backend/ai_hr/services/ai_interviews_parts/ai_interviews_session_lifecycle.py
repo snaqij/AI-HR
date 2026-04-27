@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ...schemas.ai_assessments import CompositeAssessmentComputeRequest
 from .ai_interviews_shared import (
     AIInterviewInvitationRepository,
     AIInterviewInvitationResponse,
@@ -355,7 +356,102 @@ class AIInterviewSessionLifecycleMixin:
             note=payload.note,
             payload_patch={"finish_operator": payload.operator, PayloadKey.INTERVIEW_STAGE: InterviewStage.CLOSING},
         )
+        entity = self._run_post_finish_assessment(entity=entity)
         return self._to_session_dict(entity)
+
+    def _run_post_finish_assessment(self, *, entity):
+        """
+        Trigger end-of-interview assessment pipeline:
+        1) interview assessment from full turn history
+        2) composite assessment with resume/job/interview signals
+
+        Failure is non-blocking for session completion. We persist diagnostics in session payload.
+        """
+        session_id = str(entity.id)
+        assessment_patch: dict[str, object] = {
+            "post_interview_assessment": {
+                "trigger": "finish_session",
+                "status": "started",
+            }
+        }
+        try:
+            interview_assessment, _queue_id = self._assessment_service.compute_interview_assessment(
+                session_id=session_id,
+                run_mode="sync",
+                policy_code="candidate_progression",
+                policy_version=None,
+                force_recompute=False,
+            )
+            post = dict(assessment_patch["post_interview_assessment"])  # type: ignore[arg-type]
+            post.update(
+                {
+                    "interview_assessment_id": interview_assessment.id,
+                    "interview_score": float(interview_assessment.total_score or 0.0),
+                    "interview_recommendation": str(interview_assessment.recommendation or ""),
+                }
+            )
+            try:
+                composite = self._assessment_service.compute_composite_assessment(
+                    CompositeAssessmentComputeRequest(
+                        candidate_id=entity.candidate_id,
+                        job_id=entity.job_id,
+                        session_id=session_id,
+                    )
+                )
+                compensation_fit = dict((composite.payload or {}).get("compensation_fit") or {})
+                post.update(
+                    {
+                        "status": "completed",
+                        "composite_assessment_id": composite.id,
+                        "composite_score": float(composite.final_score or 0.0),
+                        "decision": str(composite.recommendation or ""),
+                        "salary_match": {
+                            "decision": str(compensation_fit.get("decision") or ""),
+                            "score": float(compensation_fit.get("score") or 0.0),
+                            "reasons": [str(item) for item in list(compensation_fit.get("reasons") or [])],
+                        },
+                    }
+                )
+            except Exception as composite_exc:  # noqa: BLE001
+                post.update(
+                    {
+                        "status": "partial",
+                        "composite_error": str(composite_exc),
+                    }
+                )
+                logger.warning(
+                    "ai_interview.finish_session.composite_assessment_failed session_id=%s error=%s",
+                    session_id,
+                    composite_exc,
+                    exc_info=True,
+                )
+            assessment_patch["post_interview_assessment"] = post
+        except Exception as interview_exc:  # noqa: BLE001
+            assessment_patch["post_interview_assessment"] = {
+                "trigger": "finish_session",
+                "status": "failed",
+                "error": str(interview_exc),
+            }
+            logger.warning(
+                "ai_interview.finish_session.interview_assessment_failed session_id=%s error=%s",
+                session_id,
+                interview_exc,
+                exc_info=True,
+            )
+
+        try:
+            return self._session_repository.update_payload(
+                session_id,
+                payload_patch=assessment_patch,
+            )
+        except Exception as payload_exc:  # noqa: BLE001
+            logger.warning(
+                "ai_interview.finish_session.assessment_payload_persist_failed session_id=%s error=%s",
+                session_id,
+                payload_exc,
+                exc_info=True,
+            )
+            return entity
 
     def handoff_session(self, session_id: str, payload: AIInterviewSessionHandoffRequest) -> dict:
         """Cleaned docstring."""

@@ -104,6 +104,11 @@ const router = createRouter({
             component: () => import('../views/admin/HiringCenter.vue')
         },
         {
+            path: 'hiring/decision-detail',
+            name: 'HiringDecisionDetail',
+            component: () => import('../views/admin/HiringDecisionDetail.vue')
+        },
+        {
           path: 'agents',
           name: 'AgentCenter',
           component: () => import('../views/admin/AgentCenter.vue')

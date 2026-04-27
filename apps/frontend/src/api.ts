@@ -403,6 +403,7 @@ export interface DashboardAnalytics {
 export interface HiringCenterEvaluationItem {
   candidate_id: string;
   candidate_name: string;
+  avatar_url?: string | null;
   candidate_stage: string;
   candidate_expected_salary?: string | null;
   candidate_score_explanation?: string | null;
@@ -410,6 +411,8 @@ export interface HiringCenterEvaluationItem {
   job_title: string;
   job_salary_range?: string | null;
   evaluation_status: string;
+  resume_score?: number | null;
+  interview_score?: number | null;
   final_score: number;
   recommendation: string;
   summary?: string | null;
@@ -427,6 +430,94 @@ export interface HiringCenterOverviewResult {
   conversion_rate: number;
   top_items: HiringCenterEvaluationItem[];
   queue_items: HiringCenterEvaluationItem[];
+}
+
+export interface HiringDecisionDimensionItem {
+  key: string;
+  label: string;
+  score: number;
+  max_score: number;
+}
+
+export interface HiringDecisionCandidateProfile {
+  candidate_id: string;
+  candidate_name: string;
+  avatar_url?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  city?: string | null;
+  degree?: string | null;
+  work_experience?: string | null;
+  current_role?: string | null;
+  current_stage: string;
+  expected_salary?: string | null;
+  applied_at?: string | null;
+  updated_at?: string | null;
+  job_id: string;
+  job_title: string;
+  department?: string | null;
+  job_city?: string | null;
+  job_salary_range?: string | null;
+}
+
+export interface HiringDecisionOverview {
+  resume_score: number;
+  interview_score: number;
+  composite_score: number;
+  grade: string;
+  recommendation: string;
+  recommended_salary?: string | null;
+  updated_at?: string | null;
+}
+
+export interface HiringDecisionAssessmentPanel {
+  score: number;
+  summary?: string | null;
+  dimensions: HiringDecisionDimensionItem[];
+  strengths: string[];
+  weaknesses: string[];
+  risk_tags: string[];
+}
+
+export interface HiringDecisionTimelineItem {
+  step: string;
+  time?: string | null;
+  status?: string | null;
+}
+
+export interface HiringDecisionInterviewerReviewItem {
+  reviewer: string;
+  stage?: string | null;
+  score?: number | null;
+  time?: string | null;
+  comment?: string | null;
+}
+
+export interface HiringDecisionQAItem {
+  question: string;
+  answer?: string | null;
+  turn_no?: number | null;
+  occurred_at?: string | null;
+}
+
+export interface HiringDecisionOperationLogItem {
+  type: string;
+  title: string;
+  status?: string | null;
+  time?: string | null;
+  detail?: string | null;
+}
+
+export interface HiringDecisionDetailResult {
+  profile: HiringDecisionCandidateProfile;
+  overview: HiringDecisionOverview;
+  resume_assessment: HiringDecisionAssessmentPanel;
+  interview_assessment: HiringDecisionAssessmentPanel;
+  composite_assessment: HiringDecisionAssessmentPanel;
+  timeline: HiringDecisionTimelineItem[];
+  interviewer_reviews: HiringDecisionInterviewerReviewItem[];
+  qa_items: HiringDecisionQAItem[];
+  operation_logs: HiringDecisionOperationLogItem[];
 }
 
 export interface CredentialStatus {
@@ -913,6 +1004,13 @@ export async function fetchHiringCenterOverview(
   params.set("queue_limit", String(payload.queue_limit ?? 20));
   params.set("max_scan", String(payload.max_scan ?? 3000));
   return request<HiringCenterOverviewResult>(`/analytics/hiring-center?${params.toString()}`);
+}
+
+export async function fetchHiringDecisionDetail(jobId: string, candidateId: string): Promise<HiringDecisionDetailResult> {
+  const params = new URLSearchParams();
+  params.set("job_id", jobId);
+  params.set("candidate_id", candidateId);
+  return request<HiringDecisionDetailResult>(`/analytics/hiring-decision-detail?${params.toString()}`);
 }
 
 // Jobs

@@ -206,6 +206,9 @@ def test_start_and_finish_ai_interview_session() -> None:
     finished = finish_resp.json()["data"]
     assert finished["status"] == "completed"
     assert finished["ended_at"] is not None
+    post_assessment = (finished.get("payload") or {}).get("post_interview_assessment") or {}
+    assert post_assessment.get("trigger") == "finish_session"
+    assert post_assessment.get("status") in {"completed", "partial", "failed"}
 
 
 def test_create_session_should_not_prepare_ten_property_before_start() -> None:

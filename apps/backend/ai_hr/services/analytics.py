@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..db.models import AIInterviewSession, Candidate, CandidateEmailDelivery, CandidateJobEvaluation, Job
+from ..db.models import (
+    AIInterviewAssessment,
+    AIInterviewReport,
+    AIInterviewSession,
+    AIInterviewTurn,
+    Candidate,
+    CandidateCompositeAssessment,
+    CandidateEmailDelivery,
+    CandidateJobEvaluation,
+    CandidateJobPipeline,
+    DecisionEvent,
+    Job,
+    JobCandidate,
+)
+from ..core.exceptions import ResourceNotFoundError
 from ..repositories.job_candidates import JobCandidateRepository
 from ..repositories.workspace_scope import get_workspace_id
 from ..schemas.analytics import (
@@ -11,6 +27,15 @@ from ..schemas.analytics import (
     EfficiencyMetric,
     FunnelStep,
     HiringCenterEvaluationItem,
+    HiringDecisionAssessmentPanel,
+    HiringDecisionCandidateProfile,
+    HiringDecisionDetailResult,
+    HiringDecisionDimensionItem,
+    HiringDecisionInterviewerReviewItem,
+    HiringDecisionOperationLogItem,
+    HiringDecisionOverview,
+    HiringDecisionQAItem,
+    HiringDecisionTimelineItem,
     HiringCenterOverviewResult,
 )
 
@@ -96,6 +121,542 @@ class AnalyticsService:
             top_items=top_items,
             queue_items=queue_items,
         )
+
+    def get_hiring_decision_detail(self, *, job_id: str, candidate_id: str) -> HiringDecisionDetailResult:
+        workspace_id = get_workspace_id(self._session)
+
+        pair_stmt = (
+            select(JobCandidate, Candidate, Job)
+            .join(Candidate, Candidate.id == JobCandidate.candidate_id)
+            .join(Job, Job.id == JobCandidate.job_id)
+            .where(
+                JobCandidate.job_id == job_id,
+                JobCandidate.candidate_id == candidate_id,
+            )
+        )
+        if workspace_id:
+            pair_stmt = pair_stmt.where(
+                Candidate.workspace_id == workspace_id,
+                Job.workspace_id == workspace_id,
+            )
+        pair_row = self._session.execute(pair_stmt).first()
+        if pair_row is None:
+            raise ResourceNotFoundError(f"Candidate '{candidate_id}' under job '{job_id}' was not found")
+        job_candidate, candidate, job = pair_row
+
+        eval_stmt = (
+            select(CandidateJobEvaluation)
+            .where(
+                CandidateJobEvaluation.job_id == job_id,
+                CandidateJobEvaluation.candidate_id == candidate_id,
+                CandidateJobEvaluation.status.in_(("completed", "reviewed")),
+            )
+            .order_by(CandidateJobEvaluation.updated_at.desc(), CandidateJobEvaluation.created_at.desc())
+            .limit(1)
+        )
+        if workspace_id:
+            eval_stmt = eval_stmt.where(CandidateJobEvaluation.workspace_id == workspace_id)
+        evaluation = self._session.execute(eval_stmt).scalars().first()
+        if evaluation is None:
+            raise ResourceNotFoundError(f"Evaluation for candidate '{candidate_id}' under job '{job_id}' was not found")
+
+        pipeline_stmt = select(CandidateJobPipeline).where(
+            CandidateJobPipeline.job_id == job_id,
+            CandidateJobPipeline.candidate_id == candidate_id,
+        )
+        if workspace_id:
+            pipeline_stmt = pipeline_stmt.where(CandidateJobPipeline.workspace_id == workspace_id)
+        pipeline = self._session.execute(pipeline_stmt).scalars().first()
+
+        session_stmt = (
+            select(AIInterviewSession)
+            .where(
+                AIInterviewSession.job_id == job_id,
+                AIInterviewSession.candidate_id == candidate_id,
+            )
+            .order_by(AIInterviewSession.created_at.desc())
+            .limit(1)
+        )
+        if workspace_id:
+            session_stmt = session_stmt.where(AIInterviewSession.workspace_id == workspace_id)
+        interview_session = self._session.execute(session_stmt).scalars().first()
+
+        interview_assessment = self._get_latest_interview_assessment(
+            session_id=interview_session.id if interview_session else None,
+            assessment_id=pipeline.latest_interview_assessment_id if pipeline else None,
+        )
+        report = self._get_latest_interview_report(interview_session.id if interview_session else None)
+
+        composite_stmt = (
+            select(CandidateCompositeAssessment)
+            .where(
+                CandidateCompositeAssessment.job_id == job_id,
+                CandidateCompositeAssessment.candidate_id == candidate_id,
+            )
+            .order_by(CandidateCompositeAssessment.created_at.desc())
+            .limit(1)
+        )
+        composite = self._session.execute(composite_stmt).scalars().first()
+
+        delivery_stmt = (
+            select(CandidateEmailDelivery)
+            .where(
+                CandidateEmailDelivery.job_id == job_id,
+                CandidateEmailDelivery.candidate_id == candidate_id,
+            )
+            .order_by(CandidateEmailDelivery.created_at.desc())
+            .limit(50)
+        )
+        if workspace_id:
+            delivery_stmt = delivery_stmt.where(
+                or_(
+                    CandidateEmailDelivery.workspace_id == workspace_id,
+                    CandidateEmailDelivery.workspace_id.is_(None),
+                )
+            )
+        deliveries = list(self._session.execute(delivery_stmt).scalars().all())
+
+        decision_events: list[DecisionEvent] = []
+        if pipeline is not None:
+            decision_events = list(
+                self._session.execute(
+                    select(DecisionEvent)
+                    .where(DecisionEvent.pipeline_id == pipeline.id)
+                    .order_by(DecisionEvent.created_at.desc())
+                    .limit(50)
+                ).scalars().all()
+            )
+
+        qa_items = self._list_qa_items(session_id=interview_session.id if interview_session else None)
+
+        resume_score = float(evaluation.match_score or 0)
+        interview_score = float(
+            interview_assessment.total_score
+            if interview_assessment is not None
+            else (
+                report.dimension_scores_json.get("total", evaluation.competitiveness_score or 0)
+                if report is not None
+                else (evaluation.competitiveness_score or 0)
+            )
+        )
+        composite_score = float(composite.final_score if composite is not None else evaluation.final_score or 0)
+
+        profile = HiringDecisionCandidateProfile(
+            candidate_id=candidate.id,
+            candidate_name=candidate.name,
+            avatar_url=self._pick_avatar_url(candidate.raw_profile),
+            phone=self._pick_phone(candidate.raw_profile),
+            email=candidate.email,
+            city=self._pick_city(candidate, job),
+            degree=candidate.degree,
+            work_experience=candidate.work_experience,
+            current_role=self._pick_role(candidate.raw_profile),
+            current_stage=job_candidate.stage or candidate.current_stage,
+            expected_salary=candidate.expected_salary,
+            applied_at=self._dt(job_candidate.applied_at or job_candidate.first_synced_at),
+            updated_at=self._dt(job_candidate.last_synced_at),
+            job_id=job.id,
+            job_title=job.title,
+            department=job.department,
+            job_city=job.city,
+            job_salary_range=job.salary_range,
+        )
+        overview = HiringDecisionOverview(
+            resume_score=resume_score,
+            interview_score=interview_score,
+            composite_score=composite_score,
+            grade=self._grade_text(composite_score),
+            recommendation=str(composite.recommendation if composite is not None else evaluation.recommendation or "review"),
+            recommended_salary=candidate.expected_salary or job.salary_range,
+            updated_at=self._dt(
+                (composite.updated_at if composite is not None else None)
+                or (interview_assessment.updated_at if interview_assessment is not None else None)
+                or evaluation.updated_at
+            ),
+        )
+        resume_assessment = HiringDecisionAssessmentPanel(
+            score=resume_score,
+            summary=evaluation.summary,
+            dimensions=self._to_dimensions(evaluation.dimension_scores, domain="resume"),
+            strengths=[str(item) for item in list(evaluation.strengths or []) if str(item).strip()],
+            weaknesses=[str(item) for item in list(evaluation.weaknesses or []) if str(item).strip()],
+            risk_tags=[str(item) for item in list(evaluation.risk_flags or []) if str(item).strip()],
+        )
+        interview_assessment_panel = HiringDecisionAssessmentPanel(
+            score=interview_score,
+            summary=(
+                interview_assessment.summary
+                if interview_assessment is not None and interview_assessment.summary
+                else (report.summary if report is not None else None)
+            ),
+            dimensions=self._to_interview_dimensions(interview_assessment, report),
+            strengths=[str(item) for item in list(interview_assessment.strengths_json or []) if str(item).strip()]
+            if interview_assessment is not None
+            else [],
+            weaknesses=[str(item) for item in list(interview_assessment.gaps_json or []) if str(item).strip()]
+            if interview_assessment is not None
+            else [],
+            risk_tags=[str(item) for item in list(interview_assessment.risk_flags_json or []) if str(item).strip()]
+            if interview_assessment is not None
+            else [str(item) for item in list(report.risk_tags_json or []) if str(item).strip()] if report is not None else [],
+        )
+        composite_assessment = HiringDecisionAssessmentPanel(
+            score=composite_score,
+            summary=composite.summary if composite is not None else evaluation.summary,
+            dimensions=self._to_composite_dimensions(composite),
+            risk_tags=[str(item) for item in list(composite.risk_flags_json or []) if str(item).strip()]
+            if composite is not None
+            else [],
+        )
+        timeline = self._build_timeline(
+            job_candidate=job_candidate,
+            deliveries=deliveries,
+            decision_events=decision_events,
+            pipeline=pipeline,
+            overview=overview,
+        )
+        interviewer_reviews = self._build_interviewer_reviews(
+            interview_assessment=interview_assessment,
+            report=report,
+            deliveries=deliveries,
+        )
+        operation_logs = self._build_operation_logs(deliveries=deliveries, decision_events=decision_events)
+        return HiringDecisionDetailResult(
+            profile=profile,
+            overview=overview,
+            resume_assessment=resume_assessment,
+            interview_assessment=interview_assessment_panel,
+            composite_assessment=composite_assessment,
+            timeline=timeline,
+            interviewer_reviews=interviewer_reviews,
+            qa_items=qa_items,
+            operation_logs=operation_logs,
+        )
+
+    def _get_latest_interview_assessment(
+        self,
+        *,
+        session_id: str | None,
+        assessment_id: str | None,
+    ) -> AIInterviewAssessment | None:
+        if assessment_id:
+            entity = self._session.get(AIInterviewAssessment, assessment_id)
+            if entity is not None:
+                return entity
+        if not session_id:
+            return None
+        return self._session.execute(
+            select(AIInterviewAssessment)
+            .where(AIInterviewAssessment.session_id == session_id)
+            .order_by(AIInterviewAssessment.evaluated_at.desc(), AIInterviewAssessment.created_at.desc())
+            .limit(1)
+        ).scalars().first()
+
+    def _get_latest_interview_report(self, session_id: str | None) -> AIInterviewReport | None:
+        if not session_id:
+            return None
+        return self._session.execute(
+            select(AIInterviewReport)
+            .where(AIInterviewReport.session_id == session_id)
+            .order_by(AIInterviewReport.report_version.desc(), AIInterviewReport.created_at.desc())
+            .limit(1)
+        ).scalars().first()
+
+    def _list_qa_items(self, *, session_id: str | None) -> list[HiringDecisionQAItem]:
+        if not session_id:
+            return []
+        turns = list(
+            self._session.execute(
+                select(AIInterviewTurn)
+                .where(AIInterviewTurn.session_id == session_id)
+                .order_by(AIInterviewTurn.turn_no.asc(), AIInterviewTurn.created_at.asc())
+                .limit(200)
+            ).scalars().all()
+        )
+        items: list[HiringDecisionQAItem] = []
+        question_buffer: str | None = None
+        question_turn_no: int | None = None
+        question_time: str | None = None
+        for turn in turns:
+            speaker = str(turn.speaker or "").strip().lower()
+            text = str(turn.transcript or "").strip()
+            if not text:
+                continue
+            if speaker in {"assistant", "interviewer", "ai"}:
+                question_buffer = text
+                question_turn_no = turn.turn_no
+                question_time = self._dt(turn.created_at)
+                continue
+            if speaker in {"candidate", "user", "human"} and question_buffer:
+                items.append(
+                    HiringDecisionQAItem(
+                        question=question_buffer,
+                        answer=text,
+                        turn_no=question_turn_no,
+                        occurred_at=question_time,
+                    )
+                )
+                question_buffer = None
+                question_turn_no = None
+                question_time = None
+        return items[:50]
+
+    def _build_timeline(
+        self,
+        *,
+        job_candidate: JobCandidate,
+        deliveries: list[CandidateEmailDelivery],
+        decision_events: list[DecisionEvent],
+        pipeline: CandidateJobPipeline | None,
+        overview: HiringDecisionOverview,
+    ) -> list[HiringDecisionTimelineItem]:
+        timeline: list[HiringDecisionTimelineItem] = [
+            HiringDecisionTimelineItem(step="简历筛选", time=self._dt(job_candidate.first_synced_at), status="通过"),
+        ]
+        interview_deliveries = [item for item in deliveries if str(item.scene or "") == "interview_invitation"]
+        if interview_deliveries:
+            newest = sorted(interview_deliveries, key=lambda item: item.created_at or datetime.min, reverse=True)
+            for idx, item in enumerate(newest[:3]):
+                timeline.append(
+                    HiringDecisionTimelineItem(
+                        step=f"面试环节 {idx + 1}",
+                        time=self._dt(item.created_at),
+                        status=self._delivery_status_text(item.status),
+                    )
+                )
+        if decision_events:
+            latest_decision = max(decision_events, key=lambda item: item.created_at or datetime.min)
+            timeline.append(
+                HiringDecisionTimelineItem(
+                    step="录用决策",
+                    time=self._dt(latest_decision.created_at),
+                    status=str(latest_decision.decision or ""),
+                )
+            )
+        elif pipeline and pipeline.latest_decision_at:
+            timeline.append(
+                HiringDecisionTimelineItem(
+                    step="录用决策",
+                    time=self._dt(pipeline.latest_decision_at),
+                    status=overview.recommendation,
+                )
+            )
+        return timeline
+
+    def _build_interviewer_reviews(
+        self,
+        *,
+        interview_assessment: AIInterviewAssessment | None,
+        report: AIInterviewReport | None,
+        deliveries: list[CandidateEmailDelivery],
+    ) -> list[HiringDecisionInterviewerReviewItem]:
+        reviews: list[HiringDecisionInterviewerReviewItem] = []
+        payload = dict(report.payload or {}) if report is not None else {}
+        raw_reviews = payload.get("interviewer_reviews")
+        if isinstance(raw_reviews, list):
+            for item in raw_reviews:
+                if not isinstance(item, dict):
+                    continue
+                reviews.append(
+                    HiringDecisionInterviewerReviewItem(
+                        reviewer=str(item.get("reviewer") or "面试官"),
+                        stage=str(item.get("stage") or ""),
+                        score=self._to_float_or_none(item.get("score")),
+                        time=str(item.get("time") or ""),
+                        comment=str(item.get("comment") or ""),
+                    )
+                )
+        if reviews:
+            return reviews[:10]
+        if interview_assessment is not None:
+            reviews.append(
+                HiringDecisionInterviewerReviewItem(
+                    reviewer="AI 面试官",
+                    stage="综合面试",
+                    score=float(interview_assessment.total_score or 0),
+                    time=self._dt(interview_assessment.evaluated_at),
+                    comment=str(interview_assessment.summary or "综合表现良好"),
+                )
+            )
+        if not reviews and deliveries:
+            latest = max(deliveries, key=lambda item: item.created_at or datetime.min)
+            reviews.append(
+                HiringDecisionInterviewerReviewItem(
+                    reviewer="流程系统",
+                    stage="邀约记录",
+                    score=None,
+                    time=self._dt(latest.created_at),
+                    comment=str(latest.subject or "已发起面试邀约"),
+                )
+            )
+        return reviews
+
+    def _build_operation_logs(
+        self,
+        *,
+        deliveries: list[CandidateEmailDelivery],
+        decision_events: list[DecisionEvent],
+    ) -> list[HiringDecisionOperationLogItem]:
+        logs: list[HiringDecisionOperationLogItem] = []
+        for event in decision_events:
+            logs.append(
+                HiringDecisionOperationLogItem(
+                    type="decision_event",
+                    title=str(event.event_type or "decision_event"),
+                    status=str(event.decision or ""),
+                    time=self._dt(event.created_at),
+                    detail=str(event.reason_text or event.reason_code or ""),
+                )
+            )
+        for delivery in deliveries:
+            logs.append(
+                HiringDecisionOperationLogItem(
+                    type="email_delivery",
+                    title=str(delivery.subject or "邀请邮件"),
+                    status=str(delivery.status or ""),
+                    time=self._dt(delivery.created_at),
+                    detail=str(delivery.scene or ""),
+                )
+            )
+        logs.sort(key=lambda item: self._to_sort_key(item.time), reverse=True)
+        return logs[:80]
+
+    def _to_dimensions(self, raw: dict | None, *, domain: str) -> list[HiringDecisionDimensionItem]:
+        labels_resume = {
+            "education_match": "教育背景",
+            "skill_match": "专业技能",
+            "project_relevance": "项目经验",
+            "experience_depth": "实习经历",
+            "competitiveness": "综合素质",
+        }
+        labels_interview = {
+            "competency": "专业技能",
+            "communication": "沟通表达能力",
+            "consistency": "问题解决能力",
+            "stability": "团队协作能力",
+            "risk_penalty": "风险控制",
+        }
+        labels = labels_resume if domain == "resume" else labels_interview
+        rows: list[HiringDecisionDimensionItem] = []
+        source = dict(raw or {})
+        for key, value in source.items():
+            score = self._to_float_or_none(value)
+            if score is None:
+                continue
+            rows.append(
+                HiringDecisionDimensionItem(
+                    key=str(key),
+                    label=labels.get(str(key), self._labelize(str(key))),
+                    score=round(score, 2),
+                    max_score=100.0,
+                )
+            )
+        rows.sort(key=lambda item: item.score, reverse=True)
+        return rows
+
+    def _to_interview_dimensions(
+        self,
+        interview_assessment: AIInterviewAssessment | None,
+        report: AIInterviewReport | None,
+    ) -> list[HiringDecisionDimensionItem]:
+        if interview_assessment is not None:
+            source = {
+                "competency": float(interview_assessment.competency_score or 0),
+                "communication": float(interview_assessment.communication_score or 0),
+                "consistency": float(interview_assessment.consistency_score or 0),
+                "stability": float(interview_assessment.stability_score or 0),
+                "risk_penalty": max(0.0, 100.0 - float(interview_assessment.risk_penalty_score or 0)),
+            }
+            return self._to_dimensions(source, domain="interview")
+        if report is not None:
+            return self._to_dimensions(dict(report.dimension_scores_json or {}), domain="interview")
+        return []
+
+    def _to_composite_dimensions(
+        self,
+        composite: CandidateCompositeAssessment | None,
+    ) -> list[HiringDecisionDimensionItem]:
+        if composite is None:
+            return []
+        return [
+            HiringDecisionDimensionItem(key="resume_score", label="简历评分", score=round(float(composite.resume_score or 0), 2)),
+            HiringDecisionDimensionItem(key="interview_score", label="面试评分", score=round(float(composite.interview_score or 0), 2)),
+            HiringDecisionDimensionItem(key="market_score", label="市场匹配", score=round(float(composite.market_score or 0), 2)),
+            HiringDecisionDimensionItem(key="stability_score", label="稳定性", score=round(float(composite.stability_score or 0), 2)),
+        ]
+
+    def _pick_avatar_url(self, raw_profile: dict | None) -> str | None:
+        raw = dict(raw_profile or {})
+        for key in ("avatar_url", "avatar", "photo", "head_img"):
+            text = str(raw.get(key) or "").strip()
+            if text:
+                return text
+        return None
+
+    def _pick_phone(self, raw_profile: dict | None) -> str | None:
+        raw = dict(raw_profile or {})
+        for key in ("mobile", "phone", "phone_number"):
+            text = str(raw.get(key) or "").strip()
+            if text:
+                return text
+        return None
+
+    def _pick_city(self, candidate: Candidate, job: Job) -> str | None:
+        raw = dict(candidate.raw_profile or {})
+        city = str(raw.get("city") or "").strip()
+        return city or job.city
+
+    def _pick_role(self, raw_profile: dict | None) -> str | None:
+        raw = dict(raw_profile or {})
+        for key in ("role", "title", "position", "current_role"):
+            text = str(raw.get(key) or "").strip()
+            if text:
+                return text
+        return None
+
+    def _grade_text(self, score: float) -> str:
+        if score >= 85:
+            return "优秀"
+        if score >= 75:
+            return "良好"
+        if score >= 65:
+            return "中等"
+        return "待提升"
+
+    def _delivery_status_text(self, status: str | None) -> str:
+        val = str(status or "").strip().lower()
+        mapping = {
+            "pending": "待发送",
+            "sending": "发送中",
+            "sent": "已发送",
+            "delivered": "已送达",
+            "opened": "已打开",
+            "clicked": "已完成",
+            "failed": "失败",
+        }
+        return mapping.get(val, status or "--")
+
+    def _labelize(self, key: str) -> str:
+        return key.replace("_", " ").strip().title()
+
+    def _dt(self, value: datetime | None) -> str | None:
+        if value is None:
+            return None
+        return value.isoformat()
+
+    def _to_float_or_none(self, value) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _to_sort_key(self, value: str | None) -> float:
+        if not value:
+            return 0
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return 0
 
     def _build_efficiency_metrics(self, *, total_candidates: int) -> list[EfficiencyMetric]:
         sent_count = self._count_invitation_deliveries(self._DELIVERY_SENT_STATUSES)
@@ -223,6 +784,7 @@ class AnalyticsService:
         return HiringCenterEvaluationItem(
             candidate_id=candidate.id,
             candidate_name=candidate.name,
+            avatar_url=self._pick_avatar_url(candidate.raw_profile),
             candidate_stage=candidate.current_stage,
             candidate_expected_salary=candidate.expected_salary,
             candidate_score_explanation=candidate.score_explanation,
@@ -230,6 +792,8 @@ class AnalyticsService:
             job_title=job.title,
             job_salary_range=job.salary_range,
             evaluation_status=evaluation.status,
+            resume_score=float(evaluation.match_score or 0),
+            interview_score=float(evaluation.competitiveness_score or 0),
             final_score=float(evaluation.final_score or 0),
             recommendation=evaluation.recommendation,
             summary=evaluation.summary,

@@ -569,6 +569,30 @@ class EnterpriseAssessmentService:
             coverage_rate=coverage_rate,
             interview_confidence=interview_confidence,
         )
+        candidate_entity = self._session.get(Candidate, payload.candidate_id)
+        job_entity = self._session.get(Job, payload.job_id)
+        compensation_fit = self._evaluate_compensation_fit(
+            candidate=candidate_entity,
+            job=job_entity,
+            resume_evaluation=resume_evaluation,
+            interview_assessment=interview_assessment,
+            composite_score=composite_score,
+        )
+        compensation_decision = str(compensation_fit.get("decision") or "").strip().lower()
+        if compensation_decision == "not_match":
+            if recommendation == "advance":
+                recommendation = "manual_review"
+                must_review = True
+                hard_reject = False
+            if "salary_not_match" not in decision_reasons:
+                decision_reasons.append("salary_not_match")
+        elif compensation_decision == "conditional_match":
+            if recommendation == "advance":
+                recommendation = "manual_review"
+                must_review = True
+                hard_reject = False
+            if "salary_conditional_match" not in decision_reasons:
+                decision_reasons.append("salary_conditional_match")
 
         policy = self._resolve_policy(policy_code="candidate_progression", policy_version=None)
         versions = list(
@@ -602,6 +626,7 @@ class EnterpriseAssessmentService:
                 "raw_score": round(raw_score, 2),
                 "bonus": round(bonus, 2),
                 "weights": {"resume": 0.40, "interview": 0.45, "market": 0.15},
+                "compensation_fit_score": round(_to_float(compensation_fit.get("score"), 60.0), 2),
             },
             risk_flags_json=risk_tags,
             reason_codes_json=decision_reasons,
@@ -611,6 +636,7 @@ class EnterpriseAssessmentService:
                 "market_confidence": round(market_confidence, 4),
                 "resume_confidence": round(resume_confidence, 4),
                 "interview_confidence": round(interview_confidence, 4),
+                "compensation_fit": compensation_fit,
             },
             scored_at=_now(),
         )
@@ -650,6 +676,144 @@ class EnterpriseAssessmentService:
         self._session.commit()
         self._session.refresh(assessment)
         return assessment
+
+    @staticmethod
+    def _normalize_degree_rank(value: str | None) -> int:
+        text = str(value or "").strip().lower()
+        if not text:
+            return 0
+        if any(token in text for token in ("博士", "phd", "doctor")):
+            return 5
+        if any(token in text for token in ("硕士", "master", "研究生")):
+            return 4
+        if any(token in text for token in ("本科", "bachelor", "学士")):
+            return 3
+        if any(token in text for token in ("大专", "college", "专科")):
+            return 2
+        if any(token in text for token in ("高中", "high school", "中专")):
+            return 1
+        return 0
+
+    @staticmethod
+    def _parse_salary_range_monthly_k(raw_value: str | None) -> tuple[float | None, float | None]:
+        text = str(raw_value or "").strip().lower()
+        if not text:
+            return None, None
+        if any(token in text for token in ("面议", "negotiable", "open")):
+            return None, None
+
+        num_matches = re.findall(r"\d+(?:\.\d+)?", text)
+        if not num_matches:
+            return None, None
+        values = [float(item) for item in num_matches]
+        low = min(values)
+        high = max(values)
+
+        # Convert annual "万" offers to monthly K.
+        if ("万" in text or "w" in text) and any(token in text for token in ("年", "/y", "year", "annual")):
+            low = low * 10.0 / 12.0
+            high = high * 10.0 / 12.0
+            return low, high
+
+        # Plain 万/w defaults to monthly K in common CN JD format (e.g. 1.5-2.5万/月).
+        if "万" in text or "w" in text:
+            low = low * 10.0
+            high = high * 10.0
+            return low, high
+
+        # K-based monthly salary.
+        if "k" in text:
+            return low, high
+
+        # Heuristic fallback for pure numeric ranges.
+        if high >= 150.0:
+            # likely annual K -> monthly K
+            return low / 12.0, high / 12.0
+        return low, high
+
+    def _evaluate_compensation_fit(
+        self,
+        *,
+        candidate: Candidate | None,
+        job: Job | None,
+        resume_evaluation: CandidateJobEvaluation,
+        interview_assessment: AIInterviewAssessment,
+        composite_score: float,
+    ) -> dict[str, Any]:
+        candidate_expected = str((candidate.expected_salary if candidate is not None else "") or "").strip()
+        job_salary = str((job.salary_range if job is not None else "") or "").strip()
+        cand_low, cand_high = self._parse_salary_range_monthly_k(candidate_expected)
+        job_low, job_high = self._parse_salary_range_monthly_k(job_salary)
+
+        education_score = _to_float(
+            (resume_evaluation.dimension_scores or {}).get("education_match"),
+            default=60.0,
+        )
+        interview_score = _to_float(interview_assessment.total_score, default=0.0)
+        resume_score = _to_float(resume_evaluation.final_score, default=0.0)
+        capability_score = _clip(0.55 * interview_score + 0.35 * resume_score + 0.10 * education_score, 0.0, 100.0)
+
+        reasons: list[str] = []
+        score = 60.0
+        if job_low is not None and job_high is not None and cand_low is not None and cand_high is not None:
+            overlap_low = max(job_low, cand_low)
+            overlap_high = min(job_high, cand_high)
+            if overlap_low <= overlap_high:
+                score = 86.0
+                reasons.append("salary_band_overlap")
+            elif cand_low > job_high:
+                gap = cand_low - job_high
+                score = _clip(76.0 - gap * 6.0, 20.0, 76.0)
+                reasons.append("candidate_expected_above_job_band")
+            elif cand_high < job_low:
+                score = 74.0
+                reasons.append("candidate_expected_below_job_band")
+        elif job_low is not None and job_high is not None:
+            score = 64.0
+            reasons.append("candidate_expected_salary_missing")
+        else:
+            score = 60.0
+            reasons.append("job_salary_band_missing")
+
+        score = _clip(score * 0.65 + capability_score * 0.35, 0.0, 100.0)
+        if cand_low is not None and job_high is not None and cand_low > job_high and capability_score < 72.0:
+            score = _clip(score - 8.0, 0.0, 100.0)
+            reasons.append("salary_gap_not_supported_by_capability")
+        if composite_score >= 86.0 and score < 78.0:
+            score = _clip(score + 6.0, 0.0, 100.0)
+            reasons.append("high_composite_offsets_salary_gap")
+
+        candidate_degree = str((candidate.degree if candidate is not None else "") or "").strip()
+        job_min_degree = str((job.min_degree if job is not None else "") or "").strip()
+        candidate_degree_rank = self._normalize_degree_rank(candidate_degree)
+        job_degree_rank = self._normalize_degree_rank(job_min_degree)
+        degree_ok = job_degree_rank == 0 or candidate_degree_rank >= job_degree_rank
+        if not degree_ok:
+            score = _clip(score - 6.0, 0.0, 100.0)
+            reasons.append("degree_below_job_min_requirement")
+
+        if score >= 78.0:
+            decision = "match"
+        elif score >= 62.0:
+            decision = "conditional_match"
+        else:
+            decision = "not_match"
+
+        return {
+            "decision": decision,
+            "score": round(score, 2),
+            "reasons": reasons,
+            "candidate_expected_salary": candidate_expected or None,
+            "job_salary_range": job_salary or None,
+            "candidate_salary_band_k": [round(cand_low, 2), round(cand_high, 2)] if cand_low is not None and cand_high is not None else None,
+            "job_salary_band_k": [round(job_low, 2), round(job_high, 2)] if job_low is not None and job_high is not None else None,
+            "capability_score": round(capability_score, 2),
+            "education_check": {
+                "candidate_degree": candidate_degree or None,
+                "job_min_degree": job_min_degree or None,
+                "matched": bool(degree_ok),
+            },
+        }
 
     def decide_composite_assessment(
         self,

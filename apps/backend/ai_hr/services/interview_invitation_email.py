@@ -746,19 +746,26 @@ class InterviewInvitationEmailService:
         if rendered.html_body:
             message.add_alternative(rendered.html_body, subtype="html")
 
-        if self._settings.email_smtp_use_ssl:
-            smtp = smtplib.SMTP_SSL(self._settings.email_smtp_host, self._settings.email_smtp_port, timeout=20)
-        else:
-            smtp = smtplib.SMTP(self._settings.email_smtp_host, self._settings.email_smtp_port, timeout=20)
-        with smtp:
-            if self._settings.email_smtp_use_tls and not self._settings.email_smtp_use_ssl:
-                smtp.starttls()
-            if self._settings.email_smtp_username:
-                smtp.login(
-                    self._settings.email_smtp_username,
-                    self._settings.email_smtp_password or "",
-                )
-            smtp.send_message(message)
+        smtp_host = self._settings.email_smtp_host
+        smtp_port = self._settings.email_smtp_port
+        try:
+            if self._settings.email_smtp_use_ssl:
+                smtp = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
+            else:
+                smtp = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
+            with smtp:
+                if self._settings.email_smtp_use_tls and not self._settings.email_smtp_use_ssl:
+                    smtp.starttls()
+                if self._settings.email_smtp_username:
+                    smtp.login(
+                        self._settings.email_smtp_username,
+                        self._settings.email_smtp_password or "",
+                    )
+                smtp.send_message(message)
+        except (TimeoutError, OSError, smtplib.SMTPException) as exc:
+            raise InvalidStateError(
+                f"SMTP connection/send failed: host={smtp_host} port={smtp_port} error={exc}"
+            ) from exc
         return f"smtp:{rendered.to_email}:{int(hash(rendered.subject))}"
 
     def _resolve_candidate_email(self, raw_profile: dict[str, Any], direct_email: str | None) -> str | None:

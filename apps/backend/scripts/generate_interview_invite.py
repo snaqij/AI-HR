@@ -174,7 +174,7 @@ def main() -> int:
     
     # Hardcoded default token
     if not bearer_token:
-        bearer_token = "v1.eyJ0eXAiOiJhY2Nlc3MiLCJzaWQiOiI0Y2EwMzhiMS03Zjk4LTQwODgtYjc1ZC1hZmI4MWQ2NTFiODciLCJ1aWQiOiJjZGI0OTFhOS0wZjJlLTRkZTItOGI5My1kN2YzNjZhMTNiMDMiLCJleHAiOjE3NzcxMDUzNjQsIm4iOiJVRF9vY1FxYXZnZEJNb0QwRExSdFRRIn0.-BHRddpvr--4qX39gSjcuLu39EynzzpE9W1TGORcih8"
+        bearer_token = "v1.eyJ0eXAiOiJhY2Nlc3MiLCJzaWQiOiI0Y2EwMzhiMS03Zjk4LTQwODgtYjc1ZC1hZmI4MWQ2NTFiODciLCJ1aWQiOiJjZGI0OTFhOS0wZjJlLTRkZTItOGI5My1kN2YzNjZhMTNiMDMiLCJleHAiOjE3NzcyNTA1MjQsIm4iOiJQSWVVV2xNUEFrQllrNXIxamlSZTdRIn0.caNL96bkDkDf3lkJKXvGCYz1oMa1o4J_G3yMq72-buY"
 
     # Ensure token has Bearer prefix
     if not bearer_token.startswith("Bearer "):

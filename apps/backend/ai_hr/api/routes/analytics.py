@@ -3,7 +3,11 @@ from sqlalchemy.orm import Session
 from ...core.auth_dependencies import require_workspace_context
 from ...core.responses import Envelope
 from ...db.session import get_db_session
-from ...schemas.analytics import DashboardAnalyticsResult, HiringCenterOverviewResult
+from ...schemas.analytics import (
+    DashboardAnalyticsResult,
+    HiringCenterOverviewResult,
+    HiringDecisionDetailResult,
+)
 from ...services.analytics import get_analytics_service
 
 router = APIRouter(prefix="/analytics", tags=["analytics"], dependencies=[Depends(require_workspace_context)])
@@ -28,4 +32,16 @@ def get_hiring_center_overview(
     """Get hiring center aggregated data in one request."""
     service = get_analytics_service(session)
     result = service.get_hiring_center_overview(top_n=top_n, queue_limit=queue_limit, max_scan=max_scan)
+    return Envelope.success(result)
+
+
+@router.get("/hiring-decision-detail", response_model=Envelope[HiringDecisionDetailResult])
+def get_hiring_decision_detail(
+    job_id: str,
+    candidate_id: str,
+    session: Session = Depends(get_db_session),
+) -> Envelope[HiringDecisionDetailResult]:
+    """Get one hiring decision detail payload with all sections in a single DB-backed query pipeline."""
+    service = get_analytics_service(session)
+    result = service.get_hiring_decision_detail(job_id=job_id, candidate_id=candidate_id)
     return Envelope.success(result)
