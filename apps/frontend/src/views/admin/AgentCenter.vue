@@ -201,7 +201,10 @@ const lastSyncedAt = computed(() => {
 const agentSummaries = computed(() => {
   return agentDefinitions.map((definition) => {
     const list = agentEvents.value.filter((item) => item.agentType === definition.type);
-    const total = list.length;
+    const total =
+      definition.type === "interview"
+        ? Number(analytics.value?.interview_task_count_today ?? 0)
+        : list.length;
     const running = list.filter((item) => item.status === "running").length;
     const waiting = list.filter((item) => item.status === "waiting_human").length;
     const failed = list.filter((item) => item.status === "failed").length;

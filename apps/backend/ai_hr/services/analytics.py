@@ -81,6 +81,7 @@ class AnalyticsService:
             funnel=funnel,
             efficiency=self._build_efficiency_metrics(total_candidates=total),
             total_synced=total,
+            interview_task_count_today=self._count_today_interview_tasks(),
             daily_deltas=self._build_dashboard_daily_deltas(),
         )
 
@@ -778,6 +779,17 @@ class AnalyticsService:
         total = int(self._session.execute(total_stmt).scalar() or 0)
         completed = int(self._session.execute(completed_stmt).scalar() or 0)
         return total, completed
+
+    def _count_today_interview_tasks(self) -> int:
+        today_start, tomorrow_start, _ = self._day_boundaries()
+        stmt = select(func.count(AIInterviewSession.id)).where(
+            AIInterviewSession.created_at >= today_start,
+            AIInterviewSession.created_at < tomorrow_start,
+        )
+        workspace_id = get_workspace_id(self._session)
+        if workspace_id:
+            stmt = stmt.where(AIInterviewSession.workspace_id == workspace_id)
+        return int(self._session.execute(stmt).scalar() or 0)
 
     def _list_latest_evaluation_rows(self, *, max_scan: int) -> list[tuple[CandidateJobEvaluation, Candidate, Job]]:
         capped_limit = max(100, min(int(max_scan), 10000))

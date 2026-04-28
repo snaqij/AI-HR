@@ -28,6 +28,7 @@ class DashboardAnalyticsResult(BaseModel):
     funnel: list[FunnelStep]
     efficiency: list[EfficiencyMetric]
     total_synced: int
+    interview_task_count_today: int = 0
     daily_deltas: DashboardDailyDelta = Field(default_factory=DashboardDailyDelta)
 
 

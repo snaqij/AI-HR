@@ -17,6 +17,7 @@ from .routes import (
     interviews,
     jobs,
     credentials,
+    statistics,
     workspaces,
 )
 
@@ -36,3 +37,4 @@ api_router.include_router(analytics.router)
 api_router.include_router(interviews.router)
 api_router.include_router(governance.router)
 api_router.include_router(credentials.router)
+api_router.include_router(statistics.router)

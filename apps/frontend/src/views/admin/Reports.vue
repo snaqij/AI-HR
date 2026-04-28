@@ -14,7 +14,10 @@
           <h2 class="admin-section-title">招聘趋势概览</h2>
           <span class="admin-badge admin-badge-blue">近 30 天</span>
         </div>
-        <div class="mt-6 grid grid-cols-6 gap-3">
+        <div v-if="loading" class="mt-6 flex items-center justify-center h-[200px]">
+          <p class="text-on-surface-variant">加载中...</p>
+        </div>
+        <div v-else class="mt-6 grid grid-cols-6 gap-3">
           <div
             v-for="item in trendBars"
             :key="item.label"
@@ -36,7 +39,10 @@
           <h2 class="admin-section-title">渠道表现</h2>
           <span class="text-[12px] text-on-surface-variant">本周数据</span>
         </div>
-        <div class="mt-5 space-y-4">
+        <div v-if="loading" class="mt-5 flex items-center justify-center h-[200px]">
+          <p class="text-on-surface-variant">加载中...</p>
+        </div>
+        <div v-else class="mt-5 space-y-4">
           <div v-for="item in channelCards" :key="item.label" class="rounded-[16px] bg-[#f8fbff] px-4 py-4">
             <div class="flex items-center justify-between">
               <p class="text-[14px] font-semibold text-on-surface">{{ item.label }}</p>
@@ -51,25 +57,171 @@
 </template>
 
 <script setup lang="ts">
-const statCards = [
-  { label: "职位总数", value: "32", delta: "较上周 +4", deltaClass: "text-[#44bc7d]" },
-  { label: "候选人总数", value: "1,268", delta: "较上周 +86", deltaClass: "text-[#44bc7d]" },
-  { label: "面试完成", value: "128", delta: "较上周 +11", deltaClass: "text-[#44bc7d]" },
-  { label: "录用转化率", value: "18.3%", delta: "较上周 +2.4%", deltaClass: "text-primary" },
-];
+import { ref, onMounted } from 'vue'
+import { fetchDashboardStatistics, fetchRecruitmentTrends, fetchChannelPerformance } from '../../api'
 
-const trendBars = [
-  { label: "周一", value: "122", height: 92 },
-  { label: "周二", value: "148", height: 124 },
-  { label: "周三", value: "130", height: 110 },
-  { label: "周四", value: "168", height: 146 },
-  { label: "周五", value: "142", height: 120 },
-  { label: "周六", value: "95", height: 74 },
-];
+interface StatCard {
+  label: string
+  value: string
+  delta: string
+  deltaClass: string
+}
 
-const channelCards = [
-  { label: "BOSS 直聘", rate: "转化率 32%", rateClass: "text-primary", desc: "投递量持续增长，技术岗位的候选人质量稳定。" },
-  { label: "猎聘", rate: "转化率 24%", rateClass: "text-[#44bc7d]", desc: "高年限岗位表现较优，建议继续保留预算。" },
-  { label: "内推渠道", rate: "转化率 41%", rateClass: "text-[#19a9a8]", desc: "质量最高，适合重点岗位优先曝光与跟进。" },
-];
+interface TrendBar {
+  label: string
+  value: string
+  height: number
+}
+
+interface ChannelCard {
+  label: string
+  rate: string
+  rateClass: string
+  desc: string
+}
+
+const loading = ref(true)
+const statCards = ref<StatCard[]>([])
+const trendBars = ref<TrendBar[]>([])
+const channelCards = ref<ChannelCard[]>([])
+
+// 获取仪表板统计数据
+async function fetchDashboardStats() {
+  try {
+    const data = await fetchDashboardStatistics()
+    
+    // 更新统计卡片
+    statCards.value = [
+      {
+        label: '职位总数',
+        value: String(data.job_count.total),
+        delta: data.job_count.delta_text,
+        deltaClass: data.job_count.delta >= 0 ? 'text-[#44bc7d]' : 'text-error'
+      },
+      {
+        label: '候选人总数',
+        value: String(data.candidate_count.total).replace(/\B(?=(\d{3})+(?!\d))/g, ','),
+        delta: data.candidate_count.delta_text,
+        deltaClass: data.candidate_count.delta >= 0 ? 'text-[#44bc7d]' : 'text-error'
+      },
+      {
+        label: '面试完成',
+        value: String(data.interview_completed.total),
+        delta: data.interview_completed.delta_text,
+        deltaClass: data.interview_completed.delta >= 0 ? 'text-[#44bc7d]' : 'text-error'
+      },
+      {
+        label: '录用转化率',
+        value: `${data.hire_rate.rate}%`,
+        delta: data.hire_rate.delta_text,
+        deltaClass: data.hire_rate.delta >= 0 ? 'text-primary' : 'text-error'
+      }
+    ]
+  } catch (error) {
+    console.error('获取仪表板统计失败:', error)
+    // 使用默认值
+    statCards.value = [
+      { label: '职位总数', value: '0', delta: '较上周 +0', deltaClass: 'text-[#44bc7d]' },
+      { label: '候选人总数', value: '0', delta: '较上周 +0', deltaClass: 'text-[#44bc7d]' },
+      { label: '面试完成', value: '0', delta: '较上周 +0', deltaClass: 'text-[#44bc7d]' },
+      { label: '录用转化率', value: '0%', delta: '较上周 +0%', deltaClass: 'text-primary' }
+    ]
+  }
+}
+
+// 获取招聘趋势数据
+async function fetchTrends() {
+  try {
+    const data = await fetchRecruitmentTrends(6)
+    const trends = data.trends
+    
+    // 计算最大值用于归一化高度
+    const maxValue = Math.max(...trends.map(t => t.value), 1)
+    
+    // 更新趋势柱状图
+    trendBars.value = trends.map(trend => ({
+      label: trend.label,
+      value: String(trend.value),
+      height: Math.max((trend.value / maxValue) * 146, 20) // 最小高度 20px，最大 146px
+    }))
+  } catch (error) {
+    console.error('获取趋势数据失败:', error)
+    // 使用默认值
+    trendBars.value = [
+      { label: '周一', value: '0', height: 20 },
+      { label: '周二', value: '0', height: 20 },
+      { label: '周三', value: '0', height: 20 },
+      { label: '周四', value: '0', height: 20 },
+      { label: '周五', value: '0', height: 20 },
+      { label: '周六', value: '0', height: 20 }
+    ]
+  }
+}
+
+// 获取渠道表现数据
+async function fetchChannels() {
+  try {
+    const data = await fetchChannelPerformance()
+    const channels = data.channels
+    
+    // 更新渠道卡片
+    channelCards.value = channels.map(channel => {
+      // 根据转化率设置颜色
+      let rateClass = 'text-primary'
+      if (channel.rate >= 35) {
+        rateClass = 'text-[#19a9a8]'
+      } else if (channel.rate >= 25) {
+        rateClass = 'text-[#44bc7d]'
+      }
+      
+      return {
+        label: channel.label,
+        rate: channel.rate_text,
+        rateClass,
+        desc: channel.desc
+      }
+    })
+    
+    // 如果没有渠道数据，使用默认值
+    if (channelCards.value.length === 0) {
+      channelCards.value = [
+        {
+          label: 'BOSS 直聘',
+          rate: '转化率 0%',
+          rateClass: 'text-primary',
+          desc: '暂无数据'
+        }
+      ]
+    }
+  } catch (error) {
+    console.error('获取渠道数据失败:', error)
+    // 使用默认值
+    channelCards.value = [
+      {
+        label: 'BOSS 直聘',
+        rate: '转化率 0%',
+        rateClass: 'text-primary',
+        desc: '暂无数据'
+      }
+    ]
+  }
+}
+
+// 加载所有数据
+async function loadData() {
+  loading.value = true
+  try {
+    await Promise.all([
+      fetchDashboardStats(),
+      fetchTrends(),
+      fetchChannels()
+    ])
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(() => {
+  loadData()
+})
 </script>

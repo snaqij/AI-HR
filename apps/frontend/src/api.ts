@@ -398,6 +398,7 @@ export interface DashboardAnalytics {
     progress: number
   }>;
   total_synced: number;
+  interview_task_count_today?: number;
   daily_deltas: {
     open_jobs: number;
     total_candidates: number;
@@ -1397,4 +1398,65 @@ export async function bootstrapDemoSession(): Promise<InterviewSession> {
     // Session might already be started by invitation/runtime path.
   }
   return getInterviewSession(session.id);
+}
+
+// Statistics
+export interface DashboardStatistics {
+  job_count: {
+    total: number;
+    delta: number;
+    delta_text: string;
+  };
+  candidate_count: {
+    total: number;
+    delta: number;
+    delta_text: string;
+  };
+  interview_completed: {
+    total: number;
+    delta: number;
+    delta_text: string;
+  };
+  hire_rate: {
+    rate: number;
+    delta: number;
+    delta_text: string;
+  };
+}
+
+export interface TrendItem {
+  date: string;
+  label: string;
+  value: number;
+}
+
+export interface TrendsResult {
+  trends: TrendItem[];
+}
+
+export interface ChannelItem {
+  label: string;
+  rate: number;
+  rate_text: string;
+  desc: string;
+  candidates: number;
+  completed: number;
+}
+
+export interface ChannelsResult {
+  channels: ChannelItem[];
+}
+
+export async function fetchDashboardStatistics(): Promise<DashboardStatistics> {
+  return request<DashboardStatistics>("/statistics/dashboard");
+}
+
+export async function fetchRecruitmentTrends(days = 7): Promise<TrendsResult> {
+  const params = new URLSearchParams();
+  params.set("days", String(days));
+  return request<TrendsResult>(`/statistics/trends?${params.toString()}`);
+}
+
+export async function fetchChannelPerformance(): Promise<ChannelsResult> {
+  return request<ChannelsResult>("/statistics/channels");
 }
