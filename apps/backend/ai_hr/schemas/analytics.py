@@ -150,3 +150,4 @@ class HiringDecisionDetailResult(BaseModel):
     interviewer_reviews: list[HiringDecisionInterviewerReviewItem] = Field(default_factory=list)
     qa_items: list[HiringDecisionQAItem] = Field(default_factory=list)
     operation_logs: list[HiringDecisionOperationLogItem] = Field(default_factory=list)
+    session_id: str | None = None  # 面试session ID，用于获取面试评估

@@ -334,6 +334,7 @@ class AnalyticsService:
             interviewer_reviews=interviewer_reviews,
             qa_items=qa_items,
             operation_logs=operation_logs,
+            session_id=interview_session.id if interview_session else None,
         )
 
     def _get_latest_interview_assessment(

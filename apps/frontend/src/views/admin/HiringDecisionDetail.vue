@@ -5,9 +5,9 @@
         <span class="material-symbols-outlined">arrow_back</span>
         返回列表
       </button>
-      <button class="primary-btn">
-        <span class="material-symbols-outlined">ios_share</span>
-        导出评估报告
+      <button class="primary-btn" @click="exportReport" :disabled="isExporting">
+        <span class="material-symbols-outlined">{{ isExporting ? 'hourglass_empty' : 'ios_share' }}</span>
+        {{ isExporting ? '生成中...' : '导出评估报告' }}
       </button>
     </section>
 
@@ -294,6 +294,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 import {
   fetchHiringDecisionDetail,
+  fetchLatestInterviewAssessment,
   type HiringDecisionAssessmentPanel,
   type HiringDecisionDetailResult,
 } from "../../api";
@@ -306,6 +307,7 @@ const isLoading = ref(false);
 const loadError = ref("");
 const detail = ref<HiringDecisionDetailResult | null>(null);
 const activeTab = ref("detail");
+const isExporting = ref(false);
 
 const tabs = [
   { key: "detail", label: "评估详情" },
@@ -511,12 +513,83 @@ async function loadData() {
   loadError.value = "";
   try {
     detail.value = await fetchHiringDecisionDetail(jobId.value, candidateId.value);
+    
+    // 如果面试评估为空但有session_id，尝试获取最新的面试评估
+    if (detail.value.session_id && 
+        detail.value.interview_assessment.score === 0 && 
+        !detail.value.interview_assessment.summary) {
+      try {
+        const assessment = await fetchLatestInterviewAssessment(detail.value.session_id);
+        // 更新面试评估数据
+        detail.value.interview_assessment = {
+          score: assessment.interview_score,
+          summary: null, // API没有返回summary，保持为null
+          dimensions: Object.entries(assessment.dimension_scores).map(([key, score]) => ({
+            key,
+            label: key,
+            score: score,
+            max_score: 100,
+          })),
+          strengths: [],
+          weaknesses: [],
+          risk_tags: assessment.risk_tags,
+        };
+        // 更新overview中的面试分数
+        detail.value.overview.interview_score = assessment.interview_score;
+      } catch (assessmentError) {
+        console.warn("无法获取面试评估数据:", assessmentError);
+        // 不影响主流程，继续显示其他数据
+      }
+    }
   } catch (error) {
     console.error(error);
     detail.value = null;
     loadError.value = "加载录用决策详情失败，请稍后重试。";
   } finally {
     isLoading.value = false;
+  }
+}
+
+async function exportReport() {
+  if (!detail.value) return;
+  
+  isExporting.value = true;
+  try {
+    // 方案1：使用浏览器打印功能（简单快速）
+    // 隐藏不需要打印的元素
+    const toolbar = document.querySelector('.decision-detail-toolbar');
+    const originalDisplay = toolbar ? (toolbar as HTMLElement).style.display : '';
+    if (toolbar) {
+      (toolbar as HTMLElement).style.display = 'none';
+    }
+    
+    // 设置打印标题
+    const originalTitle = document.title;
+    document.title = `${profile.value.candidate_name}_${profile.value.job_title}_评估报告`;
+    
+    // 触发打印
+    window.print();
+    
+    // 恢复原始状态
+    document.title = originalTitle;
+    if (toolbar) {
+      (toolbar as HTMLElement).style.display = originalDisplay;
+    }
+    
+    // TODO: 方案2（后续实现）：调用后端API生成专业PDF
+    // const response = await fetch(`/api/v1/analytics/hiring-decision-report?job_id=${jobId.value}&candidate_id=${candidateId.value}`);
+    // const blob = await response.blob();
+    // const url = window.URL.createObjectURL(blob);
+    // const a = document.createElement('a');
+    // a.href = url;
+    // a.download = `${profile.value.candidate_name}_${profile.value.job_title}_评估报告.pdf`;
+    // a.click();
+    // window.URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('导出报告失败:', error);
+    alert('导出报告失败，请稍后重试');
+  } finally {
+    isExporting.value = false;
   }
 }
 
@@ -666,6 +739,42 @@ onMounted(loadData);
 .log-item em { display: block; margin-top: 4px; color: #7e8ea4; font-style: normal; font-size: 12px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@media print {
+  .decision-detail-toolbar,
+  .tabs-row,
+  .ghost-btn,
+  .primary-btn {
+    display: none !important;
+  }
+  
+  .decision-detail-page {
+    background: white;
+  }
+  
+  .card,
+  .candidate-card,
+  .overview-card {
+    border: 1px solid #ddd;
+    page-break-inside: avoid;
+  }
+  
+  .summary-grid,
+  .content-grid,
+  .detail-grid {
+    display: block;
+  }
+  
+  .assessment-row,
+  .bottom-dual {
+    display: block;
+  }
+  
+  .card {
+    margin-bottom: 20px;
+  }
+}
+
 @media (max-width: 1600px) {
   .summary-grid,.content-grid,.detail-grid { grid-template-columns: 1fr; }
   .candidate-card { margin-top: 0; }

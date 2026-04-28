@@ -38,8 +38,8 @@ onMounted(async () => {
   <div class="min-h-screen bg-slate-50 flex items-center justify-center px-6">
     <div class="w-full max-w-lg bg-white rounded-xl border border-slate-200 shadow-sm p-8 text-center">
       <div v-if="loading" class="space-y-3">
-        <h1 class="text-lg font-semibold text-slate-900">Preparing your interview room</h1>
-        <p class="text-sm text-slate-600">We are activating the invitation link. Please wait...</p>
+        <h1 class="text-lg font-semibold text-slate-900">正在准备面试房间</h1>
+        <p class="text-sm text-slate-600">我们正在激活面试邀请链接，请稍候...</p>
       </div>
       <div v-else class="space-y-3">
         <h1 class="text-lg font-semibold text-red-600">Unable to enter interview</h1>

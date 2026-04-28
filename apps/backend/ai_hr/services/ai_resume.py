@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import random
 import re
 import time
 import uuid
@@ -446,10 +447,12 @@ class AIResumeService:
                 )
 
                 # Throttle outbound resume requests to reduce connector pressure.
+                # Keep a long randomized interval for platform risk-control stability.
                 if last_request_at_monotonic is not None:
                     elapsed = time.monotonic() - last_request_at_monotonic
-                    if elapsed < 1.0:
-                        time.sleep(1.0 - elapsed)
+                    target_interval_sec = random.uniform(30.0, 70.0)
+                    if elapsed < target_interval_sec:
+                        time.sleep(target_interval_sec - elapsed)
                 
                 res = self._request_resume_access_for_candidate(
                     candidate.id,

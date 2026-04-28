@@ -333,6 +333,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         self.active_phase = "opening"
         self.active_question_seq: int | None = None
         self.active_question_id = ""
+        self._asr_bridge_seq = 0
         self.session_context = SessionContext(session_id="")
         self.prompt_builder = InterviewPromptBuilder()
         self._bg_tasks: set[asyncio.Task] = set()
@@ -446,6 +447,33 @@ class InterviewOrchestratorExtension(AsyncExtension):
         ]
         return any(phrase in transcript for phrase in move_on_phrases)
 
+    def _is_no_more_questions(self, transcript: str) -> bool:
+        text = str(transcript or "").strip()
+        if not text:
+            return False
+        markers = (
+            "没问题",
+            "没有了",
+            "没了",
+            "不用了",
+            "不问了",
+            "先这样",
+            "结束吧",
+            "谢谢",
+            "再见",
+            "大概了解",
+        )
+        return any(marker in text for marker in markers)
+
+    def _looks_like_question(self, transcript: str) -> bool:
+        text = str(transcript or "").strip()
+        if not text:
+            return False
+        if "？" in text or "?" in text:
+            return True
+        question_markers = ("吗", "么", "呢", "多少", "什么", "怎么", "如何", "哪", "是否")
+        return any(marker in text for marker in question_markers)
+
     def _is_company_question(self, transcript: str) -> bool:
         text = str(transcript or "").strip()
         if not text or len(text) > 30: # 长度保护：过长的输入通常是候选人的回答，而非询问
@@ -487,6 +515,64 @@ class InterviewOrchestratorExtension(AsyncExtension):
         reply = "公司和岗位相关信息我会在面试最后统一介绍，我们先继续当前面试流程。"
         await self._send_to_tts(ten_env, reply, is_final=False)
         await self._send_to_tts(ten_env, "", is_final=True)
+
+    async def _emit_late_stage_answer(
+        self,
+        ten_env: AsyncTenEnv,
+        *,
+        transcript: str,
+        stage: str,
+        asr_final_ts: float,
+        asr_sentence_start_ts: float,
+        asr_physical_stop_ts: float,
+        orch_receive_ts: float,
+    ) -> None:
+        build_result = self.prompt_builder.build(
+            PromptBuildInput(
+                stage=stage,
+                output_mode="late_stage_answer",
+                candidate_name=self.candidate_name,
+                transcript=transcript,
+                current_question="",
+                target_question_id="",
+                next_question="",
+                success_signals="",
+                is_last_followup=True,
+                followup_budget_remaining=0,
+                company_info=self.company_info,
+                stage_goal=str(self.state.get("stage_goal") or ""),
+                missing_evidence=self.state.get("missing_evidence"),
+                difficulty_level="normal",
+                transition_reason="late_stage_short_answer",
+                question_type="candidate_question",
+                focus_experience=str(self.state.get("focus_experience") or ""),
+                focus_module=str(self.state.get("focus_module") or ""),
+                active_topic_name=str(self.state.get("active_topic_name") or ""),
+                active_topic_rounds=int(self.state.get("active_topic_rounds") or 0),
+                must_transition=True,
+                candidate_requested_move_on=False,
+                flow_reason="late_stage_answer_once",
+                system_prompt_prefix=str(self.system_prompt),
+                session_context=self.session_context,
+            )
+        )
+
+        llm_start_ts = time.perf_counter()
+        await self._llm_streaming_worker(
+            ten_env,
+            context=InvokeContext(
+                task_key=self.task_key,
+                trace_id=self.trace_id,
+                prompt=build_result.prompt,
+                system_prompt=build_result.system_prompt,
+            ),
+            asr_final_ts=asr_final_ts,
+            asr_sentence_start_ts=asr_sentence_start_ts,
+            asr_physical_stop_ts=asr_physical_stop_ts,
+            orch_receive_ts=orch_receive_ts,
+            llm_start_ts=llm_start_ts,
+            transcript=transcript,
+        )
 
     async def _emit_scripted_question(
         self,
@@ -1246,12 +1332,46 @@ class InterviewOrchestratorExtension(AsyncExtension):
                     reply_msg = self._build_company_intro()
                     await self._send_to_tts(ten_env, reply_msg, is_final=False)
                     await self._send_to_tts(ten_env, "", is_final=True)
+                    # Company intro should only happen once; then immediately move to closing stage.
+                    self._set_stage(InterviewStage.CLOSING, reason="company_intro_completed")
                     return
-                if any(p in transcript for p in ["没问题", "没有了", "大概了解", "谢谢", "再见"]):
-                    self._set_stage(InterviewStage.CLOSING, reason="candidate_has_no_more_questions")
-                    stage = self.state.get("interview_stage", InterviewStage.CLOSING)
+                self._set_stage(InterviewStage.CLOSING, reason="company_qa_auto_close")
+                stage = self.state.get("interview_stage", InterviewStage.CLOSING)
 
             if stage == InterviewStage.CLOSING:
+                context_flags = self.state.get("context_flags") or {}
+                followup_count = int(context_flags.get("closing_followup_count") or 0)
+                if self._is_no_more_questions(transcript):
+                    if not self.state["context_flags"]["closing_started"]:
+                        self.state["context_flags"]["closing_started"] = True
+                        closing_msg = "好的，今天就到这里。后续流程和细节会由 HR 和你沟通。"
+                        await self._send_to_tts(ten_env, closing_msg, is_final=False)
+                        await self._send_to_tts(ten_env, "", is_final=True)
+                    return
+
+                if self._looks_like_question(transcript):
+                    if followup_count >= 1:
+                        if not self.state["context_flags"]["closing_started"]:
+                            self.state["context_flags"]["closing_started"] = True
+                        closing_msg = "我这边先帮你记录，后续由 HR 和你详细沟通。今天的面试先到这里。"
+                        await self._send_to_tts(ten_env, closing_msg, is_final=False)
+                        await self._send_to_tts(ten_env, "", is_final=True)
+                        return
+                    # Answer once in closing stage, then end without looping back to company intro.
+                    await self._emit_late_stage_answer(
+                        ten_env,
+                        transcript=transcript,
+                        stage=InterviewStage.CLOSING,
+                        asr_final_ts=asr_final_ts,
+                        asr_sentence_start_ts=asr_sentence_start_ts,
+                        asr_physical_stop_ts=asr_physical_stop_ts,
+                        orch_receive_ts=orch_receive_ts,
+                    )
+                    self.state["context_flags"]["closing_followup_count"] = followup_count + 1
+                    if not self.state["context_flags"]["closing_started"]:
+                        self.state["context_flags"]["closing_started"] = True
+                    return
+
                 if not self.state["context_flags"]["closing_started"]:
                     self.state["context_flags"]["closing_started"] = True
                     closing_msg = "那今天先聊到这里，后续安排 HR 会再和你同步。回头见。"
@@ -1852,6 +1972,7 @@ class InterviewOrchestratorExtension(AsyncExtension):
         text = str(transcript or "").strip()
         if not text or self.event_bridge is None:
             return
+        self._asr_bridge_seq += 1
         question_ctx = self._get_active_question_context()
         stage = str((self.state or {}).get("interview_stage") or "")
         phase = self._resolve_phase_from_stage(stage)
@@ -1872,6 +1993,28 @@ class InterviewOrchestratorExtension(AsyncExtension):
             self.active_phase = "formal"
             self.active_question_seq = int(question_seq) if isinstance(question_seq, int) else None
             self.active_question_id = question_id
+        self.event_bridge.emit(
+            event_type="asr.turn",
+            critical=True,
+            payload={
+                "event_id": f"asr-turn-{self.session_id}-{self._asr_bridge_seq}",
+                "turn_id": f"asr-turn-{self.session_id}-{self._asr_bridge_seq}",
+                "seq": self._asr_bridge_seq,
+                "speaker": "candidate",
+                "transcript": text,
+                "text": text,
+                "is_final": True,
+                "trace_id": trace_id,
+                "stage": stage,
+                "phase": phase,
+                "question_id": question_id,
+                "question_seq": question_seq,
+                "topic_id": topic_id,
+                "parent_topic_id": parent_topic_id,
+                "is_followup": is_followup,
+                "topic_name": str(question_ctx.get("topic_name") or ""),
+            },
+        )
         self.event_bridge.emit(
             event_type=InterviewEventType.CANDIDATE_FINAL,
             critical=True,

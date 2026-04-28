@@ -98,6 +98,16 @@ def build_interview_stage_instruction(
             f"Stage goal: {goal}\n"
             f"Company info: {company_info or 'Introduce team/business/role naturally.'}\n"
             "请口语化介绍团队和岗位，不要照读原文；缺失信息直接说明待确认，不要编造。"
+            "如果候选人追问你不确定的细节（如薪资、福利、具体制度），明确建议其在后续 HR 环节确认。"
+            "回复必须简短（1-2句），禁止重复公司介绍，禁止再次发起“还有问题吗”的循环追问。"
+        )
+    if policy.code == InterviewStage.CLOSING:
+        return (
+            f"{base}\n"
+            f"Stage goal: {goal}\n"
+            "此阶段以收尾为目标：如果候选人提问且你能根据已知信息回答，就简短回答。"
+            "如果不确定或信息不足，明确建议候选人在后续 HR 环节确认，禁止编造。"
+            "回复必须简短（1-2句），不要重复公司介绍，不要重新发起完整反问流程。"
         )
 
     details = (

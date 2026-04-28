@@ -526,6 +526,7 @@ export interface HiringDecisionDetailResult {
   interviewer_reviews: HiringDecisionInterviewerReviewItem[];
   qa_items: HiringDecisionQAItem[];
   operation_logs: HiringDecisionOperationLogItem[];
+  session_id?: string | null;  // 面试session ID，用于获取面试评估
 }
 
 export interface CredentialStatus {
@@ -1459,4 +1460,33 @@ export async function fetchRecruitmentTrends(days = 7): Promise<TrendsResult> {
 
 export async function fetchChannelPerformance(): Promise<ChannelsResult> {
   return request<ChannelsResult>("/statistics/channels");
+}
+
+// Interview Assessment
+export interface InterviewAssessmentLatest {
+  assessment_id: string;
+  interview_score: number;
+  dimension_scores: Record<string, number>;
+  coverage_rate: number;
+  recommendation: string;
+  risk_tags: string[];
+  evidence_refs: Array<Record<string, any>>;
+}
+
+export async function fetchLatestInterviewAssessment(sessionId: string): Promise<InterviewAssessmentLatest> {
+  return request<InterviewAssessmentLatest>(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/assessments/latest`);
+}
+
+export async function computeInterviewAssessment(
+  sessionId: string,
+  payload: { run_mode?: string; policy_code?: string; force_recompute?: boolean } = {}
+): Promise<{ assessment_id: string; status: string; queue_id?: string; eta_ms: number }> {
+  return request(`/ai/interviews/sessions/${encodeURIComponent(sessionId)}/assessments/compute`, {
+    method: "POST",
+    body: JSON.stringify({
+      run_mode: payload.run_mode || "sync",
+      policy_code: payload.policy_code || "candidate_progression",
+      force_recompute: payload.force_recompute || false,
+    }),
+  });
 }

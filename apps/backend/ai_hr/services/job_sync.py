@@ -411,7 +411,9 @@ class JobSyncScheduler:
                         get_job_service(session).enrich_candidate_metadata(limit=20)
                         
                         # 2. Recruitment Automation (Business Logic)
-                        get_ai_resume_service(session).execute_due_auto_resume_requests()
+                        get_ai_resume_service(session).execute_due_auto_resume_requests(
+                            limit=settings.ai_resume_auto_request_batch_size
+                        )
                         get_ai_resume_service(session).execute_due_resume_access_retries(
                             limit=settings.resume_access_retry_batch_size
                         )

@@ -66,6 +66,9 @@ class AliyunNlsTokenManager:
 class AliyunNlsASRProvider(ASRProvider):
     """Production-grade ASR implementation backed by Aliyun NLS."""
     provider_name = "aliyun_nls"
+    _KEEPALIVE_INTERVAL_SEC = 10.0
+    _IDLE_RECONNECT_SEC = 28.0
+    _SILENT_PCM_16K_MONO_20MS = b"\x00" * 640
 
     def __init__(
         self,
@@ -193,6 +196,51 @@ class AliyunNlsASRProvider(ASRProvider):
                     latency_ms=latency_ms,
                     provider=f"{self.provider_name}_reconnect_backoff"
                 )
+
+        # Transport keepalive: when no user audio arrives for a while, send a short silent frame
+        # to avoid NLS gateway idle timeout. This does not alter business transcript semantics.
+        now = time.time()
+        idle_since_audio = now - getattr(ctx, "last_audio_sent_at", 0.0)
+        if idle_since_audio >= self._IDLE_RECONNECT_SEC:
+            logger.info(
+                "[NLS] session=%s idle_for=%.1fs exceeded reconnect threshold, rebuilding context",
+                session_id,
+                idle_since_audio,
+            )
+            self._close_context(stream_key)
+            ctx = self._ensure_context(stream_key)
+            if not ctx:
+                return ASRStreamResult(
+                    transcript="",
+                    confidence=confidence,
+                    latency_ms=latency_ms,
+                    provider=f"{self.provider_name}_idle_reconnect_backoff"
+                )
+
+        now = time.time()
+        idle_for_keepalive = now - getattr(ctx, "last_audio_sent_at", 0.0)
+        keepalive_gap = now - getattr(ctx, "last_keepalive_at", 0.0)
+        if idle_for_keepalive >= self._KEEPALIVE_INTERVAL_SEC and keepalive_gap >= self._KEEPALIVE_INTERVAL_SEC:
+            try:
+                ctx.callback.last_audio_sent_epoch = ctx.callback.epoch
+                ctx.recognizer.send_audio(self._SILENT_PCM_16K_MONO_20MS)
+                ctx.last_keepalive_at = now
+                ctx.last_audio_sent_at = now
+                with self._lock:
+                    self._stat_audio_frames += 1
+                    self._stat_audio_bytes += len(self._SILENT_PCM_16K_MONO_20MS)
+                logger.debug("[NLS] session=%s keepalive sent", session_id)
+            except Exception as keepalive_err:
+                logger.warning(f"[NLS] session={session_id} keepalive failed, reconnecting: {keepalive_err}")
+                self._close_context(stream_key)
+                ctx = self._ensure_context(stream_key)
+                if not ctx:
+                    return ASRStreamResult(
+                        transcript="",
+                        confidence=confidence,
+                        latency_ms=latency_ms,
+                        provider=f"{self.provider_name}_keepalive_reconnect_backoff"
+                    )
         
         try:
             # Always update current_seq regardless of audio_bytes presence, 
@@ -203,6 +251,9 @@ class AliyunNlsASRProvider(ASRProvider):
                 # Mark current epoch before sending to SDK
                 ctx.callback.last_audio_sent_epoch = ctx.callback.epoch
                 ctx.recognizer.send_audio(audio_bytes)
+                now = time.time()
+                ctx.last_audio_sent_at = now
+                ctx.last_keepalive_at = now
                 with self._lock:
                     self._stat_audio_frames += 1
                     self._stat_audio_bytes += len(audio_bytes)
@@ -538,12 +589,16 @@ class _AliyunNlsCallback:
         self.is_active = False
         msg_str = str(message).lower()
         self.is_rate_limited = "too_many_requests" in msg_str or "rate" in msg_str
-        self.is_timeout = "request timeout" in msg_str
+        self.is_timeout = (
+            "request timeout" in msg_str
+            or "idle_timeout" in msg_str
+            or "websocket session is idle for too long time" in msg_str
+        )
         
         if self.is_timeout:
             # Unblock final wait and avoid hanging on dead task.
             self.received_completed = True
-            logger.warning(f"[NLS] session={self.session_id} detected request timeout, signaling fast self-heal")
+            logger.warning(f"[NLS] session={self.session_id} detected timeout/idle-timeout, signaling fast self-heal")
             self.completed_event.set()
         
         self.error_event.set()  # Signal failure (lock-free)
@@ -630,7 +685,10 @@ class _AliyunNlsContext:
     def __init__(self, recognizer: nls.NlsSpeechTranscriber, callback: _AliyunNlsCallback):
         self.recognizer = recognizer
         self.callback = callback
-        self.last_active_at = time.time()
+        now = time.time()
+        self.last_active_at = now
+        self.last_audio_sent_at = now
+        self.last_keepalive_at = now
 
     def flush(self):
         self.callback.flush()

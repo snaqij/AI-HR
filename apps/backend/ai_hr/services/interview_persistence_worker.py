@@ -10,6 +10,7 @@ from typing import Any
 
 
 from ..core.config import get_settings
+from ..core.exceptions import ResourceNotFoundError
 from ..db.session import SessionLocal
 from ..repositories.ai_interviews import AIInterviewSessionRepository
 from .orchestrator.event_bus import DEFAULT_INTERVIEW_EVENT_BUS, EventSubscription
@@ -107,7 +108,15 @@ class InterviewPersistenceWorker:
                 # Clean up subscriptions for completed sessions
                 with self._lock:
                     for session_id in list(self._active_sessions.keys()):
-                        session_entity = repo.get(session_id)
+                        try:
+                            session_entity = repo.get(session_id)
+                        except ResourceNotFoundError:
+                            logger.warning(
+                                "Persistence worker found stale active session subscription; removing session_id=%s",
+                                session_id,
+                            )
+                            await self._unsubscribe_session(session_id)
+                            continue
                         if session_entity.status in ("completed", "failed", "cancelled"):
                             await self._unsubscribe_session(session_id)
                             

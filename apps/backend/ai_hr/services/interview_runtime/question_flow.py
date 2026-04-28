@@ -152,6 +152,7 @@ class InterviewQuestionFlowEngine:
                 "intro_ready": False,
                 "company_info_shared": False,
                 "closing_started": False,
+                "closing_followup_count": 0,
             },
             "interview_stage_name": "",
             "interview_stage_label": "",

@@ -64,6 +64,7 @@ const transportStatus = ref("未连接");
 const transcriptView = ref<TimelineItem[]>([]);
 const seenReplayTurnIds = new Set<string>();
 const seenRealtimeEventIds = new Set<string>();
+const recentAsrFinalMap = new Map<string, number>();
 const candidateDraft = ref("");
 const candidateDraftOccurredAt = ref("");
 const timelineBaseEpochMs = ref<number | null>(null);
@@ -368,6 +369,11 @@ function appendCandidateDraftFragment(fragment: string, occurredAt = ""): void {
 }
 
 function rememberRealtimeEvent(eventType: string, payload: Record<string, any>, event: InterviewRealtimeEvent): boolean {
+  // TEMP: disable dedup to diagnose missing transcript fragments.
+  // return false means "do not filter this event as duplicate".
+  return false;
+
+  /*
   // 1. 优先使用明确的 event_id（最可靠的去重依据）
   const explicitId = String(payload.event_id || (event as any).event_id || "").trim();
   if (explicitId) {
@@ -486,6 +492,7 @@ function rememberRealtimeEvent(eventType: string, payload: Record<string, any>, 
   
   // 没有足够的信息去重，让事件通过
   return false;
+  */
 }
 
 function _boundSeenEventIds(): void {
@@ -494,6 +501,34 @@ function _boundSeenEventIds(): void {
     const first = seenRealtimeEventIds.values().next().value as string | undefined;
     if (first) seenRealtimeEventIds.delete(first);
   }
+}
+
+function normalizeTranscriptFingerprint(input: string): string {
+  return String(input || "")
+    .trim()
+    .replace(/[，。！？、,.!?\s]+/g, "")
+    .toLowerCase();
+}
+
+function rememberAsrFinalForDedup(text: string): void {
+  const fp = normalizeTranscriptFingerprint(text);
+  if (!fp) return;
+  const now = Date.now();
+  recentAsrFinalMap.set(fp, now);
+  if (recentAsrFinalMap.size > 256) {
+    const cutoff = now - 8000;
+    for (const [key, ts] of recentAsrFinalMap.entries()) {
+      if (ts < cutoff) recentAsrFinalMap.delete(key);
+    }
+  }
+}
+
+function shouldSkipCandidateFinalAsDuplicate(text: string): boolean {
+  const fp = normalizeTranscriptFingerprint(text);
+  if (!fp) return false;
+  const seenAt = recentAsrFinalMap.get(fp);
+  if (!seenAt) return false;
+  return Date.now() - seenAt <= 8000;
 }
 
 function clearCandidateDraftFallbackTimer(): void {
@@ -642,6 +677,7 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
                 clearCandidateDraftFallbackTimer();
                 const mergedFinal = mergeTranscriptFragment(candidateDraft.value, text);
                 appendTranscript(mergedFinal, "候选人", String(payload.occurred_at || ""), "confirmed", { forceSeparate: true });
+                rememberAsrFinalForDedup(mergedFinal);
                 candidateDraft.value = "";
                 candidateDraftOccurredAt.value = "";
             }
@@ -682,6 +718,11 @@ async function connectEventBus(sessionIdValue: string): Promise<void> {
     if (eventType === "candidate.final") {
         const text = String(payload.text || payload.transcript || "");
         if (text) {
+            if (shouldSkipCandidateFinalAsDuplicate(text)) {
+                candidateDraft.value = "";
+                candidateDraftOccurredAt.value = "";
+                return;
+            }
             clearCandidateDraftFallbackTimer();
             const mergedFinal = mergeTranscriptFragment(candidateDraft.value, text);
             appendTranscript(mergedFinal, "候选人", String(payload.occurred_at || ""), "confirmed", { forceSeparate: true });
