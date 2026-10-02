@@ -510,7 +510,7 @@ function formatRecommendation(value?: string | null): string {
 }
 
 function formatDimensionLabel(value: string): string {
-  return value.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function getStatusText(status: string): string {

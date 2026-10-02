@@ -106,7 +106,7 @@ export interface Job {
   auto_request_resume?: boolean;
   min_degree?: string | null;
   min_experience_years?: number | null;
-  max_daily_resume_requests?: number;
+  max_daily_resume_requests?: number | null;
   publications?: JobPublication[];
 }
 
@@ -140,6 +140,7 @@ export interface Candidate {
   score_total?: number | null;
   score_explanation?: string | null;
   raw_profile?: Record<string, unknown>;
+  resume_text?: string | null;
   created_at: string;
 }
 
