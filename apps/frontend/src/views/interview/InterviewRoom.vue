@@ -541,7 +541,7 @@ function clearCandidateDraftFallbackTimer(): void {
 function appendTranscript(
   transcript: string,
   speaker = "候选人",
-  occurredAt?: string,
+  occurredAt?: string | null,
   kind: TimelineItem["kind"] = "confirmed",
   options: AppendTranscriptOptions = {}
 ): void {
