@@ -1,0 +1,12 @@
+# Build and publish only the Vue frontend, not the whole monorepo
+# (publishing the repo root ships infra/ and third-party test fixtures).
+[build]
+  base = "apps/frontend"
+  command = "npm ci --include=dev && npm run build"
+  publish = "dist"
+
+# Vue Router uses HTML5 history mode, so route all paths to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

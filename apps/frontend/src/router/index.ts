@@ -1,8 +1,8 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocation } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 function redirectToAdmin(path: string) {
-  return (to: { query: Record<string, unknown>; hash: string }) => ({
+  return (to: RouteLocation) => ({
     path,
     query: to.query,
     hash: to.hash,

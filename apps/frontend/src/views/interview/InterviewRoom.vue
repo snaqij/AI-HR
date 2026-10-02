@@ -601,7 +601,7 @@ function hydrateReplay(items: ReplayItem[]): void {
   seenRealtimeEventIds.clear();
   items.filter((item) => item.transcript).forEach((item) => {
     if (item.turn_id) seenReplayTurnIds.add(item.turn_id);
-    appendTranscript(item.transcript!, item.speaker, item.occurred_at);
+    appendTranscript(item.transcript!, item.speaker, item.occurred_at ?? undefined);
   });
 }
 
@@ -611,7 +611,7 @@ function mergeReplay(items: ReplayItem[]): void {
     const turnId = String(item.turn_id || "").trim();
     if (turnId && seenReplayTurnIds.has(turnId)) continue;
     if (turnId) seenReplayTurnIds.add(turnId);
-    appendTranscript(item.transcript, item.speaker, item.occurred_at);
+    appendTranscript(item.transcript, item.speaker, item.occurred_at ?? undefined);
   }
 }
 
